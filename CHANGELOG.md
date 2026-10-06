@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A configuration-driven `Collector` facade assembles actual search, HTTP,
+  HTML/document, optional browser, embedding and completion adapters. It supports
+  intent research and seeded collection with fresh per-run state, retains the
+  effective search recipe, and offers an explicitly bounded TOML read. Graph,
+  journal and source-session settings use their existing owning contracts.
+  Controlled-server composition acceptance is not real-model accuracy.
+
 - Explicit intent-reference semantic scoring alongside unchanged pinned-shelf
   scoring. The original intent's embedding spends the shared run budget once;
   prepared vectors, call linkage, failure/cancellation and concurrent run

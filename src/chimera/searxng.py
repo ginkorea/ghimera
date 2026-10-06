@@ -1,10 +1,8 @@
 """Configured SearXNG JSON search through the same direct/Tor source connector."""
 
-import ipaddress
-from typing import Annotated, Literal
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from chimera.config import ChimeraConfig
 from chimera.http import CurlRoute, page_barrier
@@ -12,39 +10,9 @@ from chimera.models import FetchRequest
 from chimera.refusals import FetchFailure, RefusalCode
 from chimera.research_types import SearchHit, SearchRequest, SearchResponse
 from chimera.search import GroundedSearch
+from chimera.search_config import SearxConfig as SearxConfig
 from chimera.transport import Resolver
 from chimera.transport_types import TransportEvidence
-
-
-class SearxConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["chimera.searxng/1"] = Field(alias="schema")
-    endpoint: str
-    language: Annotated[str, Field(min_length=1)]
-    safe_search: Annotated[int, Field(strict=True, ge=0, le=2)]
-    time_range: Literal["", "day", "month", "year"]
-
-    @model_validator(mode="after")
-    def exact_endpoint(self) -> "SearxConfig":
-        parsed = urlsplit(self.endpoint)
-        if (
-            parsed.scheme not in {"http", "https"}
-            or parsed.hostname is None
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-            or not parsed.path
-            or any(ord(char) < 33 for char in self.endpoint)
-        ):
-            raise ValueError("search endpoint must be one credential-free HTTP(S) URL")
-        try:
-            ipaddress.ip_address(parsed.hostname)
-        except ValueError:
-            pass
-        else:
-            raise ValueError("this source connector requires an exact DNS/onion hostname")
-        return self
 
 
 class SearchWireHit(BaseModel):
@@ -70,6 +38,8 @@ class SearxSearch(GroundedSearch):
         *,
         resolver: Resolver | None = None,
     ) -> None:
+        if config.search is not None and config.search != provider:
+            raise ValueError("search provider must match the run's effective search recipe")
         # Discovery is not a collected source. Source cookies must neither be
         # required here nor borrowed for its separate service endpoint.
         search_config = ChimeraConfig.model_validate(

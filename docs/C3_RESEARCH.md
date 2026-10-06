@@ -12,6 +12,10 @@ URLs. Owner-supplied seeds are optional hints, never a prerequisite. Inject a
 `GoalLoop`, `GroundedSearch`, `IntentPlanner`, `ResearchAnalyst` and
 `AnswerReviewer`; no global provider registry or hidden model launch exists.
 
+The unreleased `Collector.from_toml` facade now assembles those concrete ports
+from one effective configuration. See [configured collector](COLLECTOR.md) and
+`examples/collector.toml`; intent mode needs no prebuilt reference bundle.
+
 `examples/intent-research.toml` contains the typed `chimera.research/1` policy:
 round/query/model/page limits, concurrency, answer threshold and source scope.
 The harvest retains effective run configuration. `examples/searxng.toml` names
@@ -98,8 +102,9 @@ and verifies remote resolution rather than local source DNS.
   still require acceptance.
 - Bounded native-text selection now exists. Embedding-based context reranking,
   representative real-data adequacy checks and handling propagation remain.
-- Replayable provider-configuration binding beyond provider name/revision;
-  configuration currently belongs to the injected SearXNG adapter.
+- The configured Collector now retains its SearXNG recipe in the effective
+  run configuration. Provider-response archive retention and representative
+  retrieval adequacy remain separate acceptance; a digest is not a raw archive.
 - Browser ladder with all-subrequest Tor enforcement, extraction/PDF adapters,
   public/onion discovery acceptance, harvest reader and TAIPAN projection/runtime.
 - Complete C0–C5 acceptance against the PRD. Passing offline model doubles is

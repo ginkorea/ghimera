@@ -63,10 +63,12 @@ and sink deadline policy are still part of the research-controller work.
 
 ## Not yet complete
 
-The existing seeded collection loop uses this graph. Intent-only search/query
-planning, subquestion/gap/contradiction nodes, model-backed semantic extraction,
-aliases/merge/split, background writer queue, final graph/harvest file manifest,
-and exact TAIPAN `information_graph` projection are not yet implemented.
+The seeded collection loop and intent research use this graph; the intent loop
+now records question/query nodes and discovery relations before search. The
+configured Collector assembles that path without a custom sink. Gap/contradiction
+nodes, model-backed semantic extraction, aliases/merge/split, background writer
+queue, final graph/harvest file manifest and exact platform `information_graph`
+projection are not yet implemented.
 `projection_mode="taipan"` is therefore refused, rather than claiming arbitrary
 research nodes satisfy that platform's closed vocabulary. Source audience/
 handling is currently a configured run boundary; per-source governed handling

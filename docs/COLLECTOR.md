@@ -1,0 +1,127 @@
+# Configured collector
+
+Status: unreleased source. `Collector` assembles the existing concrete adapters
+from one validated `ChimeraConfig`. It does not supply a model server, download
+weights, discover credentials or require an external registry or scheduler.
+
+## Intent to evidence
+
+Copy `examples/collector.toml` and replace its non-active endpoints, model
+identities/revisions, contact address and private worker paths. Install the
+selected extras into your own environment. The example enables HTML extraction
+and original-intent embedding: no reference-vector file or fake scorer is needed.
+Supply an already-served private embedding endpoint and completion services for
+the planner, judge, analyst and reviewer. With `require_distinct_reviewer=true`,
+the reviewer must declare a different model identity/revision from the analyst.
+Different declarations alone do not prove independent weights or model quality.
+
+```python
+import asyncio
+from pathlib import Path
+
+from chimera import Collector
+from chimera.research_types import ResearchResult
+
+
+async def main() -> None:
+    collector = Collector.from_toml(
+        Path("collector.toml"),
+        max_config_bytes=100_000,  # application's explicit configuration-read bound
+    )
+    result = await collector.run("Find the evidence needed to answer my question")
+    validated = ResearchResult.model_validate_json(result.model_dump_json())
+    print(validated.status)  # answered, partial or failed: inspect evidence/review too
+
+
+asyncio.run(main())
+```
+
+This example uses actual configured adapters, not the smoke-test doubles. It
+requires your configured services to be running. Construction makes no outbound
+source, search or model request. Local adapter/artifact checks may refuse before
+collection. Configuration is never permission to access a source or send secrets.
+
+`Collector.run` accepts an intent string or a typed `ResearchRequest`. It plans,
+discovers sources through SearXNG, collects native documents, evaluates coverage
+and evidence gaps, and drafts/reviews an answer through the existing research
+loop. Exact citation validation checks retained native text, not translated or
+invented search snippets. `answered` requires that loop's coverage, citations,
+review and confidence checks; a finished call or sealed journal alone is not an
+answered question or proof of factual accuracy.
+
+For known seeds use `await collector.collect(goal, scope)`, with typed `Goal`
+and `Scope`. Each call creates fresh run budgets, frontier, document index and
+intent-reference state. Original-intent embedding is charged once per run when
+needed, not once per collector instance. An intent too large for the configured
+encoder/run allowance is refused before discovery instead of silently truncated.
+
+## One configuration owner
+
+Required sections are `[http]`, `[research]`, `[search]`, `[models]`, `[scoring]`
+and `[extraction]`, alongside the core budget/politeness settings. The SearXNG
+recipe is now retained under `[search]` in every run's effective non-secret
+configuration. A supplied search adapter cannot claim a different recipe.
+Existing low-level `SearxConfig` imports from `chimera.searxng` remain supported;
+omitted search sections preserve the old serialized config shape.
+
+All endpoints, thresholds, paths, language choices, timing and resource limits
+are configuration. `max_config_bytes` bounds one read before TOML parsing. The
+immutable effective configuration is available as `collector.config` and in the
+harvest receipt. Lower-level typed ports remain available for different search
+providers or custom composition; the facade does not replace their invariants.
+
+Additional supported configuration is explicit, not automatically loaded from
+other files:
+
+| Capability | Configuration and guide |
+|---|---|
+| PDF and DOCX | `[document_extraction]`; [documents](C2_DOCUMENTS.md) |
+| Isolated Patchright rendering | `[browser]`; [browser](C1_BROWSER.md) |
+| Native onion/open-web Tor routing | `[transport]`; [routing](TOR.md) |
+| Authorized source cookies/headers | `[[source_sessions]]`; [sessions](SOURCE_SESSIONS.md) |
+| Reference/citing-source expansion | `[references]`; [references](C3_REFERENCES.md) |
+| Persistent locator health and generic reparse | `[extraction.locator_drift]` and `[extraction.recovery]`; [HTML](C2_HTML.md) |
+| Incremental graph | `[graph]`, `[[graph.roles]]`, `[[graph.relations]]`; [graph](RESEARCH_GRAPH.md) |
+| Durable run observations | `[journal]`; [journal](RUN_JOURNAL.md) |
+
+The graph example includes question/query roles and relations needed by intent
+research. Enable graph/journal by configuration and pass a new, safe `run_id` to
+`run` or `collect`. Private paths are chosen by the application, never implicitly
+placed on a root/home volume. Existing run identities are not overwritten.
+Journals retain observations and summaries; preserve the returned harvest/result
+for the original document bodies and final answer. Automatic process-restart
+continuation remains incomplete.
+
+## Credentials are separate
+
+Constructor/from-TOML keyword inputs accept `model_credentials` (a mapping from
+exact completion endpoint to `pydantic.SecretStr`), a separate
+`encoder_credential`, and `source_credentials` (session IDs mapped to typed
+`SourceCredentials`). Values do not belong in TOML, examples, reports or command
+arguments. No credential is discovered from ambient platform configuration.
+Each configured authorization mode must match its supplied credential. TLS and
+explicit private-address/plaintext controls stay with the model client; source
+credentials stay within their exact origin/path/session scope. Search does not
+borrow source-session credentials. Direct/Tor source routing does not route
+private model-control calls through Tor.
+
+`source_resolver` is an optional typed transport dependency, useful for explicit
+deployment DNS or controlled acceptance. It cannot disable the existing address,
+port, redirect or source-session validation.
+
+## Current evidence and remaining scope
+
+The composed path is exercised with actual HTTP, SearXNG, HTML worker,
+embedding/completion clients, disk graph and disk journal against controlled
+local servers. Their model responses are protocol fixtures, not a real LLM
+evaluation or independent-judge measurement. See [evidence](COLLECTOR_EVIDENCE.md).
+
+This facade supports HTML/XHTML and, when explicitly configured, PDF/DOCX.
+Other advertised/requested MIME types refuse before outbound work rather than
+pretending an extractor exists. Plain text and additional formats are not yet
+assembled. Browser/document/Tor/session adapters have their separate tests;
+that does not establish representative public-corpus acceptance for their full
+composition here. Camoufox/optional nodriver, Marker, representative multilingual
+document/publisher quality, real served-model calibration, safe continuation and
+runtime/egress acceptance remain in the original completion tracker. No new CLI,
+publication or deployment is claimed by this facade.

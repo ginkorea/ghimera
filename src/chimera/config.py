@@ -17,6 +17,7 @@ from chimera.model_config import ModelBindingsConfig
 from chimera.reference_config import ReferenceConfig
 from chimera.research_config import ResearchConfig
 from chimera.scoring_config import ScoringConfig
+from chimera.search_config import SearxConfig
 from chimera.source_session_types import SourceSessionPolicy, validate_sessions
 from chimera.transport_types import TransportConfig
 
@@ -126,6 +127,7 @@ class ChimeraConfig(BaseModel):
     dedup: DedupConfig | None = None
     browser: BrowserConfig | None = None
     scoring: ScoringConfig | None = None
+    search: SearxConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     references: ReferenceConfig | None = None
     source_sessions: tuple[SourceSessionPolicy, ...] = ()
 
@@ -159,6 +161,13 @@ class ChimeraConfig(BaseModel):
         return self
 
     @classmethod
-    def from_toml(cls, path: Path) -> "ChimeraConfig":
+    def from_toml(cls, path: Path, *, max_bytes: int | None = None) -> "ChimeraConfig":
+        if max_bytes is not None and (type(max_bytes) is not int or max_bytes <= 0):
+            raise ValueError("configuration byte allowance must be a positive integer")
         with path.open("rb") as stream:
-            return cls.model_validate(tomllib.load(stream))
+            if max_bytes is None:
+                return cls.model_validate(tomllib.load(stream))
+            raw = stream.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise ValueError("configuration exceeds its explicit byte allowance")
+        return cls.model_validate(tomllib.loads(raw.decode("utf-8")))

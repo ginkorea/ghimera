@@ -1,0 +1,274 @@
+# COMPLETE, NON-ACTIVE example for Collector.from_toml.
+# Replace endpoints, model identities, contact and private storage locations.
+# This config neither downloads models nor starts servers or grants source access.
+# HTML is enabled here. PDF/DOCX, browser, Tor, graph, journal and source sessions
+# use their existing named configuration sections; see docs/COLLECTOR.md.
+schema = "chimera.config/1"
+page_budget = 400
+byte_budget = 2147483648
+wall_seconds = 3600.0
+judge_budget = 500
+grade_interval = 20
+grade_threshold = 0.9
+saturation_window = 20
+saturation_min_new = 1
+max_links_per_page = 10
+min_link_score = 0.5
+request_timeout_seconds = 30.0
+per_host_delay_seconds = 2.0
+per_host_concurrency = 2
+global_concurrency = 4
+global_requests_per_second = 1.0
+retry_budget = 2
+impersonation_profile = "chrome145"
+user_agent = "Chimera/0.2 (contact: operator@example.invalid)"
+egress_feature = "crawl_egress"
+model_policy = "self_hosted_only"
+
+[http]
+schema = "chimera.http/1"
+max_response_bytes = 16777216
+max_header_bytes = 65536
+max_redirects = 5
+retry_backoff_seconds = 1.0
+retry_jitter_seconds = 0.5
+robots_cache_seconds = 3600.0
+conditional_cache_entries = 100
+
+[http.network]
+schema = "chimera.network/1"
+mode = "public"
+
+[http.robots]
+schema = "chimera.robots/1"
+mode = "honor"
+product_token = "Chimera"
+
+[dedup]
+schema = "chimera.dedup/1"
+tracking_parameters = ["fbclid", "gclid"]
+tracking_prefixes = ["utm_"]
+shingle_chars = 5
+max_hamming_distance = 3
+min_near_chars = 100
+max_index_documents = 400
+max_text_chars = 500000
+min_length_ratio = 0.9
+
+[research]
+schema = "chimera.research/1"
+max_rounds = 8
+max_questions = 12
+max_queries_per_round = 4
+query_budget = 32
+results_per_query = 8
+search_concurrency = 2
+max_pages_per_round = 20
+max_query_chars = 500
+max_answer_chars = 20000
+max_model_input_chars = 240000
+min_answer_confidence = 0.9
+require_distinct_reviewer = true
+source_policy = "grounded_public"
+allowed_hosts = []
+denied_hosts = []
+max_source_hosts = 80
+allowed_ports = [80, 443]
+content_types = ["text/html", "application/xhtml+xml"]
+max_depth = 2
+
+[search]
+schema = "chimera.searxng/1"
+endpoint = "https://search.example.invalid/search"
+language = "all"
+safe_search = 1
+time_range = ""
+
+[extraction]
+schema = "chimera.extraction/1"
+work_directory = "/path/to/private/chimera/worker"
+locator_directory = "/path/to/private/chimera/locators"
+max_input_bytes = 8388608
+max_output_bytes = 2097152
+max_diagnostic_bytes = 65536
+max_text_chars = 250000
+max_links = 200
+max_workers = 4
+timeout_seconds = 60.0
+cleanup_timeout_seconds = 5.0
+default_encoding = "utf-8"
+pruning_threshold = 0.35
+pruning_threshold_type = "dynamic"
+min_word_threshold = 0
+locator_min_percent = 65
+languages = ["en", "zh", "id", "ja", "ko", "ms", "ru"]
+language_max_chars = 8000
+language_min_chars = 30
+language_min_confidence = 0.5
+language_min_margin = 0.1
+generic_body_selectors = ["article", "main", "body"]
+excluded_tags = ["script", "style", "nav", "footer", "aside", "form", "iframe", "noscript"]
+profiles = []
+
+[extraction.locator_drift]
+schema = "chimera.locator-drift-policy/1"
+consecutive_miss_limit = 3
+state_timeout_seconds = 5.0
+
+[extraction.recovery]
+schema = "chimera.extraction-recovery/1"
+mode = "generic_once"
+
+[scoring]
+schema = "chimera.scoring/1"
+reference_source = "intent"
+encoding_call_budget = 1000
+encoding_char_budget = 2000000
+window_chars = 1000
+overlap_chars = 100
+max_windows = 8
+max_links = 20
+max_reference_chunks = 1
+max_anchor_chars = 300
+keyword_weight = 0.2
+
+[scoring.encoder]
+schema = "chimera.embedding-service/1"
+endpoint = "https://encoder.private.invalid/v1/embeddings"
+approved_addresses = ["10.0.0.10"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "none"
+model_id = "configure-encoder-id"
+revision = "pin-actual-encoder-revision"
+served_model = "configure-served-encoder"
+timeout_seconds = 30.0
+max_request_bytes = 65536
+max_response_bytes = 262144
+max_header_bytes = 8192
+require_usage = true
+max_input_chars = 16000
+dimensions = 1024
+request_dimensions = false
+max_batch_texts = 8
+max_text_chars = 8000
+text_prefix = ""
+
+[models]
+schema = "chimera.model-bindings/1"
+
+[models.planner]
+schema = "chimera.model-service/1"
+endpoint = "https://model.private.invalid/v1/chat/completions"
+approved_addresses = ["10.0.0.10"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "none"
+model_id = "configure-primary-model-id"
+revision = "pin-actual-model-revision"
+served_model = "configure-primary-model"
+timeout_seconds = 90.0
+max_request_bytes = 1048576
+max_response_bytes = 262144
+max_header_bytes = 65536
+max_output_tokens = 4096
+temperature = 0.0
+top_p = 1.0
+response_format = "json_schema"
+require_usage = true
+max_input_chars = 240000
+
+[models.planner.context]
+schema = "chimera.evidence-context/1"
+max_documents = 24
+max_chars = 80000
+window_chars = 4000
+max_windows_per_document = 4
+overlap_chars = 300
+
+[models.analyst]
+schema = "chimera.model-service/1"
+endpoint = "https://model.private.invalid/v1/chat/completions"
+approved_addresses = ["10.0.0.10"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "none"
+model_id = "configure-primary-model-id"
+revision = "pin-actual-model-revision"
+served_model = "configure-primary-model"
+timeout_seconds = 90.0
+max_request_bytes = 1048576
+max_response_bytes = 262144
+max_header_bytes = 65536
+max_output_tokens = 4096
+temperature = 0.0
+top_p = 1.0
+response_format = "json_schema"
+require_usage = true
+max_input_chars = 240000
+
+[models.analyst.context]
+schema = "chimera.evidence-context/1"
+max_documents = 24
+max_chars = 80000
+window_chars = 4000
+max_windows_per_document = 4
+overlap_chars = 300
+
+[models.reviewer]
+schema = "chimera.model-service/1"
+endpoint = "https://reviewer.private.invalid/v1/chat/completions"
+approved_addresses = ["10.0.0.11"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "none"
+model_id = "configure-independent-reviewer-id"
+revision = "pin-actual-reviewer-revision"
+served_model = "configure-independent-reviewer"
+timeout_seconds = 90.0
+max_request_bytes = 1048576
+max_response_bytes = 262144
+max_header_bytes = 65536
+max_output_tokens = 4096
+temperature = 0.0
+top_p = 1.0
+response_format = "json_schema"
+require_usage = true
+max_input_chars = 240000
+
+[models.reviewer.context]
+schema = "chimera.evidence-context/1"
+max_documents = 24
+max_chars = 80000
+window_chars = 4000
+max_windows_per_document = 4
+overlap_chars = 300
+
+[models.judge]
+schema = "chimera.model-service/1"
+endpoint = "https://model.private.invalid/v1/chat/completions"
+approved_addresses = ["10.0.0.10"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "none"
+model_id = "configure-primary-model-id"
+revision = "pin-actual-model-revision"
+served_model = "configure-primary-model"
+timeout_seconds = 90.0
+max_request_bytes = 1048576
+max_response_bytes = 262144
+max_header_bytes = 65536
+max_output_tokens = 4096
+temperature = 0.0
+top_p = 1.0
+response_format = "json_schema"
+require_usage = true
+max_input_chars = 240000
+
+[models.judge.context]
+schema = "chimera.evidence-context/1"
+max_documents = 24
+max_chars = 80000
+window_chars = 4000
+max_windows_per_document = 4
+overlap_chars = 300

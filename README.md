@@ -56,12 +56,15 @@ The current working branch also has explicit authorized source sessions,
 configurable references/citing-source discovery, persistent publisher-locator
 drift detection with generic recovery and a doctor, and offline model-based PDF
 layout, tables, OCR and column-aware reading order, durable run journals, and
-intent-based semantic scoring without a prebuilt reference-vector file. These are **not included
+intent-based semantic scoring without a prebuilt reference-vector file, and a
+configuration-driven `Collector` facade using actual adapters. These are **not included
 in the published 0.2.0 wheel**. See [source sessions](docs/SOURCE_SESSIONS.md),
 [references](docs/C3_REFERENCES.md), [locator health](docs/C2_HTML.md), and
 [PDF configuration/acceptance](docs/C2_DOCUMENTS.md),
 [run journals](docs/RUN_JOURNAL.md) and
 [intent scoring](docs/C3_EMBEDDING_SCORING.md#intent-references-unreleased-source).
+For the assembled intent-only API and full non-active template, see
+[configured collector](docs/COLLECTOR.md) and `examples/collector.toml`.
 Representative-corpus accuracy and Marker acceptance remain open; passing a
 controlled document check is not a universal quality claim.
 
@@ -148,7 +151,36 @@ scoring adapters, and the self-hosted judge through their ports. For intent-only
 research, inject those into `ResearchLoop` alongside `GroundedSearch`,
 `IntentPlanner`, `ResearchAnalyst` and `AnswerReviewer`, then call
 `run(ResearchRequest(intent="your research question"))`. `SearxSearch` is the
-implemented search adapter. The following guides cover the concrete wiring:
+implemented search adapter.
+
+### Unreleased configured API
+
+The unreleased source assembles real adapters, so applications need not manually
+wire every port. Unlike the offline smoke above, this needs your configured
+services and the adapted `examples/collector.toml` template:
+
+```python
+import asyncio
+from pathlib import Path
+
+from chimera import Collector
+
+
+async def main() -> None:
+    collector = Collector.from_toml(Path("collector.toml"), max_config_bytes=100_000)
+    result = await collector.run("Your research question")
+    print(result.status)
+
+
+asyncio.run(main())
+```
+
+Use the [collector guide](docs/COLLECTOR.md) to configure actual private models,
+source routing, extraction, optional graph/journal and separately supplied
+credentials. This API is not in the published `go-spider==0.2.0` wheel. The
+lower-level APIs remain supported for custom providers and composition.
+
+The following guides cover the existing lower-level wiring:
 
 | Area | Guide |
 |---|---|
