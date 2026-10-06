@@ -28,3 +28,7 @@ profiles = []
 schema = "chimera.locator-drift-policy/1"
 consecutive_miss_limit = 3
 state_timeout_seconds = 5.0
+
+[recovery]
+schema = "chimera.extraction-recovery/1"
+mode = "generic_once"

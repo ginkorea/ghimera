@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Configurable single generic HTML reparse over retained source bytes, without
+  a second fetch or renewed deadline. Success, refusal and cancellation attempts
+  retain typed source/configuration-bound provenance and round-trip ledger checks.
+
 - Persistent exact-publisher/profile locator health with a configured miss bar,
   generic extraction recovery, restart-safe/concurrent state, read-only doctor
   output and source/config-bound harvest ledger findings. No publisher-redesign

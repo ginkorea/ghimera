@@ -5,6 +5,13 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class LocatorEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    field: Literal["body", "title", "byline", "date"]
+    status: Literal["direct", "relocated", "missing"]
+    selector: str
+
+
 class LocatorDriftPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.locator-drift-policy/1"] = Field(alias="schema")

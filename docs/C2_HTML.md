@@ -73,6 +73,32 @@ It does not expose source bodies or cookies. Missing optional drift policy in
 an existing configuration preserves its original serialization and digest;
 enabling/changing policy is explicit configuration, not a release-time literal.
 
+### One generic reparse and attempt provenance
+
+The example also opts into `recovery` (`chimera.extraction-recovery/1`) with
+`mode="generic_once"`. Omit it or select `disabled` to disable reparsing. A
+document parsing refusal or invalid worker response permits exactly one generic
+retry on the **same retained Page bytes**, with configured/adaptive selectors
+disabled. There is no second source request and no reset of the shared time
+budget. Input admission failures, deadlines, cancellation, and unrelated adapter
+or state-store failures do not trigger recovery.
+
+Every launched parse gets a `chimera.html-extraction-attempt/1` observation:
+source/rendered/configuration hashes, pinned parser revision, phase, outcome,
+latency, response hash when received, and validated selector observations.
+Raw worker diagnostic text is not included. Success evidence retains the whole
+attempt chain, including the initial failure; terminal failures and cancelled
+parses retain observations in collection ledger rows even without an accepted
+document. The run reader rejects an omitted attempt, a policy/source mismatch,
+an unauthorized retry, or a successful attempt without its extraction result.
+
+Extraction and caller wall deadlines retain their normal asyncio semantics.
+Owned worker cleanup remains separately bounded by the configured cleanup
+timeout. The failed parser's observed CSS misses still enter persistent locator
+health; a generic retry cannot claim a direct selector success or clear its latch.
+This recovery is independent of locator drift across documents, not a replacement
+for that doctor. See [recovery evidence](C2_EXTRACTION_RECOVERY_EVIDENCE.md).
+
 Configured boilerplate tags are removed without running scripts. The actual
 `DefaultMarkdownGenerator` and `PruningContentFilterLXML` produce fit Markdown
 from that retained fragment; tables and native prose are exercised. Vendor

@@ -4,13 +4,21 @@ import asyncio
 import codecs
 import hashlib
 import sys
+import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import model_validator
 
 from chimera.config import ChimeraConfig
+from chimera.extraction_attempts import (
+    ExtractionCancelled,
+    ExtractionFailure,
+    HtmlExtractionAttempt,
+    InvalidExtractionResponse,
+)
 from chimera.extraction_config import ExtractionConfig
 from chimera.extraction_types import ExtractionEvidence, LocatorEvent
 from chimera.locator_health import LocatorHealthStore
@@ -115,18 +123,155 @@ class HtmlExtractor:
             if self._health is not None and profile is not None
             else None
         )
+        generic = before.generic_only if before else False
+        attempts: list[HtmlExtractionAttempt] = []
+        retry = self.config.recovery is not None and self.config.recovery.mode == "generic_once"
+        try:
+            # One deadline covers both slot waits and parsing. Owned child
+            # cleanup remains separately bounded by cleanup_timeout_seconds.
+            async with asyncio.timeout(self.config.timeout_seconds):
+                for sequence in range(2 if retry else 1):
+                    responses: list[str] = []
+                    locators: list[LocatorEvent] = []
+                    started = time.monotonic()
+                    result = None
+                    failure = None
+                    try:
+                        result = await self._parse(page, generic, responses, locators)
+                    except asyncio.CancelledError:
+                        attempts.append(
+                            self._observation(
+                                page,
+                                sequence,
+                                generic,
+                                "cancelled",
+                                None,
+                                responses,
+                                started,
+                                locators,
+                            )
+                        )
+                        raise
+                    except ChimeraRefused as exc:
+                        failure = exc
+                        attempts.append(
+                            self._observation(
+                                page,
+                                sequence,
+                                generic,
+                                "invalid_response"
+                                if isinstance(exc, InvalidExtractionResponse)
+                                else "refused",
+                                exc.code,
+                                responses,
+                                started,
+                                locators,
+                            )
+                        )
+                    else:
+                        attempts.append(
+                            self._observation(
+                                page,
+                                sequence,
+                                generic,
+                                "success",
+                                None,
+                                responses,
+                                started,
+                                locators,
+                            )
+                        )
+                    if result is not None and result.extraction is not None:
+                        values = result.extraction.model_dump(by_alias=True)
+                        values["attempts"] = tuple(attempts)
+                        updated = result.model_dump(by_alias=True)
+                        updated["extraction"] = ExtractionEvidence.model_validate(values)
+                        return Extracted.model_validate(updated)
+                    if failure is None:
+                        raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                    if (
+                        sequence == 0
+                        and retry
+                        and (
+                            failure.code == RefusalCode.EXTRACTION_FAILED
+                            or isinstance(failure, InvalidExtractionResponse)
+                        )
+                    ):
+                        generic = True
+                        continue
+                    raise ExtractionFailure(failure.code, tuple(attempts)) from None
+        except TimeoutError:
+            if attempts and attempts[-1].outcome == "cancelled":
+                values = attempts[-1].model_dump(by_alias=True)
+                values.update(outcome="refused", refusal=RefusalCode.BUDGET_EXHAUSTED)
+                attempts[-1] = HtmlExtractionAttempt.model_validate(values)
+            raise ExtractionFailure(RefusalCode.BUDGET_EXHAUSTED, tuple(attempts)) from None
+        except asyncio.CancelledError:
+            raise ExtractionCancelled(tuple(attempts)) from None
+        raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+
+    def _observation(
+        self,
+        page: Page,
+        sequence: int,
+        generic: bool,
+        outcome: Literal["success", "refused", "invalid_response", "cancelled"],
+        refusal: RefusalCode | None,
+        responses: list[str],
+        started: float,
+        locators: list[LocatorEvent],
+    ) -> HtmlExtractionAttempt:
+        return HtmlExtractionAttempt(
+            schema="chimera.html-extraction-attempt/1",
+            sequence=sequence,
+            phase="initial" if sequence == 0 else "generic_retry",
+            generic_only=generic,
+            source_url=page.final_url,
+            source_sha256=hashlib.sha256(page.body).hexdigest(),
+            rendered_sha256=page.rendered.html_sha256 if page.rendered else None,
+            config_digest=self.config.content_digest(),
+            parser_revision=self.revision,
+            outcome=outcome,
+            refusal=refusal,
+            response_sha256=responses[0] if responses else None,
+            latency_seconds=max(0.0, time.monotonic() - started),
+            locators=tuple(locators),
+        )
+
+    async def _parse(
+        self, page: Page, generic: bool, responses: list[str], locators: list[LocatorEvent]
+    ) -> Extracted:
+        profile = next(
+            (p for p in self.config.profiles if p.host == urlsplit(page.final_url).hostname), None
+        )
         request = (
-            ExtractionRequest(
-                config=self.config, page=page, generic_only=before.generic_only if before else False
-            )
+            ExtractionRequest(config=self.config, page=page, generic_only=generic)
             .model_dump_json()
             .encode()
         )
         response = await self._worker.run(request)
+        responses.append(hashlib.sha256(response).hexdigest())
         try:
             wire = ExtractionResponse.model_validate_json(response)
         except ValueError:
-            raise ChimeraRefused(RefusalCode.EXTRACTION_FAILED) from None
+            raise InvalidExtractionResponse() from None
+        expected = (
+            {}
+            if profile is None
+            else {
+                "body": profile.body,
+                "title": profile.title,
+                "byline": profile.byline,
+                "date": profile.date,
+            }
+        )
+        if (
+            (generic and wire.locator_events)
+            or len({event.field for event in wire.locator_events}) != len(wire.locator_events)
+            or any(expected.get(event.field) != event.selector for event in wire.locator_events)
+        ):
+            raise InvalidExtractionResponse()
+        locators.extend(wire.locator_events)
         if wire.refusal is not None:
             if self._health is not None and profile is not None:
                 await asyncio.to_thread(
@@ -139,7 +284,7 @@ class HtmlExtractor:
             raise ChimeraRefused(wire.refusal)
         result = wire.result
         if result is None or result.extraction is None:
-            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            raise InvalidExtractionResponse()
         evidence = result.extraction
         if (
             evidence.source_sha256 != hashlib.sha256(page.body).hexdigest()
@@ -153,8 +298,9 @@ class HtmlExtractor:
             or len(result.links) > self.config.max_links
             or wire.locator_events != evidence.locators
             or evidence.locator_health is not None
+            or evidence.attempts
         ):
-            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            raise InvalidExtractionResponse()
         if self._health is not None and profile is not None:
             health = await asyncio.to_thread(
                 self._health.observe,

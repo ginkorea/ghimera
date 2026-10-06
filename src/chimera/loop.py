@@ -10,6 +10,11 @@ from typing import Literal
 from chimera.budget import RunBudget
 from chimera.config import ChimeraConfig
 from chimera.content_dedup import ContentIndex
+from chimera.extraction_attempts import (
+    ExtractionCancelled,
+    ExtractionFailure,
+    HtmlExtractionAttempt,
+)
 from chimera.fetch import FetchLadder
 from chimera.graph import DirectoryGraphSink, GraphSink, ResearchGraph
 from chimera.ledger import Ledger
@@ -181,7 +186,14 @@ class GoalLoop:
                     session._reference_origins[page.final_url] = session._reference_origins[url]
                 extraction_started = self._clock()
                 async with asyncio.timeout(budget.remaining_seconds):
-                    extracted = await self._extractor.extract(page)
+                    try:
+                        extracted = await self._extractor.extract(page)
+                    except ExtractionCancelled as exc:
+                        self._record_parse_attempts(ledger, exc.attempts)
+                        # Preserve asyncio.timeout's exact CancelledError contract.
+                        raise asyncio.CancelledError from None
+                if extracted.extraction is not None:
+                    self._record_parse_attempts(ledger, extracted.extraction.attempts)
                 if extracted.extraction is not None or extracted.document_parse is not None:
                     ledger.append(
                         LedgerRow(
@@ -360,6 +372,8 @@ class GoalLoop:
                                 link.url, session._reference_origins.get(url, url)
                             )
             except (ChimeraRefused, TimeoutError) as exc:
+                if isinstance(exc, ExtractionFailure):
+                    self._record_parse_attempts(ledger, exc.attempts)
                 code = exc.code if isinstance(exc, ChimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
                 if code in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}:
                     raise
@@ -424,6 +438,22 @@ class GoalLoop:
                     stop = "goal_satisfied"
                     break
         return stop
+
+    def _record_parse_attempts(
+        self, ledger: Ledger, attempts: tuple[HtmlExtractionAttempt, ...]
+    ) -> None:
+        for attempt in attempts:
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="extraction_attempt",
+                    url=attempt.source_url,
+                    refusal=attempt.refusal,
+                    latency_seconds=attempt.latency_seconds,
+                    extraction_attempt=attempt,
+                    reason=f"{attempt.phase}: {attempt.outcome}",
+                )
+            )
 
     async def score_discovery(
         self,

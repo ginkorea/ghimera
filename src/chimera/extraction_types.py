@@ -4,21 +4,16 @@ import hashlib
 from typing import TYPE_CHECKING, Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from chimera.extraction_attempts import HtmlExtractionAttempt, validate_chain
+from chimera.locator_types import LocatorEvent as LocatorEvent
 from chimera.locator_types import LocatorHealth
 
 if TYPE_CHECKING:
     from chimera.extraction_config import ExtractionConfig
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-
-
-class LocatorEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    field: Literal["body", "title", "byline", "date"]
-    status: Literal["direct", "relocated", "missing"]
-    selector: str
 
 
 class ExtractionEvidence(BaseModel):
@@ -44,10 +39,39 @@ class ExtractionEvidence(BaseModel):
     omitted_links: Annotated[int, Field(strict=True, ge=0)]
     rendered_sha256: Digest | None = None
     locator_health: LocatorHealth | None = Field(default=None, exclude_if=lambda v: v is None)
+    attempts: tuple[HtmlExtractionAttempt, ...] = Field(default=(), exclude_if=lambda v: not v)
+
+    @model_validator(mode="after")
+    def attempt_binding(self) -> "ExtractionEvidence":
+        if self.attempts:
+            validate_chain(self.attempts)
+            if self.attempts[-1].outcome != "success" or any(
+                (
+                    a.source_url,
+                    a.source_sha256,
+                    a.rendered_sha256,
+                    a.config_digest,
+                    a.parser_revision,
+                )
+                != (
+                    self.source_url,
+                    self.source_sha256,
+                    self.rendered_sha256,
+                    self.config_digest,
+                    self.parser_revision,
+                )
+                for a in self.attempts
+            ):
+                raise ValueError(
+                    "extraction must bind its successful, source-qualified parse chain"
+                )
+        return self
 
     def validate_policy(self, config: "ExtractionConfig") -> None:
         if self.config_digest != config.content_digest():
             raise ValueError("extraction must bind its effective policy")
+        for attempt in self.attempts:
+            attempt.validate_policy(config)
         health = self.locator_health
         if health is None:
             return

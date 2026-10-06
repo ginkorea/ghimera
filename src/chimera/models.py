@@ -12,6 +12,7 @@ from chimera.config import ChimeraConfig, Probability
 from chimera.dedup_types import ContentDrift, DedupEvidence
 from chimera.document_types import DocumentLayout, DocumentParseEvidence
 from chimera.embedding_types import EncodingCall
+from chimera.extraction_attempts import HtmlExtractionAttempt, validate_chain
 from chimera.extraction_types import ExtractionEvidence
 from chimera.graph_types import GraphSnapshot
 from chimera.model_types import ModelCallEvidence
@@ -324,6 +325,7 @@ class LedgerRow(Record):
         "review",
         "discovery",
         "extraction",
+        "extraction_attempt",
         "content_drift",
         "render",
         "encoding",
@@ -343,6 +345,9 @@ class LedgerRow(Record):
     query: str | None = None
     model_call: ModelCallEvidence | None = None
     extraction: ExtractionEvidence | None = None
+    extraction_attempt: HtmlExtractionAttempt | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     document_parse: DocumentParseEvidence | None = None
     dedup: DedupEvidence | None = None
     content_drift: ContentDrift | None = None
@@ -355,6 +360,14 @@ class LedgerRow(Record):
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if (self.event == "extraction_attempt") != (self.extraction_attempt is not None):
+            raise ValueError("parse attempt events require their bounded source observation")
+        if self.extraction_attempt is not None and (
+            self.url != self.extraction_attempt.source_url
+            or self.refusal != self.extraction_attempt.refusal
+            or self.latency_seconds != self.extraction_attempt.latency_seconds
+        ):
+            raise ValueError("parse attempt ledger metadata must match its observation")
         if (self.event == "reference_query") != (self.reference_query is not None):
             raise ValueError("reference query events require their explicit source binding")
         if self.reference_query is not None and (
@@ -422,7 +435,17 @@ class Harvest(Record):
         from chimera.references import validate_reference_ledger
 
         validate_reference_ledger(self)
+        parsing: dict[tuple[str, str, str | None], list[HtmlExtractionAttempt]] = {}
         for row in self.ledger:
+            if row.extraction_attempt is not None:
+                attempt = row.extraction_attempt
+                extraction_policy = self.receipt.effective_config.extraction
+                if extraction_policy is None:
+                    raise ValueError("parse attempts require their effective extraction policy")
+                attempt.validate_policy(extraction_policy)
+                parsing.setdefault(
+                    (attempt.source_url, attempt.source_sha256, attempt.rendered_sha256), []
+                ).append(attempt)
             if row.extraction is not None:
                 extraction_policy = self.receipt.effective_config.extraction
                 if extraction_policy is None:
@@ -440,6 +463,41 @@ class Harvest(Record):
                         resource.source_session.validate_policy(
                             self.receipt.effective_config.source_sessions, resource.url
                         )
+        for chain in parsing.values():
+            validate_chain(tuple(chain))
+            if chain[-1].outcome == "success" and not any(
+                row.extraction is not None and row.extraction.attempts == tuple(chain)
+                for row in self.ledger
+            ):
+                raise ValueError("successful parsing must retain its extraction result")
+        for row in self.ledger:
+            if row.extraction is not None and row.extraction.attempts:
+                evidence = row.extraction
+                observed = parsing.get(
+                    (evidence.source_url, evidence.source_sha256, evidence.rendered_sha256), []
+                )
+                if tuple(observed) != evidence.attempts:
+                    raise ValueError(
+                        "extraction results must preserve every prior attempt ledger row"
+                    )
+        for doc in self.source_documents:
+            doc_evidence = doc.extracted.extraction
+            if (
+                doc_evidence is not None
+                and doc_evidence.attempts
+                and tuple(
+                    parsing.get(
+                        (
+                            doc_evidence.source_url,
+                            doc_evidence.source_sha256,
+                            doc_evidence.rendered_sha256,
+                        ),
+                        [],
+                    )
+                )
+                != doc_evidence.attempts
+            ):
+                raise ValueError("document parsing/recovery must reconcile with the run ledger")
         if tuple(row.sequence for row in self.ledger) != tuple(range(len(self.ledger))):
             raise ValueError("ledger sequence must be contiguous")
         if self.receipt.fetches != sum(row.event == "fetch" for row in self.ledger):
