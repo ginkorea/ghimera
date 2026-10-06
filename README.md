@@ -5,9 +5,11 @@ Package: `taipan-chimera`; import: `chimera`; Python **3.11+**.
 
 Status: **standalone source candidate, not deployed**. Core collection, real
 direct/Tor HTTP, configurable research graphs, the intent research loop and a
-SearXNG HTTP adapter are implemented. Browser/PDF extraction, concrete served-
-model bindings, TAIPAN integration and full C0–C5 acceptance remain required.
+SearXNG HTTP adapter and configured self-hosted model clients are implemented.
+Browser/PDF extraction, admitted real-model acceptance, TAIPAN integration and
+full C0–C5 acceptance remain required.
 See [Tor routing](docs/TOR.md) and [intent research](docs/C3_RESEARCH.md).
+See [model control and evidence context](docs/C3_MODELS.md) for model roles.
 
 Chimera remains its own repository. TAIPAN consumes a pinned release and wheel
 digest, like judais-lobi. g39 hosting is the working assumption; this lane does

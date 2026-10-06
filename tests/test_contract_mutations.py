@@ -13,6 +13,24 @@ import pytest
     "module,old,new,witness",
     (
         (
+            "model_client",
+            "wire.model != service.served_model",
+            "False",
+            "test_served_models.py::test_bad_model_responses_refuse_without_fallback_and_preserve_evidence[wrong_model]",
+        ),
+        (
+            "model_client",
+            'wire.choices[0].finish_reason != "stop"',
+            "False",
+            "test_served_models.py::test_bad_model_responses_refuse_without_fallback_and_preserve_evidence[truncated]",
+        ),
+        (
+            "model_http",
+            "address not in self._config.approved_addresses for address in addresses",
+            "False for address in addresses",
+            "test_served_models.py::test_model_dns_must_match_every_approved_address_before_post",
+        ),
+        (
             "search",
             'if "discover" in cls.__dict__:',
             "if False:",

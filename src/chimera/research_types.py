@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 
+from chimera.model_types import ModelCallEvidence
 from chimera.models import Document, Harvest, ModelIdentity, Record
 from chimera.transport_types import TransportEvidence
 
@@ -39,6 +40,10 @@ class ResearchRequest(ResearchRecord):
         return value
 
 
+class ResearchModelResult(ResearchRecord):
+    model_call: ModelCallEvidence | None = None
+
+
 class Question(ResearchRecord):
     id: QuestionId
     text: Text
@@ -49,7 +54,7 @@ class SearchQuery(ResearchRecord):
     question_ids: Annotated[tuple[QuestionId, ...], Field(min_length=1)]
 
 
-class ResearchPlan(ResearchRecord):
+class ResearchPlan(ResearchModelResult):
     questions: Annotated[tuple[Question, ...], Field(min_length=1)]
     queries: tuple[SearchQuery, ...]
 
@@ -95,7 +100,7 @@ class Coverage(ResearchRecord):
         return self
 
 
-class Assessment(ResearchRecord):
+class Assessment(ResearchModelResult):
     coverage: tuple[Coverage, ...]
 
 
@@ -105,7 +110,7 @@ class Claim(ResearchRecord):
     citations: Annotated[tuple[Citation, ...], Field(min_length=1)]
 
 
-class AnswerDraft(ResearchRecord):
+class AnswerDraft(ResearchModelResult):
     claims: Annotated[tuple[Claim, ...], Field(min_length=1)]
     confidence: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 
@@ -116,7 +121,7 @@ class ClaimReview(ResearchRecord):
     reason: Text
 
 
-class AnswerReview(ResearchRecord):
+class AnswerReview(ResearchModelResult):
     answer_digest: Digest
     intent_covered: bool
     reason: Text

@@ -1,0 +1,29 @@
+# Non-active example. Use an admitted, already-served model; never an external
+# provider. Replace BOTH endpoint and exact private addresses through config.
+schema = "chimera.model-service/1"
+endpoint = "https://model.private.invalid/v1/chat/completions"
+approved_addresses = ["10.0.0.10"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "none"
+model_id = "replace-with-admitted-model-id"
+revision = "replace-with-pinned-model-revision"
+served_model = "replace-with-exact-served-model-name"
+timeout_seconds = 90.0
+max_request_bytes = 1048576
+max_response_bytes = 262144
+max_header_bytes = 65536
+max_output_tokens = 4096
+temperature = 0.0
+top_p = 1.0
+response_format = "json_schema"
+require_usage = true
+max_input_chars = 240000
+
+[context]
+schema = "chimera.evidence-context/1"
+max_documents = 24
+max_chars = 80000
+window_chars = 4000
+max_windows_per_document = 4
+overlap_chars = 300

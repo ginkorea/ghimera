@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from chimera.graph_types import GraphConfig
+from chimera.model_config import ModelBindingsConfig
 from chimera.research_config import ResearchConfig
 from chimera.transport_types import TransportConfig
 
@@ -110,6 +111,7 @@ class ChimeraConfig(BaseModel):
     graph: GraphConfig | None = None
     transport: TransportConfig | None = None
     research: ResearchConfig | None = None
+    models: ModelBindingsConfig | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> "ChimeraConfig":
@@ -121,6 +123,14 @@ class ChimeraConfig(BaseModel):
             raise ValueError("user_agent must be one HTTP header line")
         if self.http is not None and self.http.robots.product_token not in self.user_agent:
             raise ValueError("robots product_token must identify this user_agent")
+        if (
+            self.models is not None
+            and self.research is not None
+            and self.research.require_distinct_reviewer
+        ):
+            analyst, reviewer = self.models.analyst, self.models.reviewer
+            if (analyst.model_id, analyst.revision) == (reviewer.model_id, reviewer.revision):
+                raise ValueError("research requires a distinct configured reviewer identity")
         return self
 
     @classmethod

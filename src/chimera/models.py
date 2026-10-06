@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from chimera.config import ChimeraConfig, Probability
 from chimera.graph_types import GraphSnapshot
+from chimera.model_types import ModelCallEvidence
 from chimera.refusals import RefusalCode
 from chimera.transport_types import TransportEvidence
 
@@ -121,6 +122,7 @@ class Extracted(Record):
 
 
 class Verdict(Record):
+    model_call: ModelCallEvidence | None = None
     decision: Literal["accept", "reject", "hold"]
     kind: NonEmpty
     publisher: NonEmpty
@@ -137,6 +139,7 @@ class Verdict(Record):
 
 
 class Grade(Record):
+    model_call: ModelCallEvidence | None = None
     satisfied: bool
     confidence: Probability
     reason: NonEmpty
@@ -185,6 +188,7 @@ class LedgerRow(Record):
     transport: TransportEvidence | None = None
     model: ModelIdentity | None = None
     query: str | None = None
+    model_call: ModelCallEvidence | None = None
 
 
 class Receipt(Record):

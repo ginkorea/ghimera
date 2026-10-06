@@ -23,7 +23,7 @@ from chimera.models import (
     StopReason,
 )
 from chimera.ports import Extractor, Judge
-from chimera.refusals import ChimeraRefused, RefusalCode
+from chimera.refusals import ChimeraRefused, ModelFailure, RefusalCode
 from chimera.scoring import Scorer
 
 CollectionStop = StopReason | Literal["round_limit"]
@@ -154,21 +154,32 @@ class GoalLoop:
                             verdict = await self._judge.document(
                                 goal, extracted, second_look=second_look
                             )
-                    except (ChimeraRefused, TimeoutError):
+                    except (ChimeraRefused, TimeoutError) as exc:
+                        code = (
+                            exc.code
+                            if isinstance(exc, ChimeraRefused)
+                            else RefusalCode.BUDGET_EXHAUSTED
+                        )
                         ledger.append(
                             LedgerRow(
                                 sequence=ledger.next_sequence,
                                 event="verdict",
                                 url=url,
-                                refusal=RefusalCode.MODEL_UNAVAILABLE,
+                                refusal=code,
+                                model=self._judge.model,
+                                model_call=exc.model_call
+                                if isinstance(exc, ModelFailure)
+                                else None,
                                 reason="served_judge_failed",
                             )
                         )
-                        raise ChimeraRefused(RefusalCode.MODEL_UNAVAILABLE) from None
+                        raise ChimeraRefused(code) from None
                     ledger.append(
                         LedgerRow(
                             sequence=ledger.next_sequence,
                             event="verdict",
+                            model=self._judge.model,
+                            model_call=verdict.model_call,
                             url=url,
                             reason=f"{verdict.decision}: {verdict.reason}",
                         )
@@ -241,21 +252,30 @@ class GoalLoop:
                 try:
                     async with asyncio.timeout(budget.remaining_seconds):
                         grade = await self._judge.grade(goal, tuple(documents.values()))
-                except (ChimeraRefused, TimeoutError):
+                except (ChimeraRefused, TimeoutError) as exc:
+                    code = (
+                        exc.code
+                        if isinstance(exc, ChimeraRefused)
+                        else RefusalCode.BUDGET_EXHAUSTED
+                    )
                     ledger.append(
                         LedgerRow(
                             sequence=ledger.next_sequence,
                             event="grade",
-                            refusal=RefusalCode.MODEL_UNAVAILABLE,
+                            refusal=code,
+                            model=self._judge.model,
+                            model_call=exc.model_call if isinstance(exc, ModelFailure) else None,
                             reason="served_grade_failed",
                         )
                     )
-                    stop = "failed"
+                    stop = "budget_exhausted" if code == RefusalCode.BUDGET_EXHAUSTED else "failed"
                     break
                 ledger.append(
                     LedgerRow(
                         sequence=ledger.next_sequence,
                         event="grade",
+                        model=self._judge.model,
+                        model_call=grade.model_call,
                         reason=f"{grade.satisfied}: {grade.reason}",
                     )
                 )

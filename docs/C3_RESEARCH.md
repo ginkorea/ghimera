@@ -1,7 +1,9 @@
 # Intent-driven research — C3 candidate
 
-Status: orchestration and configured SearXNG JSON adapter implemented in the
-standalone package. Not a deployed service or a completed C0–C5 spider.
+Status: orchestration, configured SearXNG JSON adapter, self-hosted model client
+and bounded evidence context implemented in the standalone package. Not a
+deployed service or a completed C0–C5 spider. Model behavior and remaining
+admission/acceptance are detailed in `C3_MODELS.md`.
 
 ## Entry and configuration
 
@@ -87,11 +89,11 @@ and verifies remote resolution rather than local source DNS.
 
 ## Still required for the full spider
 
-- Concrete self-hosted planner/analyst/reviewer and encoder bindings, declared
-  model admission, real intent-to-reviewed-answer acceptance and spend records.
-- Model-facing excerpt/context selection: current typed ports receive retained
-  documents, and the serialized-input cap refuses oversized requests. A concrete
-  model adapter must not blindly send raw payloads or silently truncate evidence.
+- Governed admission and real intent-to-reviewed-answer acceptance against served
+  models. Concrete planner/analyst/reviewer/judge HTTP clients and spend records
+  now exist; the encoder/scoring path still needs its concrete binding.
+- Bounded native-text selection now exists. Embedding-based context reranking,
+  representative real-data adequacy checks and handling propagation remain.
 - Replayable provider-configuration binding beyond provider name/revision;
   configuration currently belongs to the injected SearXNG adapter.
 - Browser ladder with all-subrequest Tor enforcement, extraction/PDF adapters,

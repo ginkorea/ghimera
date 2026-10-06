@@ -4,6 +4,8 @@ import asyncio
 from enum import StrEnum
 from types import MappingProxyType
 
+from chimera.model_types import ModelCallEvidence
+
 
 class RefusalCode(StrEnum):
     ROBOTS_DISALLOWED = "robots_disallowed"
@@ -84,6 +86,20 @@ class FetchFailure(ChimeraRefused):
     def __init__(self, code: RefusalCode, bytes_read: int) -> None:
         self.bytes_read = bytes_read
         super().__init__(code)
+
+
+class ModelFailure(ChimeraRefused):
+    """A failed model call still has bounded request/response spend evidence."""
+
+    def __init__(self, code: RefusalCode, model_call: ModelCallEvidence) -> None:
+        self.model_call = model_call
+        super().__init__(code)
+
+
+class ModelCancelled(asyncio.CancelledError):
+    def __init__(self, model_call: ModelCallEvidence) -> None:
+        self.model_call = model_call
+        super().__init__()
 
 
 class FetchCancelled(asyncio.CancelledError):

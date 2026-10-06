@@ -15,8 +15,9 @@ from pydantic import ValidationError
 
 from chimera.config import ChimeraConfig
 from chimera.loop import CollectionSession, GoalLoop
+from chimera.model_types import ModelCallEvidence
 from chimera.models import Document, Goal, LedgerRow, ModelIdentity, Scope, StopReason
-from chimera.refusals import ChimeraRefused, RefusalCode
+from chimera.refusals import ChimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from chimera.research_config import ResearchConfig
 from chimera.research_types import (
     AnswerDraft,
@@ -27,6 +28,7 @@ from chimera.research_types import (
     EvidenceRequest,
     PlanningRequest,
     Question,
+    ResearchModelResult,
     ResearchPlan,
     ResearchRecord,
     ResearchRequest,
@@ -37,7 +39,7 @@ from chimera.research_types import (
 )
 from chimera.search import GroundedSearch
 
-T = TypeVar("T", bound=ResearchRecord)
+T = TypeVar("T", bound=ResearchModelResult)
 R = TypeVar("R", bound=ResearchRecord)
 ModelEvent = Literal["plan", "assessment", "answer", "review"]
 
@@ -142,28 +144,36 @@ class ModelCalls:
         request: R,
         call: Callable[[R], Awaitable[T]],
     ) -> T:
-        if len(request.model_dump_json()) > self._policy.max_model_input_chars:
+        # Documents are retained objects, not the model's serialized context.
+        # Concrete model ports apply the same limit to their bounded prompt.
+        if len(request.model_dump_json(exclude={"documents"})) > self._policy.max_model_input_chars:
             raise ChimeraRefused(RefusalCode.RESEARCH_CONTRACT)
         budget, ledger = self._session.budget, self._session.ledger
         if model.location == "external":
             raise ChimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
         budget.reserve_judge()
         started, code, result = budget.clock(), None, None
+        model_call: ModelCallEvidence | None = None
         try:
             async with asyncio.timeout(budget.remaining_seconds):
                 result = await call(request)
+            model_call = result.model_call
             return result
         except TimeoutError:
             code = RefusalCode.BUDGET_EXHAUSTED
             raise ChimeraRefused(code) from None
         except ChimeraRefused as exc:
             code = exc.code
+            if isinstance(exc, ModelFailure):
+                model_call = exc.model_call
             raise
         except ValidationError:
             code = RefusalCode.MODEL_UNAVAILABLE
             raise ChimeraRefused(code) from None
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
             code = RefusalCode.MODEL_UNAVAILABLE
+            if isinstance(exc, ModelCancelled):
+                model_call = exc.model_call
             raise
         finally:
             ledger.append(
@@ -171,6 +181,7 @@ class ModelCalls:
                     sequence=ledger.next_sequence,
                     event=event,
                     model=model,
+                    model_call=model_call,
                     refusal=code,
                     reason="model_failed"
                     if code
