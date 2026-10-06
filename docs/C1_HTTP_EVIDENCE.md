@@ -14,8 +14,8 @@ CHIMERA_GATE_CACHE=/tmp/chimera-c0-uv-cache bash scripts/gate.sh
 ```
 
 The gate needs permission to open its controlled loopback-only fixture server.
-The first unsandboxed-fixture attempt was not made: the sandboxed run refused
-socket creation, and the real-server run proceeded only through tool approval.
+The initial sandboxed run refused socket creation; the real-server tests then
+proceeded through an approved escalation, without weakening that sandbox.
 The tests-first run failed before NetworkPolicy existed. During implementation
 the compressed-body test caught curl_cffi's callback return convention: the route
 now uses CURL_WRITEFUNC_ERROR and checks the callback state before returning.
@@ -47,3 +47,25 @@ remain required implementation. No publication, deployment or live config change
 Configuration locations: `examples/chimera.toml [http.robots]`; typed validation
 in `config.RobotsPolicy`; enforcement in `Politeness.permits`; terminal barriers
 in `http.page_barrier`. Override does not authorize login/paywall/CAPTCHA bypass.
+
+## Build and noneditable wheel acceptance
+
+Tested source commit: `b4aba5b525167c7b9752388ac1aa26a78119df7d` on
+`gompert/chimera-c1-http-20261006` (the evidence wording above is corrected
+afterward; production code is unchanged). C0's artifacts remain untouched.
+
+Built with `uv build --offline --no-sources --out-dir dist/c1-http`:
+
+- wheel SHA-256 `e8daf350699554b8ffddbb729d5a31828bf05e5747d087e9fe8b2da10f0eaff0`;
+- source archive SHA-256 `706b3b6366f633c800287f3b001dc74177400e9a56b446c1f4a0cb0d821f2727`.
+
+`/tmp/chimera-c1-wheel-check-20261006/bin/python` (3.11.16) imports the installed
+package from its `lib64/python3.11/site-packages/chimera/__init__.py`, with
+PYTHONPATH and TAIPAN credential variables unset. Offline dependency resolution
+needed uncached registry metadata; the same pinned dependencies were installed
+from public PyPI into this private venv only. The installed wheel then performed
+a real loopback HTTP goal run: two requests (robots + report), one retained
+document, a page-budget stop, and harvest JSON reader/writer roundtrip PASS.
+Extractor and judge remained explicitly test doubles; no model/extraction
+accuracy or live-publisher acceptance follows. Artifacts predate this evidence
+append and are unpublished local candidates, not a release.
