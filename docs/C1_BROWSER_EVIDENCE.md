@@ -3,6 +3,8 @@
 Status: local source candidate. **Not pushed, published, deployed, or full C0–C5
 acceptance.** Source revision `f904c48fda073ad99564acd07323e7228352f0de` on
 `gompert/chimera-c1-browser-20261006`, based on the accepted local dedup line.
+This historical record describes that exact revision; later per-hop redirect
+support and its new wheel are recorded in [redirect evidence](C1_BROWSER_REDIRECT_EVIDENCE.md).
 
 ## Interpreter and environment
 
