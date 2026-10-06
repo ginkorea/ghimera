@@ -58,6 +58,113 @@ def service(port, **changes):
     return ModelServiceConfig.model_validate(raw)
 
 
+@pytest.mark.parametrize(
+    ("generation", "wire_field", "wire_value"),
+    [
+        ({"reasoning_effort": "low"}, "reasoning_effort", "low"),
+        ({"enable_thinking": False}, "chat_template_kwargs", {"enable_thinking": False}),
+        ({"enable_thinking": True}, "chat_template_kwargs", {"enable_thinking": True}),
+    ],
+)
+def test_local_generation_is_explicit_on_the_wire_and_in_call_evidence(
+    endpoint, generation, wire_field, wire_value
+):
+    from ghimera.model_types import ModelCallEvidence
+
+    selected = {"schema": "ghimera.local-generation/1", **generation}
+    bound = service(endpoint[0], schema="chimera.model-service/2", generation=selected)
+    client = SelfHostedModel(config(), bound)
+    result = asyncio.run(
+        client.document(
+            Goal(text="port"),
+            Extracted(title="Report", text="Taiwan port report", language="en"),
+            second_look=False,
+        )
+    )
+    request = endpoint[1][0][1]
+    assert request[wire_field] == wire_value
+    assert ("reasoning_effort" in request) == (wire_field == "reasoning_effort")
+    assert ("chat_template_kwargs" in request) == (wire_field == "chat_template_kwargs")
+    assert request["max_tokens"] == bound.max_output_tokens
+    assert result.model_call.service.model_dump()["generation"] == selected
+    replayed = ModelCallEvidence.model_validate_json(result.model_call.model_dump_json())
+    assert replayed.service == bound
+    assert (
+        result.model_call.request_sha256
+        == hashlib.sha256(
+            json.dumps(request, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    assert "LocalGenerationConfig" not in request["messages"][0]["content"]
+
+
+@pytest.mark.parametrize(
+    ("schema", "generation"),
+    [
+        (
+            "chimera.model-service/1",
+            {"schema": "ghimera.local-generation/1", "reasoning_effort": "low"},
+        ),
+        ("chimera.model-service/2", None),
+        ("chimera.model-service/2", {"schema": "ghimera.local-generation/1"}),
+        (
+            "chimera.model-service/2",
+            {"schema": "ghimera.local-generation/1", "reasoning_effort": "none"},
+        ),
+        (
+            "chimera.model-service/2",
+            {"schema": "ghimera.local-generation/1", "enable_thinking": "false"},
+        ),
+        (
+            "chimera.model-service/2",
+            {
+                "schema": "ghimera.local-generation/1",
+                "reasoning_effort": "low",
+                "enable_thinking": False,
+            },
+        ),
+        (
+            "chimera.model-service/2",
+            {"schema": "ghimera.local-generation/1", "arbitrary_body": {"model": "other"}},
+        ),
+    ],
+)
+def test_incoherent_or_untyped_generation_is_rejected_before_io(schema, generation):
+    with pytest.raises(ValidationError):
+        service(8769, schema=schema, generation=generation)
+
+
+def test_legacy_generation_policy_and_wire_shape_remain_unchanged(endpoint):
+    bound = service(endpoint[0])
+    assert "generation" not in bound.model_dump()
+    client = SelfHostedModel(config(), bound)
+    asyncio.run(
+        client.document(
+            Goal(text="port"),
+            Extracted(title="Report", text="Taiwan port report", language="en"),
+            second_look=False,
+        )
+    )
+    assert set(endpoint[1][0][1]) == {
+        "model",
+        "messages",
+        "stream",
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "response_format",
+    }
+
+
+def test_generation_example_is_valid_non_active_policy():
+    path = Path(__file__).resolve().parents[1] / "examples/model-service-generation.toml"
+    bound = ModelServiceConfig.model_validate(tomllib.loads(path.read_text()))
+    assert bound.schema_version == "chimera.model-service/2"
+    assert bound.generation.reasoning_effort == "low"
+    assert bound.endpoint == "https://model.private.invalid/v1/chat/completions"
+    assert bound.authorization == "none"
+
+
 def test_second_document_look_adds_native_context_without_rewriting_first_span(endpoint):
     port, seen, _ = endpoint
     bound = service(port)

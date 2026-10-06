@@ -222,6 +222,7 @@ def model_schema(
             "ModelCallEvidence",
             "ModelServiceConfig",
             "EvidenceContextConfig",
+            "LocalGenerationConfig",
             "TokenUsage",
         ):
             definitions.pop(name, None)
@@ -383,6 +384,7 @@ class SelfHostedModel:
                     "temperature": service.temperature,
                     "top_p": service.top_p,
                     "response_format": response_format,
+                    **(service.generation.wire_fields() if service.generation is not None else {}),
                 },
                 ensure_ascii=False,
                 allow_nan=False,

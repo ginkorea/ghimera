@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Explicit version-2 local model-service generation controls: typed reasoning
+  effort or thinking-template selection, exact wire/request-hash provenance,
+  pre-I/O refusal of ambiguous controls and unchanged legacy recipes. No hidden
+  budget increases, server reconfiguration or provider fallback; real-model
+  compliance and extraction accuracy still require acceptance.
+
 - Explicit version-3 native-span semantic prompt: per-name zero-based occurrence
   indices, literal native whitespace and strict selected-window evidence.
   Existing prompt profiles remain unchanged; invalid native spans still refuse

@@ -102,11 +102,14 @@ that an entire organization has been exhaustively mapped.
 2. Semantic entity/relation extraction over a real organization PDF, including
    page coverage, omissions and visual-chart limitations: source implementation
    and controlled native-document checks exist; real organization-PDF/model
-   accuracy acceptance remains open. Seven actual served-model trials produced
-   no accepted semantic windows: the original profile failed proposal invariants,
+   accuracy acceptance remains open. Nine actual served-model trials produced
+   no accepted entity/relationship claims: the original profile failed proposal invariants,
    while explicit mention-key/native-span profiles reached structurally valid
    proposals that still failed native projection or mislabeled concepts. The
-   second-family trial exhausted its output budget without final text. See
+   second-family trial initially exhausted its output budget without final text.
+   Explicit generation controls returned final JSON in subsequent trials, but
+   two empty windows are not entity completeness and role/span failures remain.
+   Next: configured ontology definitions and independent role/entailment checks. See
    [ORGANIZATION_MODEL_EVIDENCE.md](ORGANIZATION_MODEL_EVIDENCE.md).
 3. Alias/temporal identity and conflict preservation across real documents.
 4. Graph-driven research over a small explicitly scoped organizational subtree,

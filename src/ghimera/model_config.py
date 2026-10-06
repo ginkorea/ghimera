@@ -4,7 +4,7 @@ import ipaddress
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
 Text = Annotated[str, Field(min_length=1)]
@@ -87,8 +87,34 @@ class PrivateModelService(BaseModel):
         return self
 
 
+class LocalGenerationConfig(BaseModel):
+    """Closed local-runtime controls, not an arbitrary request-body overlay."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.local-generation/1"] = Field(alias="schema")
+    reasoning_effort: Literal["low", "medium", "high"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    enable_thinking: Annotated[bool, Field(strict=True)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def one_dialect(self) -> "LocalGenerationConfig":
+        if (self.reasoning_effort is None) == (self.enable_thinking is None):
+            raise ValueError("select exactly one explicit local generation control")
+        return self
+
+    def wire_fields(self) -> dict[str, JsonValue]:
+        if self.reasoning_effort is not None:
+            return {"reasoning_effort": self.reasoning_effort}
+        return {"chat_template_kwargs": {"enable_thinking": self.enable_thinking}}
+
+
 class ModelServiceConfig(PrivateModelService):
-    schema_version: Literal["chimera.model-service/1"] = Field(alias="schema")
+    schema_version: Literal["chimera.model-service/1", "chimera.model-service/2"] = Field(
+        alias="schema"
+    )
     max_output_tokens: Positive
     temperature: Annotated[float, Field(ge=0, le=2, allow_inf_nan=False)]
     top_p: Annotated[float, Field(gt=0, le=1, allow_inf_nan=False)]
@@ -96,12 +122,17 @@ class ModelServiceConfig(PrivateModelService):
     citation_format: Literal["full", "template_ids"] = Field(
         default="full", exclude_if=lambda value: value == "full"
     )
+    generation: LocalGenerationConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     context: EvidenceContextConfig
 
     @model_validator(mode="after")
     def completion_endpoint(self) -> "ModelServiceConfig":
         if not urlsplit(self.endpoint).path.endswith("/chat/completions"):
             raise ValueError("configure an exact completion endpoint")
+        if (self.schema_version == "chimera.model-service/2") != (self.generation is not None):
+            raise ValueError("explicit generation controls require model-service/2 and its recipe")
         return self
 
 

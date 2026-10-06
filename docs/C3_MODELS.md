@@ -13,6 +13,29 @@ addresses, authentication mode, declared model ID/revision, exact served-model
 name, deadlines, input/output limits, generation parameters and evidence context.
 `examples/model-service.toml` is an explicit, non-routable example.
 
+`chimera.model-service/2` adds the required, closed
+`ghimera.local-generation/1` recipe. It selects exactly one of:
+
+- `reasoning_effort = "low"`, `"medium"` or `"high"`, emitted as the
+  completion request's top-level `reasoning_effort`;
+- `enable_thinking = false` or `true`, emitted only as
+  `chat_template_kwargs.enable_thinking` for a compatible local runtime.
+
+The [official gpt-oss-20b documentation](https://developers.openai.com/api/docs/models/gpt-oss-20b)
+describes low/medium/high effort. The [official Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+defines the request field. Qwen's [vLLM deployment documentation](https://qwen.readthedocs.io/en/latest/deployment/vllm.html#thinking-non-thinking-modes)
+defines the template switch and its runtime-version limitations. Sources checked
+6 October 2026; configuration is not a claim that a particular server honors
+the option or that extraction accuracy improves.
+
+See `examples/model-service-generation.toml`. There is no arbitrary extra-body
+overlay, model-name-based automatic selection, increased output budget or retry
+against a different provider. Empty, mixed, unknown or untyped controls refuse
+before I/O. Existing `/1` policies omit this field and retain their serialization,
+request shape and runtime-default behavior. Configured `/2` choices are included
+in effective policy, each call's service record and the actual request hash.
+Truncation still refuses; reasoning text is never substituted for final output.
+
 `chimera.model-bindings/1` assigns service policies to planner, analyst, reviewer
 and judge in the main configuration's `models` block. `SelfHostedModels.from_config`
 constructs all four roles from that parsed boundary; no role/endpoint is inferred
