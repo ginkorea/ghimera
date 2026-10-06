@@ -2,7 +2,16 @@
 
 from ghimera.collector import Collector
 from ghimera.config import GhimeraConfig
+from ghimera.local_input_types import LocalDocumentSeed
 from ghimera.loop import GoalLoop
 from ghimera.models import Goal, Harvest, Scope
 
-__all__ = ["GhimeraConfig", "Collector", "Goal", "GoalLoop", "Harvest", "Scope"]
+__all__ = [
+    "GhimeraConfig",
+    "Collector",
+    "Goal",
+    "GoalLoop",
+    "Harvest",
+    "Scope",
+    "LocalDocumentSeed",
+]

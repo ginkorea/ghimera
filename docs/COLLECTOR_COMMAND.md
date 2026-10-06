@@ -14,6 +14,11 @@ with absolute paths, a fresh run ID, a fresh output directory, and explicit read
 and output allowances. The output's parent must already exist on your chosen
 storage volume. Do not put secret values in any of these files.
 
+Unreleased source also supports request `local_documents`: explicitly pinned
+owned PDF/DOCX files admitted under `[local_inputs]` before the first plan.
+See [local input configuration and evidence](LOCAL_INPUTS.md). This does not
+change the command contract or create a second collection path.
+
 ```bash
 python -m ghimera --job /absolute/path/collector-command.toml --max-job-bytes 100000
 ```

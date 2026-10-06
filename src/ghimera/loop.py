@@ -18,6 +18,8 @@ from ghimera.extraction_attempts import (
 from ghimera.fetch import FetchLadder
 from ghimera.graph import DirectoryGraphSink, GraphSink, ResearchGraph
 from ghimera.ledger import Ledger
+from ghimera.local_input_types import LocalDocumentSeed
+from ghimera.local_inputs import LocalInputFailure, LocalInputLoader
 from ghimera.models import (
     Document,
     DuplicateOccurrence,
@@ -26,6 +28,7 @@ from ghimera.models import (
     LedgerRow,
     LinkCandidate,
     ModelIdentity,
+    Page,
     Receipt,
     Scope,
     StopReason,
@@ -155,6 +158,102 @@ class GoalLoop:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         return self.finish(session, stop)
 
+    async def import_local(
+        self, session: CollectionSession, seeds: tuple[LocalDocumentSeed, ...]
+    ) -> None:
+        """Admit local snapshots before planning, through the shared document pipeline."""
+        if session._closed or session.budget.config != self._config:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        policy = self._config.local_inputs
+        if seeds and policy is None:
+            raise GhimeraRefused(RefusalCode.LOCAL_INPUT_FAILED)
+        if policy is None:
+            return
+        loader = LocalInputLoader(policy)
+        budget, ledger = session.budget, session.ledger
+        for item in seeds:
+            seed = LocalDocumentSeed.model_validate(item.model_dump())
+            allowance = budget.reserve_local_input()
+            started = self._clock()
+            snapshot, failure, code = None, None, None
+            cancelled = False
+            task = asyncio.create_task(asyncio.to_thread(loader.read, seed, max_bytes=allowance))
+            try:
+                try:
+                    async with asyncio.timeout(budget.remaining_seconds):
+                        snapshot = await asyncio.shield(task)
+                except TimeoutError:
+                    code = RefusalCode.BUDGET_EXHAUSTED
+                except asyncio.CancelledError:
+                    cancelled, code = True, RefusalCode.LOCAL_INPUT_FAILED
+                except LocalInputFailure as exc:
+                    failure, code = exc, exc.code
+                if code is not None and failure is None:
+                    # Drain the bounded file read, preserving physical byte spend
+                    # even when its caller's deadline or cancellation fired.
+                    try:
+                        snapshot = await task
+                    except LocalInputFailure as exc:
+                        failure = exc
+                read = (
+                    len(snapshot.raw)
+                    if snapshot is not None
+                    else (failure.bytes_read if failure is not None else 0)
+                )
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="local_input",
+                        url=seed.source_id,
+                        bytes_read=read,
+                        refusal=code,
+                        local_input=snapshot.evidence
+                        if snapshot is not None and code is None
+                        else None,
+                        reason="owned_local_snapshot" if code is None else "local_input_refused",
+                        latency_seconds=max(0.0, self._clock() - started),
+                    )
+                )
+                budget.local_input_bytes += read
+                budget.record_bytes(read)
+                if cancelled:
+                    raise asyncio.CancelledError
+                if code is not None:
+                    raise GhimeraRefused(code)
+                if snapshot is None:
+                    raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            finally:
+                budget.release_bytes(allowance)
+            # Page is only the existing parser's byte envelope here; no HTTP
+            # request/status is written to the ledger or source provenance.
+            page = Page(
+                url=seed.source_id,
+                final_url=seed.source_id,
+                status=200,
+                content_type=seed.content_type,
+                body=snapshot.raw,
+                local_input=snapshot.evidence,
+            )
+            if session.graph is not None:
+                await session.graph.discovered(seed.source_id, session.graph.intent_id)
+            try:
+                budget.check_time()
+                await self._process_page(session, page, seed.source_id, 0, None, 0)
+            except (GhimeraRefused, TimeoutError) as exc:
+                if isinstance(exc, ExtractionFailure):
+                    self._record_parse_attempts(ledger, exc.attempts)
+                code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="refusal",
+                        url=seed.source_id,
+                        refusal=code,
+                        reason="local_document_processing_refused",
+                    )
+                )
+                raise GhimeraRefused(code) from None
+
     async def collect(
         self,
         session: CollectionSession,
@@ -168,7 +267,7 @@ class GoalLoop:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if fetch_limit is not None and fetch_limit <= 0:
             raise ValueError("collection quantum must be positive")
-        goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
+        goal, budget, ledger = session.goal, session.budget, session.ledger
         documents, frontier, visited = session._documents, session._frontier, session._visited
         for seed in seeds:
             if seed not in visited:
@@ -193,194 +292,7 @@ class GoalLoop:
                 if parent_hops:
                     session._reference_hops[page.final_url] = parent_hops
                     session._reference_origins[page.final_url] = session._reference_origins[url]
-                extraction_started = self._clock()
-                async with asyncio.timeout(budget.remaining_seconds):
-                    try:
-                        extracted = await self._extractor.extract(page)
-                    except ExtractionCancelled as exc:
-                        self._record_parse_attempts(ledger, exc.attempts)
-                        # Preserve asyncio.timeout's exact CancelledError contract.
-                        raise asyncio.CancelledError from None
-                if extracted.extraction is not None:
-                    self._record_parse_attempts(ledger, extracted.extraction.attempts)
-                if extracted.extraction is not None or extracted.document_parse is not None:
-                    ledger.append(
-                        LedgerRow(
-                            sequence=ledger.next_sequence,
-                            event="extraction",
-                            url=page.final_url,
-                            extraction=extracted.extraction,
-                            document_parse=extracted.document_parse,
-                            reason=self._extractor.revision,
-                            latency_seconds=max(0.0, self._clock() - extraction_started),
-                        )
-                    )
-                    if extracted.extraction is not None:
-                        health = extracted.extraction.locator_health
-                        if health is not None and health.generic_only:
-                            ledger.append(
-                                LedgerRow(
-                                    sequence=ledger.next_sequence,
-                                    event="policy",
-                                    url=page.final_url,
-                                    extraction=extracted.extraction,
-                                    reason="locator_drift: publisher uses generic extraction",
-                                )
-                            )
-                document_node_id = None
-                if graph is not None:
-                    document_node_id = await graph.document(
-                        page.final_url,
-                        page.body,
-                        extracted.text,
-                        self._extractor.revision,
-                        transport=page.transport,
-                    )
-                # Score native evidence before the judge. Similarity guides the frontier,
-                # but never replaces a document verdict or factual source evidence.
-                ranked = await self._scorer.score(goal, extracted, budget, ledger)
-                verdict = None
-                for second_look in (False, True):
-                    budget.reserve_judge()
-                    try:
-                        async with asyncio.timeout(budget.remaining_seconds):
-                            verdict = await self._judge.document(
-                                goal, extracted, second_look=second_look
-                            )
-                    except (GhimeraRefused, TimeoutError) as exc:
-                        code = (
-                            exc.code
-                            if isinstance(exc, GhimeraRefused)
-                            else RefusalCode.BUDGET_EXHAUSTED
-                        )
-                        ledger.append(
-                            LedgerRow(
-                                sequence=ledger.next_sequence,
-                                event="verdict",
-                                url=url,
-                                refusal=code,
-                                model=self._judge.model,
-                                model_call=exc.model_call
-                                if isinstance(exc, ModelFailure)
-                                else None,
-                                reason="served_judge_failed",
-                            )
-                        )
-                        raise GhimeraRefused(code) from None
-                    ledger.append(
-                        LedgerRow(
-                            sequence=ledger.next_sequence,
-                            event="verdict",
-                            model=self._judge.model,
-                            model_call=verdict.model_call,
-                            url=url,
-                            reason=f"{verdict.decision}: {verdict.reason}",
-                        )
-                    )
-                    if verdict.decision != "hold":
-                        break
-                if verdict is not None and verdict.decision == "accept":
-                    digest = hashlib.sha256(page.body).hexdigest()
-                    candidate = Document(
-                        url=page.final_url,
-                        sha256=digest,
-                        raw=page.body,
-                        extracted=extracted,
-                        verdict=verdict,
-                        transport=page.transport,
-                        rendered=page.rendered,
-                        source_session=page.source_session,
-                        challenge_use=page.challenge_use,
-                    )
-                    content = session._content
-                    matched = content.match(candidate) if content is not None else None
-                    drift = content.drift(candidate) if content is not None else None
-                    if drift is not None:
-                        ledger.append(
-                            LedgerRow(
-                                sequence=ledger.next_sequence,
-                                event="content_drift",
-                                url=page.final_url,
-                                reason=drift.reason,
-                                content_drift=drift,
-                            )
-                        )
-                    representative = (
-                        matched.representative_sha256 if matched is not None else digest
-                    )
-                    if representative in documents:
-                        original = documents[representative]
-                        occurrences = original.occurrences
-                        if (
-                            matched is not None
-                            and (candidate.url, digest) != (original.url, original.sha256)
-                            and not any(
-                                (item.url, item.sha256) == (candidate.url, digest)
-                                for item in occurrences
-                            )
-                        ):
-                            occurrence = DuplicateOccurrence.model_validate(
-                                dict(
-                                    candidate.model_dump(exclude={"duplicate_urls", "occurrences"}),
-                                    dedup=matched.model_dump(by_alias=True),
-                                )
-                            )
-                            occurrences += (occurrence,)
-                        urls = tuple(
-                            dict.fromkeys(
-                                original.duplicate_urls
-                                + ((page.final_url,) if page.final_url != original.url else ())
-                            )
-                        )
-                        documents[representative] = Document.model_validate(
-                            dict(
-                                original.model_dump(), duplicate_urls=urls, occurrences=occurrences
-                            )
-                        )
-                        ledger.append(
-                            LedgerRow(
-                                sequence=ledger.next_sequence,
-                                event="duplicate",
-                                url=url,
-                                reason=matched.reason if matched is not None else "content_sha256",
-                                dedup=matched,
-                            )
-                        )
-                    else:
-                        if content is not None:
-                            content.add(candidate)
-                        documents[digest] = candidate
-                        session._window_new += 1
-                    if content is not None:
-                        content.observe(candidate)
-                    reference_policy = self._config.references
-                    if reference_policy is not None and candidate in session.evidence_documents:
-                        by_target = {item.target_url: item for item in extracted.references}
-                        reference_links = tuple(link for link in ranked if link.url in by_target)
-                        for link in reference_links[: reference_policy.max_candidates_per_parent]:
-                            await self.queue_reference(
-                                session,
-                                candidate,
-                                by_target[link.url],
-                                link,
-                                active_scope,
-                                parent_hops,
-                                origin_url=session.reference_origin(url),
-                            )
-                reference_targets = {item.target_url for item in extracted.references}
-                for link in ranked[: self._config.max_links_per_page]:
-                    if link.url in reference_targets:
-                        continue
-                    if link.score >= self._config.min_link_score and link.url not in visited:
-                        if graph is not None and document_node_id is not None:
-                            await graph.discovered(link.url, document_node_id)
-                        heapq.heappush(frontier, (-link.score, link.url, depth + 1))
-                        if parent_hops:
-                            session._reference_scopes.setdefault(link.url, active_scope)
-                            session._reference_hops.setdefault(link.url, parent_hops)
-                            session._reference_origins.setdefault(
-                                link.url, session._reference_origins.get(url, url)
-                            )
+                await self._process_page(session, page, url, depth, active_scope, parent_hops)
             except (GhimeraRefused, TimeoutError) as exc:
                 if isinstance(exc, ExtractionFailure):
                     self._record_parse_attempts(ledger, exc.attempts)
@@ -448,6 +360,204 @@ class GoalLoop:
                     stop = "goal_satisfied"
                     break
         return stop
+
+    async def _process_page(
+        self,
+        session: CollectionSession,
+        page: Page,
+        url: str,
+        depth: int,
+        active_scope: Scope | None,
+        parent_hops: int,
+    ) -> None:
+        """One extraction/scoring/verdict/identity owner for web and local snapshots."""
+        goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
+        documents, frontier, visited = session._documents, session._frontier, session._visited
+        extraction_started = self._clock()
+        async with asyncio.timeout(budget.remaining_seconds):
+            try:
+                extracted = await self._extractor.extract(page)
+            except ExtractionCancelled as exc:
+                self._record_parse_attempts(ledger, exc.attempts)
+                # Preserve asyncio.timeout's exact CancelledError contract.
+                raise asyncio.CancelledError from None
+        if extracted.extraction is not None:
+            self._record_parse_attempts(ledger, extracted.extraction.attempts)
+        if extracted.extraction is not None or extracted.document_parse is not None:
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="extraction",
+                    url=page.final_url,
+                    extraction=extracted.extraction,
+                    document_parse=extracted.document_parse,
+                    reason=self._extractor.revision,
+                    latency_seconds=max(0.0, self._clock() - extraction_started),
+                )
+            )
+            if extracted.extraction is not None:
+                health = extracted.extraction.locator_health
+                if health is not None and health.generic_only:
+                    ledger.append(
+                        LedgerRow(
+                            sequence=ledger.next_sequence,
+                            event="policy",
+                            url=page.final_url,
+                            extraction=extracted.extraction,
+                            reason="locator_drift: publisher uses generic extraction",
+                        )
+                    )
+        document_node_id = None
+        if graph is not None:
+            document_node_id = await graph.document(
+                page.final_url,
+                page.body,
+                extracted.text,
+                self._extractor.revision,
+                transport=page.transport,
+                local_input=page.local_input,
+            )
+        # Score native evidence before the judge. Similarity guides the frontier,
+        # but never replaces a document verdict or factual source evidence.
+        ranked = await self._scorer.score(goal, extracted, budget, ledger)
+        verdict = None
+        for second_look in (False, True):
+            budget.reserve_judge()
+            try:
+                async with asyncio.timeout(budget.remaining_seconds):
+                    verdict = await self._judge.document(goal, extracted, second_look=second_look)
+            except (GhimeraRefused, TimeoutError) as exc:
+                code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="verdict",
+                        url=url,
+                        refusal=code,
+                        model=self._judge.model,
+                        model_call=exc.model_call if isinstance(exc, ModelFailure) else None,
+                        reason="served_judge_failed",
+                    )
+                )
+                raise GhimeraRefused(code) from None
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="verdict",
+                    model=self._judge.model,
+                    model_call=verdict.model_call,
+                    url=url,
+                    reason=f"{verdict.decision}: {verdict.reason}",
+                )
+            )
+            if verdict.decision != "hold":
+                break
+        if verdict is not None and verdict.decision == "accept":
+            digest = hashlib.sha256(page.body).hexdigest()
+            candidate = Document(
+                url=page.final_url,
+                sha256=digest,
+                raw=page.body,
+                extracted=extracted,
+                verdict=verdict,
+                transport=page.transport,
+                rendered=page.rendered,
+                source_session=page.source_session,
+                challenge_use=page.challenge_use,
+                local_input=page.local_input,
+            )
+            content = session._content
+            matched = content.match(candidate) if content is not None else None
+            drift = content.drift(candidate) if content is not None else None
+            if drift is not None:
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="content_drift",
+                        url=page.final_url,
+                        reason=drift.reason,
+                        content_drift=drift,
+                    )
+                )
+            representative = matched.representative_sha256 if matched is not None else digest
+            if representative in documents:
+                original = documents[representative]
+                occurrences = original.occurrences
+                if (
+                    matched is not None
+                    and (candidate.url, digest) != (original.url, original.sha256)
+                    and not any(
+                        (item.url, item.sha256) == (candidate.url, digest) for item in occurrences
+                    )
+                ):
+                    occurrence = DuplicateOccurrence.model_validate(
+                        dict(
+                            candidate.model_dump(exclude={"duplicate_urls", "occurrences"}),
+                            dedup=matched.model_dump(by_alias=True),
+                        )
+                    )
+                    occurrences += (occurrence,)
+                urls = tuple(
+                    dict.fromkeys(
+                        original.duplicate_urls
+                        + ((page.final_url,) if page.final_url != original.url else ())
+                    )
+                )
+                documents[representative] = Document.model_validate(
+                    dict(original.model_dump(), duplicate_urls=urls, occurrences=occurrences)
+                )
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="duplicate",
+                        url=url,
+                        reason=matched.reason if matched is not None else "content_sha256",
+                        dedup=matched,
+                    )
+                )
+            else:
+                if content is not None:
+                    content.add(candidate)
+                documents[digest] = candidate
+                session._window_new += 1
+            if content is not None:
+                content.observe(candidate)
+            reference_policy = self._config.references
+            if (
+                reference_policy is not None
+                and active_scope is not None
+                and candidate in session.evidence_documents
+            ):
+                by_target = {item.target_url: item for item in extracted.references}
+                reference_links = tuple(link for link in ranked if link.url in by_target)
+                for link in reference_links[: reference_policy.max_candidates_per_parent]:
+                    await self.queue_reference(
+                        session,
+                        candidate,
+                        by_target[link.url],
+                        link,
+                        active_scope,
+                        parent_hops,
+                        origin_url=session.reference_origin(url),
+                    )
+        reference_targets = {item.target_url for item in extracted.references}
+        for link in ranked[: self._config.max_links_per_page]:
+            if link.url in reference_targets:
+                continue
+            if (
+                active_scope is not None
+                and link.score >= self._config.min_link_score
+                and link.url not in visited
+            ):
+                if graph is not None and document_node_id is not None:
+                    await graph.discovered(link.url, document_node_id)
+                heapq.heappush(frontier, (-link.score, link.url, depth + 1))
+                if parent_hops:
+                    session._reference_scopes.setdefault(link.url, active_scope)
+                    session._reference_hops.setdefault(link.url, parent_hops)
+                    session._reference_origins.setdefault(
+                        link.url, session._reference_origins.get(url, url)
+                    )
 
     def _record_parse_attempts(
         self, ledger: Ledger, attempts: tuple[HtmlExtractionAttempt, ...]
@@ -529,6 +639,7 @@ class GoalLoop:
                 source.extracted.text,
                 self._extractor.revision,
                 transport=source.transport,
+                local_input=source.local_input,
             )
             await graph.discovered(link.url, parent)
         return True

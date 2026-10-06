@@ -32,10 +32,14 @@ class RefusalCode(StrEnum):
     UNSUPPORTED_ANSWER = "unsupported_answer"
     SEARCH_UNAVAILABLE = "search_unavailable"
     SOURCE_SESSION_UNAVAILABLE = "source_session_unavailable"
+    LOCAL_INPUT_FAILED = "local_input_failed"
 
 
 REFUSALS = MappingProxyType(
     {
+        RefusalCode.LOCAL_INPUT_FAILED: (
+            "Local seed is unreadable, outside its admission policy, changed or unpinned."
+        ),
         RefusalCode.ROBOTS_DISALLOWED: "Robots denies this URL; use another seed or shelf ruling.",
         RefusalCode.CHALLENGE_NOT_SOLVED: (
             "Challenge remains unresolved; configure a local challenge gateway or supply "

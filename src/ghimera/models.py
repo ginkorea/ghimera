@@ -16,6 +16,7 @@ from ghimera.embedding_types import EncodingCall, IntentReferenceEvidence
 from ghimera.extraction_attempts import HtmlExtractionAttempt, validate_chain
 from ghimera.extraction_types import ExtractionEvidence
 from ghimera.graph_types import GraphSnapshot
+from ghimera.local_input_types import LocalInputEvidence
 from ghimera.model_types import ModelCallEvidence
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
 from ghimera.refusals import RefusalCode
@@ -123,9 +124,27 @@ class Page(Record):
     rendered: RenderResult | None = None
     source_session: SourceSessionUse | None = None
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def rendering_binding(self) -> "Page":
+        if self.local_input is not None and (
+            self.url != self.local_input.source_id
+            or self.final_url != self.url
+            or self.local_input.sha256 != hashlib.sha256(self.body).hexdigest()
+            or self.local_input.size_bytes != len(self.body)
+            or self.local_input.content_type != self.content_type
+            or any(
+                value is not None
+                for value in (
+                    self.transport,
+                    self.rendered,
+                    self.source_session,
+                    self.challenge_use,
+                )
+            )
+        ):
+            raise ValueError("local parser input must bind its snapshot without network evidence")
         if self.source_session is not None and self.source_session.request_url != self.final_url:
             raise ValueError("source session selection must bind this response URL")
         if self.rendered is not None and (
@@ -218,8 +237,11 @@ class DocumentSource(Record):
     rendered: RenderResult | None = None
     source_session: SourceSessionUse | None = None
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     def validate_policy(self, config: GhimeraConfig) -> None:
+        if self.local_input is not None:
+            self.local_input.validate_policy(config.local_inputs)
         if self.challenge_use is not None:
             self.challenge_use.validate_policy(config.challenges, self.url)
         if self.source_session is not None:
@@ -250,6 +272,23 @@ class DocumentSource(Record):
 
     @model_validator(mode="after")
     def source_binding(self) -> "DocumentSource":
+        if self.local_input is not None and (
+            self.local_input.source_id != self.url
+            or self.local_input.sha256 != self.sha256
+            or self.local_input.size_bytes != len(self.raw)
+            or any(
+                value is not None
+                for value in (
+                    self.transport,
+                    self.rendered,
+                    self.source_session,
+                    self.challenge_use,
+                )
+            )
+        ):
+            raise ValueError("local source provenance must bind its retained original bytes")
+        if self.url.startswith("urn:ghimera:local:") and self.local_input is None:
+            raise ValueError("local sources require explicit import provenance")
         if self.source_session is not None and self.source_session.request_url != self.url:
             raise ValueError("source session selection must bind this source occurrence")
         digest = hashlib.sha256(self.raw).hexdigest()
@@ -339,6 +378,7 @@ class LedgerRow(Record):
         "reference",
         "reference_query",
         "challenge",
+        "local_input",
     ]
     url: str | None = None
     route: str | None = None
@@ -374,9 +414,22 @@ class LedgerRow(Record):
         default=None, exclude_if=lambda value: value is None
     )
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if self.event == "local_input":
+            if (self.local_input is None) == (self.refusal is None):
+                raise ValueError("local import needs snapshot evidence or a refusal")
+            if self.status is not None or self.transport is not None:
+                raise ValueError("local imports are not HTTP fetches")
+            if self.local_input is not None and (
+                self.url != self.local_input.source_id
+                or self.bytes_read != self.local_input.size_bytes
+            ):
+                raise ValueError("import observations must bind the original byte snapshot")
+        elif self.local_input is not None:
+            raise ValueError("local import metadata belongs only to its input observation")
         if self.challenge_use is not None and self.event != "fetch":
             raise ValueError("clearance use belongs to its source fetch")
         if self.event == "challenge":
@@ -483,6 +536,22 @@ class Harvest(Record):
         from ghimera.scoring_validation import validate_reference_rows
 
         validate_reference_ledger(self)
+        inputs = tuple(row for row in self.ledger if row.event == "local_input")
+        input_policy = self.receipt.effective_config.local_inputs
+        if inputs and (
+            input_policy is None
+            or len(inputs) > input_policy.max_files_per_run
+            or sum(row.bytes_read for row in inputs) > input_policy.max_total_bytes
+        ):
+            raise ValueError("local imports exceed the effective input policy")
+        for row in inputs:
+            if row.local_input is not None:
+                row.local_input.validate_policy(input_policy)
+        for document in self.source_documents:
+            if document.local_input is not None and not any(
+                row.local_input == document.local_input for row in inputs
+            ):
+                raise ValueError("local documents must retain their import observation")
         parsing: dict[tuple[str, str, str | None], list[HtmlExtractionAttempt]] = {}
         for row in self.ledger:
             for clearance in (row.challenge, row.challenge_use):
@@ -685,4 +754,11 @@ class Harvest(Record):
             config = self.receipt.effective_config.graph
             if config is None or self.graph.config_digest != config.content_digest():
                 raise ValueError("graph must bind the effective configuration")
+            for node in self.graph.nodes:
+                if node.local_input is not None:
+                    node.local_input.validate_policy(input_policy)
+                    if not any(row.local_input == node.local_input for row in inputs):
+                        raise ValueError(
+                            "local graph documents must retain their input observation"
+                        )
         return self

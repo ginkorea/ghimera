@@ -78,6 +78,48 @@ def test_command_uses_concrete_adapters_and_archives_originals_and_citations(
     assert before == (len(model_endpoint[1]), len(search_endpoint[1]), len(encoder_endpoint[1]))
 
 
+def test_command_imports_an_owned_pdf_before_research_and_archives_its_provenance(
+    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint
+):
+    from ghimera import LocalDocumentSeed
+    from tests.test_document_extraction import config as document_config
+    from tests.test_document_extraction import native_pdf
+    from tests.test_local_inputs import recipe
+
+    cfg, _ = assembled(tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint)
+    data = cfg.model_dump()
+    data.update(
+        document_extraction=document_config(tmp_path).document_extraction,
+        local_inputs=recipe(tmp_path),
+    )
+    from ghimera.config import GhimeraConfig
+
+    cfg = GhimeraConfig.model_validate(data)
+    owned_pdf = tmp_path / "owned-seed-document.pdf"
+    original = native_pdf()
+    owned_pdf.write_bytes(original)
+    import hashlib
+
+    seed = LocalDocumentSeed(
+        path=owned_pdf, sha256=hashlib.sha256(original).hexdigest(), content_type="application/pdf"
+    )
+    opts = options(tmp_path, cfg)
+    opts.request_path.write_text(
+        json.dumps({"intent": "find ports", "local_documents": [seed.model_dump(mode="json")]})
+    )
+    summary = asyncio.run(execute(opts, source_resolver=ResolverFixture()))
+    result = ResearchResultArchive.read(opts.output_directory, max_bytes=opts.max_result_bytes)
+    assert summary.status == result.status == "answered"
+    imported = next(doc for doc in result.harvest.source_documents if doc.local_input)
+    assert imported.url == seed.source_id and imported.raw == original
+    assert str(owned_pdf) not in result.model_dump_json()
+    observations = result.harvest.ledger
+    intake = next(row.sequence for row in observations if row.event == "local_input")
+    first_plan = next(row.sequence for row in observations if row.event == "plan")
+    assert intake < first_plan
+    assert result.answer.claims[0].citations[0].matches(imported)
+
+
 def test_command_preflight_bounds_credentials_and_request_before_outbound(
     tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint, monkeypatch
 ):

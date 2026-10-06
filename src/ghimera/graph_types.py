@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghimera.local_input_types import LocalInputEvidence
 from ghimera.transport_types import TransportEvidence
 
 Name = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]*$")]
@@ -117,9 +118,17 @@ class GraphNode(GraphRecord):
     transport: TransportEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def content_bound(self) -> "GraphNode":
+        if self.local_input is not None and (
+            self.role != "document"
+            or self.source_url != self.local_input.source_id
+            or self.content_sha256 != self.local_input.sha256
+            or self.transport is not None
+        ):
+            raise ValueError("local graph evidence belongs to its original document version")
         if self.role == "document":
             if self.text is None or self.content_sha256 is None or self.source_url is None:
                 raise ValueError("document graph node needs version, URL and retained text")

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Explicit owned local PDF/DOCX seeds for the configured intent API and command,
+  admitted before planning under a versioned root/file/byte policy and pinned
+  original hash. Content-addressed source identities and path-free source
+  provenance retain originals, parser results and native citations through the
+  shared document pipeline, graph, journal and complete archive.
+- Local intake consumes shared byte/deadline and downstream parser/model
+  budgets, rejects symlinks and changed bytes, and drains its own bounded reader
+  on cancellation. Actual PDF/DOCX and controlled command composition checks
+  are not semantic organization-graph or real-model quality acceptance.
 - Opt-in local FlareSolverr challenge recovery alongside the isolated Patchright
   renderer. Versioned configuration declares exact source origins, provider
   revision, clearance-cookie names, request/response limits, retry budget and

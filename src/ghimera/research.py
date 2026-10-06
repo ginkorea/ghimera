@@ -405,6 +405,7 @@ class ResearchLoop:
         return tuple(accepted)
 
     async def run(self, request: ResearchRequest, *, run_id: str | None = None) -> ResearchResult:
+        request = ResearchRequest.model_validate(request.model_dump())
         session = await self._collector.open(
             Goal(text=request.intent, seeds=request.seeds), run_id=run_id
         )
@@ -418,7 +419,14 @@ class ResearchLoop:
         reason: Literal["answered", "rounds_exhausted", "budget_exhausted", "failed"] = (
             "rounds_exhausted"
         )
+        try:
+            await self._collector.import_local(session, request.local_documents)
+        except GhimeraRefused as exc:
+            self._refuse(session, exc.code)
+            reason = "budget_exhausted" if exc.code == RefusalCode.BUDGET_EXHAUSTED else "failed"
         for number in range(1, self._policy.max_rounds + 1):
+            if reason in {"failed", "budget_exhausted"}:
+                break
             try:
                 planning = PlanningRequest(
                     intent=request.intent,

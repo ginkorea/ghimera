@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 
 def canonical_url(url: str, policy: DedupConfig) -> str:
+    if re.fullmatch(r"urn:ghimera:local:[0-9a-f]{64}", url):
+        return url
     parts = urlsplit(url)
     if (
         parts.scheme not in {"http", "https"}
@@ -67,7 +69,7 @@ def fingerprint(document: DocumentSource, policy: DedupConfig) -> ContentFingerp
     # A source's rel=canonical is untrusted metadata, not authority to alias hosts.
     url = document.url
     hint = document.extracted.canonical_url
-    if hint is not None:
+    if hint is not None and document.local_input is None:
         try:
             canonical_url(hint, policy)
         except ValueError:

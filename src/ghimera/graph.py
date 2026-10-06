@@ -23,6 +23,7 @@ from ghimera.graph_types import (
     GraphNode,
     GraphSnapshot,
 )
+from ghimera.local_input_types import LocalInputEvidence
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.transport_types import TransportEvidence
 
@@ -364,6 +365,7 @@ class ResearchGraph:
         revision: str,
         *,
         transport: TransportEvidence | None = None,
+        local_input: LocalInputEvidence | None = None,
     ) -> str:
         content_digest = hashlib.sha256(raw).hexdigest()
         text_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -384,6 +386,7 @@ class ResearchGraph:
             text_sha256=text_digest,
             text=text,
             transport=transport,
+            local_input=local_input,
         )
         source = self.node("source", url, url, self._config.profile_version)
         await self.append(

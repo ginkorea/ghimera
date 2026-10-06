@@ -144,6 +144,12 @@ class Collector:
             else ResearchRequest.model_validate(request.model_dump())
         )
         self._validate_intent(request.intent)
+        if request.local_documents:
+            policy = self.config.local_inputs
+            if policy is None or len(request.local_documents) > policy.max_files_per_run:
+                raise GhimeraRefused(RefusalCode.LOCAL_INPUT_FAILED)
+            if any(not policy.permits(seed.path) for seed in request.local_documents):
+                raise GhimeraRefused(RefusalCode.LOCAL_INPUT_FAILED)
         return request
 
     async def collect(self, goal: Goal, scope: Scope, *, run_id: str | None = None) -> Harvest:

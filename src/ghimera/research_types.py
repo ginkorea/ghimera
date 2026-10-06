@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 
+from ghimera.local_input_types import LocalDocumentSeed
 from ghimera.model_types import ModelCallEvidence
 from ghimera.models import Document, Harvest, ModelIdentity, Record
 from ghimera.reference_types import SearchReference
@@ -32,6 +33,7 @@ class ResearchRecord(Record):
 class ResearchRequest(ResearchRecord):
     intent: Text
     seeds: tuple[str, ...] = ()
+    local_documents: tuple[LocalDocumentSeed, ...] = Field(default=(), exclude_if=lambda v: not v)
 
     @field_validator("intent")
     @classmethod

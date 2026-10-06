@@ -74,6 +74,17 @@ challenges, and a refusal is not a successful research result.
 Representative-corpus accuracy and Marker acceptance remain open; passing a
 controlled document check is not a universal quality claim.
 
+### Unreleased additions after 0.3.0
+
+The feature branch adds explicitly configured local challenge recovery with
+private, origin-scoped clearance and guarded content verification; this is
+not a universal CAPTCHA solver. See [challenge recovery](docs/CHALLENGES.md).
+It also admits hash-pinned owned PDF/DOCX seeds before intent planning through
+the same document pipeline. See [local inputs](docs/LOCAL_INPUTS.md).
+Neither addition is in the immutable `ghimera==0.3.0` artifacts. Automatic
+organizational entity extraction and graph-driven network expansion remain
+planned, not claims of the existing research graph.
+
 ## Installation
 
 Use a dedicated virtual environment:

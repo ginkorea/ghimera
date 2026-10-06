@@ -282,6 +282,17 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
                 rows.append(entry.row)
                 previous = digest(entry)
         summary = None
+        inputs = tuple(row for row in rows if row.event == "local_input")
+        input_policy = header.config.local_inputs
+        if inputs and (
+            input_policy is None
+            or len(inputs) > input_policy.max_files_per_run
+            or sum(row.bytes_read for row in inputs) > input_policy.max_total_bytes
+        ):
+            raise _refuse()
+        for row in inputs:
+            if row.local_input is not None:
+                row.local_input.validate_policy(input_policy)
         summary_path = path / "summary.json"
         if summary_path.exists() or summary_path.is_symlink():
             summary = JournalSummary.model_validate_json(

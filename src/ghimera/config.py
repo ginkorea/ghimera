@@ -15,6 +15,7 @@ from ghimera.document_config import DocumentExtractionConfig
 from ghimera.extraction_config import ExtractionConfig
 from ghimera.graph_types import GraphConfig
 from ghimera.journal_config import JournalConfig
+from ghimera.local_input_types import LocalInputConfig
 from ghimera.model_config import ModelBindingsConfig
 from ghimera.reference_config import ReferenceConfig
 from ghimera.research_config import ResearchConfig
@@ -133,10 +134,18 @@ class GhimeraConfig(BaseModel):
     references: ReferenceConfig | None = None
     source_sessions: tuple[SourceSessionPolicy, ...] = ()
     challenges: ChallengeConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+    local_inputs: LocalInputConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
         validate_sessions(self.source_sessions)
+        if self.local_inputs is not None and (
+            self.document_extraction is None
+            or self.local_inputs.max_input_bytes > self.document_extraction.max_input_bytes
+        ):
+            raise ValueError("local inputs require matching bounded document extraction")
         if self.challenges is not None:
             if self.http is None:
                 raise ValueError("challenges require the ordinary HTTP policy")

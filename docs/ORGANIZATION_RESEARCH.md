@@ -8,12 +8,12 @@ implements the complete workflow.
 
 ## Current boundaries
 
-- Implemented: PDF parsing with retained source bytes and layout; direct/Tor
+- Implemented in source: pinned local PDF/DOCX seed intake through the assembled
+  intent API/command before planning; PDF parsing with retained source bytes and layout; direct/Tor
   collection; intent planning/search/coverage/answer review; exact native-text
   citations; configurable graph vocabulary and source-bound edge validation;
   durable research transactions and complete result archives.
-- Not implemented: a local-file seed entry point for the assembled intent
-  command; model-backed entity/relation extraction into the organizational graph;
+- Not implemented: model-backed entity/relation extraction into the organizational graph;
   alias resolution with evidence-preserving merge/split; graph-state-driven
   planning and persistent multi-run expansion; platform graph publication.
 - Not accepted: representative Chinese organization charts, scanned charts,
@@ -88,7 +88,9 @@ that an entire organization has been exhaustively mapped.
 
 ## Bounded acceptance deliverables
 
-1. Local PDF seed intake and provenance with immutable source versions.
+1. Local PDF seed intake and provenance with immutable source versions:
+   implemented in unreleased source; bounded actual PDF/DOCX parser and composed
+   command/archive checks pass. Real organization-corpus acceptance remains open.
 2. Semantic entity/relation extraction over a real organization PDF, including
    page coverage, omissions and visual-chart limitations.
 3. Alias/temporal identity and conflict preservation across real documents.
@@ -97,6 +99,9 @@ that an entire organization has been exhaustively mapped.
 5. Restart-safe graph/frontier continuation and idempotent output projection.
 6. Independent source-entailment checks and a final coverage/gaps report.
 
-None of these may be closed by the earlier English graphlib intent diagnostic
-or by a fixture-only graph test. The graphlib run proves the assembled
+The organizational workflow may not be closed by the earlier English graphlib
+intent diagnostic or by a fixture-only graph test. The graphlib run proves the assembled
 document-research path, not this organizational-network capability.
+
+Local-input configuration, provenance and current acceptance boundaries are in
+[LOCAL_INPUTS.md](LOCAL_INPUTS.md).

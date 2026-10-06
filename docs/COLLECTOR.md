@@ -88,6 +88,7 @@ other files:
 | Capability | Configuration and guide |
 |---|---|
 | PDF and DOCX | `[document_extraction]`; [documents](C2_DOCUMENTS.md) |
+| Owned PDF/DOCX seeds before planning (unreleased) | `[local_inputs]` and request `local_documents`; [local inputs](LOCAL_INPUTS.md) |
 | Isolated Patchright rendering | `[browser]`; [browser](C1_BROWSER.md) |
 | Native onion/open-web Tor routing | `[transport]`; [routing](TOR.md) |
 | Authorized source cookies/headers | `[[source_sessions]]`; [sessions](SOURCE_SESSIONS.md) |
@@ -139,6 +140,6 @@ assembled. Browser/document/Tor/session adapters have their separate tests;
 that does not establish representative public-corpus acceptance for their full
 composition here. Camoufox/optional nodriver, Marker, representative multilingual
 document/publisher quality, real served-model calibration, safe continuation and
-runtime/egress acceptance remain in the original completion tracker. The separately
-documented command/archive are unreleased source; no publication or deployment is
-claimed by this facade.
+runtime/egress acceptance remain in the original completion tracker. The
+command/archive are included in 0.3.0; the separately documented local-file
+intake and challenge-recovery additions remain unreleased source.

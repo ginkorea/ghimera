@@ -16,6 +16,8 @@ class RunBudget:
         self.judge_calls = 0
         self.search_calls = 0
         self.challenge_attempts = 0
+        self.local_inputs = 0
+        self.local_input_bytes = 0
         self.encoding_calls = 0
         self.encoding_chars = 0
         self._bytes_reserved = 0
@@ -82,6 +84,20 @@ class RunBudget:
         if self.search_calls >= policy.query_budget:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         self.search_calls += 1
+
+    def reserve_local_input(self) -> int:
+        self.check_time()
+        policy = self.config.local_inputs
+        if policy is None:
+            raise GhimeraRefused(RefusalCode.LOCAL_INPUT_FAILED)
+        if self.local_inputs >= policy.max_files_per_run:
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        remaining = policy.max_total_bytes - self.local_input_bytes
+        if remaining <= 0:
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        allowance = self.reserve_bytes(min(policy.max_input_bytes, remaining))
+        self.local_inputs += 1
+        return allowance
 
     def reserve_encoding(self, input_chars: int) -> None:
         self.check_time()
