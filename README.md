@@ -65,6 +65,11 @@ in the published 0.2.0 wheel**. See [source sessions](docs/SOURCE_SESSIONS.md),
 [intent scoring](docs/C3_EMBEDDING_SCORING.md#intent-references-unreleased-source).
 For the assembled intent-only API and full non-active template, see
 [configured collector](docs/COLLECTOR.md) and `examples/collector.toml`.
+Unreleased source also supports explicitly configured ordinary HTML search
+alongside JSON, and complete research archives retain successful discovery
+responses with query/fetch bindings. See [HTML search](docs/C3_SEARCH_HTML.md)
+and [search evidence](docs/C3_SEARCH_EVIDENCE.md). Neither mode solves access
+challenges, and a refusal is not a successful research result.
 Representative-corpus accuracy and Marker acceptance remain open; passing a
 controlled document check is not a universal quality claim.
 

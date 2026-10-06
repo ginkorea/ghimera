@@ -83,6 +83,12 @@ def page_barrier(page: Page) -> RefusalCode | None:
     if page.content_type != "text/html":
         return None
     body = page.body.decode("utf-8", errors="replace").lower()
+    if (
+        "<title>security check - substation</title>" in body
+        and "document.cookie" in body
+        and "__substation_pow" in body
+    ):
+        return RefusalCode.CHALLENGE_NOT_SOLVED
     if any(
         marker in body
         for marker in (

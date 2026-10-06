@@ -20,7 +20,7 @@ from chimera.ports import Extractor
 from chimera.refusals import ChimeraRefused, RefusalCode
 from chimera.research import ResearchLoop
 from chimera.research_types import ResearchRequest, ResearchResult
-from chimera.searxng import SearxSearch
+from chimera.searxng import SearxHtmlSearch, SearxSearch
 from chimera.semantic_scoring import EmbeddingScorer
 from chimera.source_sessions import SourceCredentials
 from chimera.transport import Resolver
@@ -81,10 +81,11 @@ class Collector:
             scorer=scorer,
             judge=models.judge,
         )
+        search_type = SearxHtmlSearch if config.search.response_format == "html" else SearxSearch
         research = ResearchLoop(
             config=config,
             collector=collection,
-            search=SearxSearch(config, config.search, resolver=source_resolver),
+            search=search_type(config, config.search, resolver=source_resolver),
             planner=models.planner,
             analyst=models.analyst,
             reviewer=models.reviewer,

@@ -1,0 +1,11 @@
+# NON-ACTIVE ordinary SearXNG simple-theme search; install the html extra.
+# Replace the placeholder with a permitted service. JSON and HTML modes are
+# explicit alternatives; neither automatically retries the other.
+# This is a [search] recipe for Collector. The existing [extraction] section
+# supplies the private worker directory, encoding and bounded parser lifecycle.
+schema = "chimera.searxng/2"
+endpoint = "https://search.example.invalid/search"
+language = "all"
+safe_search = 0
+time_range = ""
+response_format = "html"

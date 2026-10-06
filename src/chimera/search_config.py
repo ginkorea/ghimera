@@ -9,14 +9,21 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class SearxConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["chimera.searxng/1"] = Field(alias="schema")
+    schema_version: Literal["chimera.searxng/1", "chimera.searxng/2"] = Field(alias="schema")
     endpoint: str
     language: Annotated[str, Field(min_length=1)]
     safe_search: Annotated[int, Field(strict=True, ge=0, le=2)]
     time_range: Literal["", "day", "month", "year"]
+    response_format: Literal["json", "html"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def exact_endpoint(self) -> "SearxConfig":
+        if (self.schema_version == "chimera.searxng/1") != (self.response_format is None):
+            raise ValueError(
+                "legacy search is JSON; version 2 requires an explicit response format"
+            )
         parsed = urlsplit(self.endpoint)
         if (
             parsed.scheme not in {"http", "https"}

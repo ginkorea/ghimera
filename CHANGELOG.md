@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Explicit SearXNG ordinary-HTML search beside unchanged JSON mode. Version-2
+  search configuration selects the dialect; the Collector assembles the owning
+  adapter. The HTML adapter parses observed simple-theme results with pinned
+  Scrapling in the existing bounded passive worker, shares direct/Tor accounting,
+  and refuses unknown layouts or access barriers without format fallback.
+
 - Completed intent results now retain successful search responses, exact queries,
   parsed hits and transport in `chimera.research-result/2`. Readback binds each
   response to its accounted fetch and refuses missing, substituted or duplicate

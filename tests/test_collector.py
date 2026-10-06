@@ -138,6 +138,32 @@ def test_same_configured_collector_gets_fresh_goal_state_and_charges_each_run(
     assert Harvest.model_validate_json(second.model_dump_json()) == second
 
 
+def test_configured_html_search_runs_the_full_concrete_collector_chain(
+    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint
+):
+    cfg, url = assembled(tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint)
+    values = cfg.model_dump(by_alias=True)
+    values["search"].update(schema="chimera.searxng/2", response_format="html")
+    cfg = ChimeraConfig.model_validate(values)
+    search_endpoint[2].update(
+        content_type="text/html",
+        body=(
+            '<html><div id="results"><div id="urls"><article class="result result-default">'
+            f'<h3><a href="{url}">Port infrastructure report</a></h3>'
+            '<p class="content">Discovery only.</p></article></div></div></html>'
+        ).encode(),
+    )
+    result = asyncio.run(Collector(cfg, source_resolver=ResolverFixture()).run("find ports"))
+    assert result.status == "answered" and result.search_revision == "search-html/1"
+    assert result.harvest.receipt.effective_config == cfg
+    assert result.search_observations[0].response.raw == search_endpoint[2]["body"]
+    assert ResearchResult.model_validate_json(result.model_dump_json()) == result
+    doc = result.harvest.documents[0]
+    assert doc.url == url and doc.raw == ARTICLE.encode()
+    assert result.answer.claims[0].citations[0].matches(doc)
+    assert len(search_endpoint[1]) == source_site[1]["/plain"] == 1
+
+
 def test_configuration_alone_assembles_durable_graph_and_journal(
     tmp_path,
     source_site,

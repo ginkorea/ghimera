@@ -1,6 +1,6 @@
 # Intent-driven research — C3 candidate
 
-Status: orchestration, configured SearXNG JSON adapter, self-hosted model client
+Status: orchestration, configured SearXNG JSON/HTML adapters, self-hosted model client
 and bounded evidence context implemented in the standalone package. Not a
 deployed service or a completed C0–C5 spider. Model behavior and remaining
 admission/acceptance are detailed in `C3_MODELS.md`.
@@ -20,8 +20,9 @@ from one effective configuration. See [configured collector](COLLECTOR.md) and
 round/query/model/page limits, concurrency, answer threshold and source scope.
 The harvest retains effective run configuration. `examples/searxng.toml` names
 the exact configured instance; its deliberately invalid placeholder cannot
-accidentally invoke a public search provider. SearXNG's JSON format must be
-enabled. Its documented `/search` API supplies language, time-range and safe
+accidentally invoke a public search provider. JSON mode needs SearXNG's JSON
+format enabled; explicit version-2 HTML mode reads ordinary simple-theme results
+without automatic fallback. Its documented `/search` API supplies language, time-range and safe
 search options. [SearXNG search API](https://docs.searxng.org/dev/search_api.html)
 
 Search is not an external LLM. Source/search egress runs on the approved crawl
@@ -43,7 +44,11 @@ classDiagram
     SearchHistory --> GroundedSearch
     SearchHistory --> Ledger
     GroundedSearch <|-- SearxSearch
-    SearxSearch --> CurlRoute
+    GroundedSearch <|-- SearxHtmlSearch
+    SearxSearch --> SearxTransport
+    SearxHtmlSearch --> SearxTransport
+    SearxHtmlSearch --> PassiveWorker
+    SearxTransport --> CurlRoute
     CurlRoute --> RoutingConnector
     GoalLoop --> CollectionSession
     CollectionSession --> RunBudget
@@ -107,6 +112,12 @@ proxy/credentials, no redirect following, bounded decoded content and no Tor-to-
 direct fallback. A strict JSON wire boundary refuses unavailable JSON output or
 malformed results. The controlled SOCKS acceptance exercises real curl requests
 and verifies remote resolution rather than local source DNS.
+
+The configured HTML adapter uses that same transport and the existing bounded
+passive worker with pinned Scrapling. It retains actual result-page bytes and
+parsed hits; snippets remain discovery, not answer evidence. No page scripts,
+browser-owned source requests, implicit format switch or challenge solver runs.
+See [HTML search](C3_SEARCH_HTML.md).
 
 ## Still required for the full spider
 

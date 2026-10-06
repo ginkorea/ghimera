@@ -64,6 +64,17 @@ configuration. A supplied search adapter cannot claim a different recipe.
 Existing low-level `SearxConfig` imports from `chimera.searxng` remain supported;
 omitted search sections preserve the old serialized config shape.
 
+Search response dialect is a configuration choice. Legacy `chimera.searxng/1`
+remains JSON-only with unchanged serialization. `chimera.searxng/2` requires
+`response_format = "json"` or `"html"`; the facade selects the matching concrete
+adapter before work. The non-active `examples/searxng-html.toml` shows ordinary
+simple-theme search: it omits the JSON format parameter and uses observed result
+links/snippets. HTML mode needs the pinned `html` extra and reuses `[extraction]`
+for its private bounded parser worker, input/output limits and encoding. It
+does not borrow source cookies, execute page scripts, solve challenges or retry
+another format. Missing result envelopes or malformed selected result links
+refuse rather than inventing hits. See [HTML search](C3_SEARCH_HTML.md).
+
 All endpoints, thresholds, paths, language choices, timing and resource limits
 are configuration. `max_config_bytes` bounds one read before TOML parsing. The
 immutable effective configuration is available as `collector.config` and in the
