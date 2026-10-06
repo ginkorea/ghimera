@@ -88,10 +88,59 @@ working records, not shipped corpus or credentials. The trial invoked individual
 model ports with a fixed relevant-document set; it did not test autonomous search
 selection, frontier scoring, reference expansion or research-loop stopping.
 
+## Follow-up: evidence-only collection grading
+
+The original grade above is preserved as a failure observation. A bounded repair
+clarifies that grading assesses retained evidence sufficiency, not an answer
+draft. Inputs declare `grading_basis = "retained_evidence"`; each call records
+`chimera-collection-grade/2`. Other task prompt revisions and public result
+types are unchanged. Expected outcomes were used only by the private test
+harness, never supplied to the model.
+
+The follow-up reused the same actually fetched raw/native documents and their
+previous real-model document judgments. No source pages were refetched or
+replaced with fixture text. It used the same published model pin, a separately
+admitted broker startup, temperature 0, 2,048 maximum output tokens, two documents,
+12,000 total context characters and one 6,000-character window per document.
+The context window size is trial configuration, not a production constant.
+
+All observations below came from `/tmp/chimera-c0-20261006/.venv/bin/python`,
+Python **3.11.16**, importing the owned source tree named at the start of this
+record. These are ungoverned engineering observations, not calibrated accuracy.
+
+| Case | Actual retained sources | Observed `satisfied` | Client elapsed seconds |
+| --- | --- | --- | ---: |
+| Original graphlib intent | English and Traditional Chinese graphlib docs | `true` | 25.092 |
+| Original graphlib intent, irrelevant control | English random docs | `false` | 4.306 |
+| Original graphlib intent, empty control | None | `false` | 3.413 |
+| Exact Napoleon birth-date request, memory control | Graphlib docs, no biographical source | `false` | 5.403 |
+
+The positive reason identified `prepare`, `get_ready`, `done`, and cycle
+reporting in retained documentation. The negative reasons identified the actual
+absence of relevant evidence rather than demanding a draft. The four outcomes
+matched the predeclared controls. This does not prove coverage across arbitrary
+intents/languages, semantic correctness of every reason, or a calibrated
+confidence score; the model returned confidence 1.0 on several cases and that
+number is not an independently measured probability.
+
+A separate readback with the same standalone Python **3.11.16** interpreter
+recomputed original raw hashes and validated both selected native citations
+against the retained documents. Each selected span was characters 0–6,000;
+their actual text contains `prepare`, `get_ready`, `done`, and `CycleError`.
+These integrity checks corroborate the bounded positive control, not general
+language understanding or entailment accuracy.
+
+Private artifacts are under `gate-work/real-model-trial-grade-20261006/`, with
+their exact source-preparation and previous-result digests. The consumer was
+released. Its own startup job `job-3838601f5c5c` was cancelled through the native
+broker and separately observed `cancelled`; no other job or service was changed.
+All source requests stayed on the laptop. The standalone library received only
+a scoped invocation capability in memory, never the general platform credential.
+
 ## Remaining acceptance
 
-- Correct and remeasure the collection grader's coverage-only interpretation;
-  valid JSON alone is not a correct grade.
+- Measure evidence-only grading across a representative intent/language corpus
+  with independent judgments; the bounded failure/repair above is not calibration.
 - Run the full intent research loop with real search and a pinned semantic
   encoder, over a representative source/language corpus rather than three docs.
 - Establish independent reviewer/judge binding and calibrated decision policy;
@@ -133,3 +182,13 @@ env -u TAIPAN_TOKEN -u TAIPAN_COGNITO_ACCESS_TOKEN \
 Browser, isolation and cache paths are operator inputs. This gate requires the
 declared dependencies and local fixture socket/isolation permissions; it never
 restarts the model trial or treats a sandbox refusal as a product regression.
+
+The evidence-only grader follow-up subsequently passed the same sequential
+full `scripts/gate.sh` against unchanged production/test source with
+`/tmp/chimera-c0-20261006/.venv/bin/python`, Python **3.11.16**: **330 passed,
+0 failed, 0 skipped**, in **364.69 seconds**. Ruff lint/format passed for
+**100 files**, strict typing for **71 source files**, and the offline lock
+check resolved **137 packages**. The original bounded grade-contract regression
+was observed red before the fix in both citation wire modes, then green.
+This gate and the four live controls are separate evidence; neither claims
+that every originally planned spider acceptance requirement is complete.

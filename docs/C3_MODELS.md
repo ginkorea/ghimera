@@ -64,6 +64,13 @@ similarity. Existing configurations default to `full` for compatibility;
 template-ID requests record prompt revision `chimera-research-prompts/2`.
 Public assessment, draft, archive and citation types remain unchanged.
 
+Collection grading is a separate evidence-sufficiency task. Its input declares
+`grading_basis = "retained_evidence"`; no answer draft is supplied or required.
+The grader must identify actual missing support rather than substitute model
+memory or refuse solely because there is no draft. Calls record prompt revision
+`chimera-collection-grade/2`, regardless of the citation wire mode. The existing
+typed `Grade` and its downstream completion guards remain unchanged.
+
 [Official OpenAI request/response envelope](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
 
 The service's entire DNS answer must match its explicitly approved private or
@@ -120,10 +127,13 @@ confirm identity, completion and DNS guards are executable.
 
 The historical protocol gate did not query a real model. The subsequent live
 trial exercised every model port over actually fetched documentation, including
-expanded second looks and citation-ID restoration. The collection grader still
-returned `satisfied=false` with an incorrect demand for a draft; same-model review
-is not independent evaluation. No real search instance or semantic encoder was
-queried in that trial, and it was not the complete research loop.
+expanded second looks and citation-ID restoration. Its original collection
+grader incorrectly demanded a draft. An explicit evidence-only prompt repair
+then passed four live controls: sufficient, irrelevant, absent, and
+model-memory-only evidence. See C3_REAL_MODEL_EVIDENCE.md for actual inputs and
+boundaries. Same-model review is not independent evaluation. No real search
+instance or semantic encoder was queried in those trials, and they were not
+the complete research loop.
 Native embedding/shelf frontier scoring now has its concrete binding; see
 C3_EMBEDDING_SCORING.md. Real model admission/quality, extraction, additional
 browser routes, calibrated scoring and

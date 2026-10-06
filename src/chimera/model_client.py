@@ -55,6 +55,7 @@ Task = Literal["plan", "assessment", "answer", "review", "verdict", "grade"]
 T = TypeVar("T", ResearchPlan, Assessment, AnswerDraft, AnswerReview, Verdict, Grade)
 PROMPT_REVISION = "chimera-research-prompts/1"
 CITATION_PROMPT_REVISION = "chimera-research-prompts/2"
+GRADE_PROMPT_REVISION = "chimera-collection-grade/2"
 INSTRUCTIONS = MappingProxyType(
     {
         "plan": (
@@ -86,9 +87,13 @@ INSTRUCTIONS = MappingProxyType(
             "unsupported source identity."
         ),
         "grade": (
-            "Decide whether retained evidence answers the original intent. Consider missing "
-            "and omitted context. No confidence-only completion; unresolved or contradictory "
-            "support means satisfied=false."
+            "This is a collection sufficiency check over retained source evidence, not an "
+            "answer review. No answer draft is supplied or required. Decide whether the "
+            "selected native source excerpts contain enough facts to write a supported "
+            "answer to every part of the original intent. Do not reject solely because no "
+            "draft is supplied. Consider missing and omitted context; identify the actual "
+            "evidence gap in your reason. Unresolved or contradictory support means "
+            "satisfied=false. Never answer from general knowledge or confidence alone."
         ),
     }
 )
@@ -136,6 +141,7 @@ class PromptInput(Record):
     answer_digest: str | None = None
     document: DocumentExcerpt | None = None
     second_look: bool | None = None
+    grading_basis: Literal["retained_evidence"] | None = None
     max_questions: int | None = None
     max_queries: int | None = None
     max_query_chars: int | None = None
@@ -212,7 +218,9 @@ class SelfHostedModel:
                 schema="chimera.model-call/1",
                 service=service,
                 task=prompt.task,
-                prompt_revision=CITATION_PROMPT_REVISION
+                prompt_revision=GRADE_PROMPT_REVISION
+                if prompt.task == "grade"
+                else CITATION_PROMPT_REVISION
                 if service.citation_format == "template_ids"
                 else PROMPT_REVISION,
                 request_sha256=hashlib.sha256(body).hexdigest(),
@@ -429,7 +437,10 @@ class SelfHostedModel:
     async def grade(self, goal: Goal, documents: tuple[Document, ...]) -> Grade:
         return await self._invoke(
             PromptInput(
-                task="grade", intent=goal.text, evidence=self._evidence(goal.text, documents)
+                task="grade",
+                intent=goal.text,
+                evidence=self._evidence(goal.text, documents),
+                grading_basis="retained_evidence",
             ),
             Grade,
         )

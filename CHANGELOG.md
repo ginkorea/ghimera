@@ -2,14 +2,21 @@
 
 ## Unreleased
 
+- Collection grading now explicitly evaluates retained evidence sufficiency,
+  not the presence of an answer draft, with a distinct recorded prompt revision.
+  A real self-hosted-model follow-up accepted sufficient native documentation
+  and rejected irrelevant, absent, and model-memory-only evidence. These bounded
+  controls do not establish representative accuracy or independent calibration.
+
 - Explicit `citation_format = "template_ids"` for assessment and drafting:
   the model selects supplied context IDs and the client restores exact native
   quotations, offsets and hashes. Unknown/out-of-context IDs refuse without
   similarity repair; full-citation mode remains the compatibility default.
   Document judges' second looks now expand native context to the configured
   character ceiling while retaining the first span. A real self-hosted-model
-  trial confirms these paths; its grader failure and independent-evaluation
-  gaps remain recorded rather than being described as complete acceptance.
+  trial confirms these paths; its original grader failure, subsequent repair,
+  and independent-evaluation gaps remain recorded rather than being described
+  as complete acceptance.
 
 - An explicit configuration-driven intent command (`python -m chimera`) with
   bounded input reads, separately named environment credential bindings and

@@ -346,9 +346,10 @@ def test_bad_model_responses_refuse_without_fallback_and_preserve_evidence(endpo
     assert refused.value.model_call.response_sha256
 
 
-def test_large_documents_are_explicit_native_windows_not_raw_payloads(endpoint):
+@pytest.mark.parametrize("citation_format", ("full", "template_ids"))
+def test_large_documents_are_explicit_native_windows_not_raw_payloads(endpoint, citation_format):
     cfg = config(research=policy())
-    model = SelfHostedModel(cfg, service(endpoint[0]))
+    model = SelfHostedModel(cfg, service(endpoint[0], citation_format=citation_format))
     text = "begin " + "irrelevant " * 2000 + "Port A opened yesterday."
     raw = b"do-not-send-raw-file"
     document = Document(
@@ -360,10 +361,14 @@ def test_large_documents_are_explicit_native_windows_not_raw_payloads(endpoint):
             decision="accept", kind="report", publisher="fixture", language="en", reason="fixture"
         ),
     )
-    asyncio.run(model.grade(Goal(text="Port A"), (document,)))
+    grade = asyncio.run(model.grade(Goal(text="Port A"), (document,)))
     body = endpoint[1][0][1]["messages"][1]["content"]
     assert "do-not-send-raw-file" not in body
     payload = json.loads(body)
+    assert payload["grading_basis"] == "retained_evidence"
+    assert "answer" not in payload
+    assert "No answer draft is supplied or required" in endpoint[1][0][1]["messages"][0]["content"]
+    assert grade.model_call.prompt_revision == "chimera-collection-grade/2"
     windows = payload["evidence"]["windows"]
     assert sum(len(item["citation"]["quote"]) for item in windows) <= 3000
     assert any("Port A opened" in item["citation"]["quote"] for item in windows)
