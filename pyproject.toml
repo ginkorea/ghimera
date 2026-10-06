@@ -9,6 +9,9 @@ description = "Goal-directed collection through injected fetch and served-model 
 requires-python = ">=3.11"
 dependencies = ["pydantic==2.13.5", "curl_cffi==0.16.3", "protego==0.7.0"]
 
+[project.optional-dependencies]
+html = ["scrapling==0.4.2", "crawl4ai==0.9.4", "lingua-language-detector==2.1.1"]
+
 [dependency-groups]
 dev = ["pytest==9.1.1", "ruff==0.16.10", "mypy==2.4.0"]
 
@@ -29,3 +32,4 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.11"
 strict = true
 files = ["src/chimera"]
+mypy_path = ["typing"]

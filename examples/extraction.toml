@@ -1,0 +1,24 @@
+# Non-active paths; set private, task-owned locations in the runtime configuration.
+schema = "chimera.extraction/1"
+work_directory = "/path/to/private/chimera/worker"
+locator_directory = "/path/to/private/chimera/locators"
+max_input_bytes = 8388608
+max_output_bytes = 2097152
+max_diagnostic_bytes = 65536
+max_text_chars = 250000
+max_links = 200
+max_workers = 4
+timeout_seconds = 60.0
+default_encoding = "utf-8"
+pruning_threshold = 0.35
+pruning_threshold_type = "dynamic"
+min_word_threshold = 0
+locator_min_percent = 65
+languages = ["en", "zh", "id", "ja", "ko", "ms", "ru"]
+language_max_chars = 8000
+language_min_chars = 30
+language_min_confidence = 0.5
+language_min_margin = 0.1
+generic_body_selectors = ["article", "main", "body"]
+excluded_tags = ["script", "style", "nav", "footer", "aside", "form", "iframe", "noscript"]
+profiles = []

@@ -2,6 +2,7 @@
 
 from typing import Protocol
 
+from chimera.config import ChimeraConfig
 from chimera.models import (
     Document,
     Extracted,
@@ -34,6 +35,8 @@ class Encoder(Protocol):
 class Extractor(Protocol):
     @property
     def revision(self) -> str: ...
+
+    def validate_config(self, config: ChimeraConfig) -> None: ...
 
     async def extract(self, page: Page) -> Extracted: ...
 

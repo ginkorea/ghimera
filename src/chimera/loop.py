@@ -62,6 +62,7 @@ class GoalLoop:
         self._config = config
         self._fetcher = fetcher
         self._extractor = extractor
+        extractor.validate_config(config)
         self._scorer = scorer
         self._judge = judge
         self._graph_sink = graph_sink
@@ -135,8 +136,20 @@ class GoalLoop:
                 if depth > scope.max_depth or not scope.permits(url):
                     raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)
                 page = await self._fetcher.fetch(url, scope, budget, ledger)
+                extraction_started = self._clock()
                 async with asyncio.timeout(budget.remaining_seconds):
                     extracted = await self._extractor.extract(page)
+                if extracted.extraction is not None:
+                    ledger.append(
+                        LedgerRow(
+                            sequence=ledger.next_sequence,
+                            event="extraction",
+                            url=page.final_url,
+                            extraction=extracted.extraction,
+                            reason=self._extractor.revision,
+                            latency_seconds=max(0.0, self._clock() - extraction_started),
+                        )
+                    )
                 document_node_id = None
                 if graph is not None:
                     document_node_id = await graph.document(

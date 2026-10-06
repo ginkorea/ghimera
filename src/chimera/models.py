@@ -1,5 +1,6 @@
 """Immutable validated package objects; TAIPAN dataclass conversion belongs to C4."""
 
+import hashlib
 import ipaddress
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -7,6 +8,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from chimera.config import ChimeraConfig, Probability
+from chimera.extraction_types import ExtractionEvidence
 from chimera.graph_types import GraphSnapshot
 from chimera.model_types import ModelCallEvidence
 from chimera.refusals import RefusalCode
@@ -119,6 +121,19 @@ class Extracted(Record):
     text: NonEmpty
     language: NonEmpty
     links: tuple[LinkCandidate, ...] = ()
+    byline: str | None = None
+    date: str | None = None
+    canonical_url: str | None = None
+    extraction: ExtractionEvidence | None = None
+
+    @model_validator(mode="after")
+    def text_binding(self) -> "Extracted":
+        if (
+            self.extraction is not None
+            and self.extraction.text_sha256 != hashlib.sha256(self.text.encode()).hexdigest()
+        ):
+            raise ValueError("extraction evidence must bind its native text")
+        return self
 
 
 class Verdict(Record):
@@ -160,6 +175,18 @@ class Document(Record):
     duplicate_urls: tuple[str, ...] = ()
     transport: TransportEvidence | None = None
 
+    @model_validator(mode="after")
+    def source_binding(self) -> "Document":
+        digest = hashlib.sha256(self.raw).hexdigest()
+        if self.sha256 != digest:
+            raise ValueError("document digest must bind retained source bytes")
+        if self.extracted.extraction is not None and (
+            self.extracted.extraction.source_sha256 != digest
+            or self.extracted.extraction.source_url != self.url
+        ):
+            raise ValueError("extraction evidence must bind this source occurrence")
+        return self
+
 
 class LedgerRow(Record):
     sequence: NonNegative
@@ -177,6 +204,7 @@ class LedgerRow(Record):
         "answer",
         "review",
         "discovery",
+        "extraction",
     ]
     url: str | None = None
     route: str | None = None
@@ -189,6 +217,7 @@ class LedgerRow(Record):
     model: ModelIdentity | None = None
     query: str | None = None
     model_call: ModelCallEvidence | None = None
+    extraction: ExtractionEvidence | None = None
 
 
 class Receipt(Record):
@@ -227,6 +256,14 @@ class Harvest(Record):
             raise ValueError("accepted count does not match harvest")
         if any(doc.verdict.decision != "accept" for doc in self.documents):
             raise ValueError("only accepted documents belong in harvest")
+        for doc in self.documents:
+            evidence = doc.extracted.extraction
+            extraction_config = self.receipt.effective_config.extraction
+            if evidence is not None and (
+                extraction_config is None
+                or evidence.config_digest != extraction_config.content_digest()
+            ):
+                raise ValueError("extraction must bind the effective run configuration")
         graph_enabled = (
             self.receipt.effective_config.graph is not None
             and self.receipt.effective_config.graph.enabled

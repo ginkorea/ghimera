@@ -5,6 +5,7 @@ import gzip
 import threading
 import time
 from collections import Counter
+from contextlib import asynccontextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from chimera.fetch import FetchLadder
 from chimera.http import CurlRoute, NetworkGuard
 from chimera.ledger import Ledger
 from chimera.models import Scope
+from chimera.politeness import Politeness
 from chimera.refusals import ChimeraRefused
 
 
@@ -246,8 +248,18 @@ def test_conditional_304_uses_exact_prior_bytes_and_accounts_only_new_bytes(site
     assert ledger.snapshot()[-1].bytes_read == 0
 
 
-def test_global_and_host_limits_allow_parallel_work_with_delay(site):
+def test_global_and_host_limits_allow_parallel_work_with_delay(site, monkeypatch):
     ladder, scope, budget, ledger, origin = state(site)
+    admitted = []
+    original_slot = Politeness.slot
+
+    @asynccontextmanager
+    async def observed_slot(self, url):
+        async with original_slot(self, url):
+            admitted.append((url, time.monotonic()))
+            yield
+
+    monkeypatch.setattr(Politeness, "slot", observed_slot)
 
     async def run():
         began = time.monotonic()
@@ -258,7 +270,10 @@ def test_global_and_host_limits_allow_parallel_work_with_delay(site):
 
     elapsed = asyncio.run(run())
     assert 0.24 <= elapsed < 0.48
-    starts = [stamp for path, stamp in site[2] if path == "/slow"]
+    # Delay is enforced at client admission. Server arrivals can bunch or reorder
+    # after socket scheduling, and are not a witness for the spacing contract.
+    starts = [stamp for url, stamp in admitted if url == origin + "/slow"]
+    assert len(starts) == 4
     assert all(right - left >= 0.009 for left, right in zip(starts, starts[1:], strict=False))
     assert budget.fetches == 5
     assert sum(row.bytes_read for row in ledger.snapshot()) == budget.bytes_read

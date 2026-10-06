@@ -1,6 +1,7 @@
 """Offline collaborators for C0 contracts, explicitly not production fallbacks."""
 
 from chimera.budget import RunBudget
+from chimera.config import ChimeraConfig
 from chimera.fetch import FetchRoute
 from chimera.models import (
     Document,
@@ -50,6 +51,9 @@ class FakeRoute(FetchRoute):
 
 
 class FakeExtractor:
+    def validate_config(self, config: ChimeraConfig) -> None:
+        return None
+
     @property
     def revision(self) -> str:
         return "offline-fixture-extractor@1"
