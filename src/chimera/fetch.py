@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 from types import MappingProxyType
 from typing import ClassVar, final
-from urllib.parse import urljoin
 
 from chimera.browser import PageRenderer, ResourceFetcher
 from chimera.budget import RunBudget
@@ -21,6 +20,7 @@ from chimera.refusals import (
     HttpStatusRefused,
     RefusalCode,
 )
+from chimera.response import REDIRECT_STATUSES
 from chimera.transport_types import TransportEvidence
 
 
@@ -87,6 +87,22 @@ class FetchLadder:
     async def fetch(self, url: str, scope: Scope, budget: RunBudget, ledger: Ledger) -> Page:
         return await self._fetch(url, scope, budget, ledger, allow_render=True)
 
+    def resource_fetcher(self, scope: Scope, budget: RunBudget, ledger: Ledger) -> ResourceFetcher:
+        """Bind single-hop HTTP to the same run's policy, cache and accounting.
+
+        The browser, not an invisible HTTP redirect loop, consumes the 3xx
+        response. Its next request must return through this boundary.
+        """
+        ladder = self
+
+        class BoundResources(ResourceFetcher):
+            async def fetch(self, url: str) -> Page:
+                return await ladder._fetch(
+                    url, scope, budget, ledger, allow_render=False, single_hop=True
+                )
+
+        return BoundResources()
+
     async def _fetch(
         self,
         url: str,
@@ -95,6 +111,7 @@ class FetchLadder:
         ledger: Ledger,
         *,
         allow_render: bool,
+        single_hop: bool = False,
     ) -> Page:
         if self._renderer is not None:
             self._renderer.validate_config(budget.config)
@@ -112,7 +129,11 @@ class FetchLadder:
                         self._politeness = Politeness(budget.config)
                     elif not self._politeness.matches(budget.config):
                         raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-                    page = await self._follow(route, url, scope, budget, ledger)
+                    page = (
+                        await self._hop(route, url, scope, budget, ledger)
+                        if single_hop
+                        else await self._follow(route, url, scope, budget, ledger)
+                    )
                 else:
                     page = await self._attempt(route, url, budget, ledger)
             except ChimeraRefused as exc:
@@ -130,6 +151,9 @@ class FetchLadder:
                 raise ChimeraRefused(RefusalCode.FETCH_FAILED)
             if page.status >= 500:
                 continue
+            if single_hop and page.status in REDIRECT_STATUSES:
+                self._redirect(route, page, scope, ledger)
+                return page
             if page.content_type not in scope.content_types:
                 raise ChimeraRefused(RefusalCode.CONTENT_TYPE_UNWANTED)
             reason = route.escalation_reason(page)
@@ -159,7 +183,6 @@ class FetchLadder:
         renderer, policy = self._renderer, budget.config.browser
         if renderer is None or policy is None:
             raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-        ladder = self
         resource_scope = Scope.model_validate(
             {
                 **scope.model_dump(),
@@ -167,24 +190,12 @@ class FetchLadder:
             }
         )
 
-        class BoundResources(ResourceFetcher):
-            async def fetch(self, url: str) -> Page:
-                # Same ladder, budget, cache and global/per-host politeness; only
-                # the declared subsidiary MIME types differ. No render recursion.
-                return await ladder._fetch(
-                    url,
-                    resource_scope,
-                    budget,
-                    ledger,
-                    allow_render=False,
-                )
-
         started = budget.clock()
         try:
             result = await renderer.render(
                 page,
                 scope,
-                BoundResources(),
+                self.resource_fetcher(resource_scope, budget, ledger),
                 timeout_seconds=budget.remaining_seconds,
             )
             rendered = Page.model_validate({**page.model_dump(), "rendered": result})
@@ -330,87 +341,113 @@ class FetchLadder:
         *,
         robots: bool = False,
     ) -> Page:
+        policy = budget.config.http
+        if policy is None:
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        current = url
+        for hop in range(policy.max_redirects + 1):
+            page = await self._hop(route, current, scope, budget, ledger, robots=robots)
+            if page.status in REDIRECT_STATUSES:
+                if hop == policy.max_redirects:
+                    raise ChimeraRefused(RefusalCode.FETCH_FAILED)
+                current = self._redirect(route, page, scope, ledger)
+                continue
+            return page.model_copy(update={"url": url})
+        raise ChimeraRefused(RefusalCode.FETCH_FAILED)
+
+    @staticmethod
+    def _redirect(route: FetchRoute, page: Page, scope: Scope, ledger: Ledger) -> str:
+        from chimera.response import redirect_target
+
+        target = redirect_target(page.final_url, page.headers)
+        if target is None:
+            raise ChimeraRefused(RefusalCode.FETCH_FAILED)
+        if not scope.permits(target):
+            raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)
+        route.validate_redirect(page.final_url, target)
+        ledger.append(
+            LedgerRow(
+                sequence=ledger.next_sequence,
+                event="fallback",
+                url=target,
+                route=route.name,
+                reason="redirect",
+            )
+        )
+        return target
+
+    async def _hop(
+        self,
+        route: FetchRoute,
+        url: str,
+        scope: Scope,
+        budget: RunBudget,
+        ledger: Ledger,
+        *,
+        robots: bool = False,
+    ) -> Page:
+        """One HTTP hop; shared by document following and browser fulfilment."""
         policy, politeness = budget.config.http, self._politeness
         if policy is None or politeness is None:
             raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         from chimera.http import page_barrier
 
-        current = url
-        for hop in range(policy.max_redirects + 1):
-            if not scope.permits(current):
-                raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)
-            if not robots:
+        if not scope.permits(url):
+            raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)
+        if not robots:
 
-                async def robots_get(target: str) -> Page:
-                    return await self._follow(route, target, scope, budget, ledger, robots=True)
+            async def robots_get(target: str) -> Page:
+                return await self._follow(route, target, scope, budget, ledger, robots=True)
 
-                await politeness.permits(current, robots_get, ledger)
-            prior = self._cache.get(current) if not robots else None
-            headers: tuple[tuple[str, str], ...] = ()
-            if prior is not None:
-                if etag := prior.header("etag"):
-                    headers = (("if-none-match", etag),)
-                elif modified := prior.header("last-modified"):
-                    headers = (("if-modified-since", modified),)
-            page: Page | None = None
-            for retry in range(budget.config.retry_budget + 1):
-                try:
-                    page = await self._attempt(route, current, budget, ledger, headers)
-                    if barrier := page_barrier(page):
-                        raise ChimeraRefused(barrier)
-                    if page.status < 500:
-                        break
-                except ChimeraRefused as exc:
-                    if exc.code != RefusalCode.FETCH_FAILED:
-                        raise
-                    page = None
-                if retry == budget.config.retry_budget:
-                    raise ChimeraRefused(RefusalCode.FETCH_FAILED)
-                ledger.append(
-                    LedgerRow(
-                        sequence=ledger.next_sequence,
-                        event="fallback",
-                        url=current,
-                        route=route.name,
-                        reason="transient_retry",
-                    )
-                )
-                delay = policy.retry_backoff_seconds * (2**retry)
-                delay += random.uniform(0, policy.retry_jitter_seconds)
-                async with asyncio.timeout(budget.remaining_seconds):
-                    await asyncio.sleep(delay)
-            if page is None:
+            await politeness.permits(url, robots_get, ledger)
+        prior = self._cache.get(url) if not robots else None
+        headers: tuple[tuple[str, str], ...] = ()
+        if prior is not None:
+            if etag := prior.header("etag"):
+                headers = (("if-none-match", etag),)
+            elif modified := prior.header("last-modified"):
+                headers = (("if-modified-since", modified),)
+        page: Page | None = None
+        for retry in range(budget.config.retry_budget + 1):
+            try:
+                page = await self._attempt(route, url, budget, ledger, headers)
+                if barrier := page_barrier(page):
+                    raise ChimeraRefused(barrier)
+                if page.status < 500:
+                    break
+            except ChimeraRefused as exc:
+                if exc.code != RefusalCode.FETCH_FAILED:
+                    raise
+                page = None
+            if retry == budget.config.retry_budget:
                 raise ChimeraRefused(RefusalCode.FETCH_FAILED)
-            if not scope.permits(page.final_url):
-                raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)
-            if page.status in {301, 302, 303, 307, 308}:
-                location = page.header("location")
-                if location is None or hop == policy.max_redirects:
-                    raise ChimeraRefused(RefusalCode.FETCH_FAILED)
-                target = urljoin(page.final_url, location)
-                route.validate_redirect(page.final_url, target)
-                current = target
-                ledger.append(
-                    LedgerRow(
-                        sequence=ledger.next_sequence,
-                        event="fallback",
-                        url=current,
-                        route=route.name,
-                        reason="redirect",
-                    )
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="fallback",
+                    url=url,
+                    route=route.name,
+                    reason="transient_retry",
                 )
-                continue
-            if page.status == 304:
-                if prior is None:
-                    raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-                self._cache.move_to_end(current)
-                return prior.model_copy(update={"url": url, "revalidated": True})
-            if not robots and (400 <= page.status or 300 <= page.status < 400):
-                raise HttpStatusRefused(page.status)
-            if not robots and page.status == 200:
-                self._cache[current] = page
-                self._cache.move_to_end(current)
-                while len(self._cache) > policy.conditional_cache_entries:
-                    self._cache.popitem(last=False)
-            return page.model_copy(update={"url": url})
-        raise ChimeraRefused(RefusalCode.FETCH_FAILED)
+            )
+            delay = policy.retry_backoff_seconds * (2**retry)
+            delay += random.uniform(0, policy.retry_jitter_seconds)
+            async with asyncio.timeout(budget.remaining_seconds):
+                await asyncio.sleep(delay)
+        if page is None:
+            raise ChimeraRefused(RefusalCode.FETCH_FAILED)
+        if not scope.permits(page.final_url):
+            raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)
+        if page.status == 304:
+            if prior is None:
+                raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            self._cache.move_to_end(url)
+            return prior.model_copy(update={"url": url, "revalidated": True})
+        if not robots and page.status >= 300 and page.status not in REDIRECT_STATUSES:
+            raise HttpStatusRefused(page.status)
+        if not robots and page.status == 200:
+            self._cache[url] = page
+            self._cache.move_to_end(url)
+            while len(self._cache) > policy.conditional_cache_entries:
+                self._cache.popitem(last=False)
+        return page

@@ -102,7 +102,12 @@ def test_real_js_changes_dom_without_replacing_source(tmp_path):
     assert result.config_digest == policy.content_digest()
     assert result.network_isolation == "linux_network_namespace"
     assert result.parent_network_namespace != result.worker_network_namespace
-    assert result.resources == ()
+    # CDP also observes Chromium's implicit favicon request. It is refused
+    # before parent I/O rather than silently omitted from resource evidence.
+    assert all(
+        item.url.endswith("/favicon.ico") and item.refusal == RefusalCode.OUT_OF_SCOPE
+        for item in result.resources
+    )
     assert not list((tmp_path / "browser").iterdir())
     result.validate_policy(policy)
     changed = result.model_copy(update={"browser_sha256": "0" * 64})
@@ -133,11 +138,11 @@ def test_real_browser_subrequests_are_parent_fetched_and_retained(tmp_path):
     )
     assert resources.calls == [script.url, data.url]
     assert b"Original port report" in result.html
-    assert [item.source_sha256 for item in result.resources] == [
+    assert [item.source_sha256 for item in result.resources if item.refusal is None] == [
         hashlib.sha256(script.body).hexdigest(),
         hashlib.sha256(data.body).hexdigest(),
     ]
-    assert result.resources[1].body == data.body
+    assert [item for item in result.resources if item.refusal is None][1].body == data.body
 
 
 def test_offscope_browser_subrequest_is_not_sent_to_parent(tmp_path):
@@ -162,7 +167,9 @@ def test_post_and_websocket_are_never_sent_as_http_get(tmp_path):
         resources,
     )
     assert resources.calls == []
-    assert {item.resource_type for item in result.resources} == {"fetch", "websocket"}
+    assert {
+        item.resource_type for item in result.resources if not item.url.endswith("/favicon.ico")
+    } == {"fetch", "websocket"}
     assert all(item.refusal == RefusalCode.OUT_OF_SCOPE for item in result.resources)
 
 
@@ -372,6 +379,7 @@ def test_source_csp_is_preserved(tmp_path):
         update={
             "headers": (
                 ("content-security-policy", "default-src 'none'; script-src 'none'"),
+                ("content-security-policy", "script-src 'unsafe-inline'"),
                 ("set-cookie", "secret=test-fixture-only"),
             )
         }

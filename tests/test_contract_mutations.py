@@ -62,8 +62,12 @@ import pytest
         ),
         (
             "fetch",
-            "if not scope.permits(url):",
-            "if False:",
+            "if not scope.permits(url):\n"
+            "            raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)\n"
+            "        for route in self._routes:",
+            "if False:\n"
+            "            raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)\n"
+            "        for route in self._routes:",
             "test_fetch_route_conformance.py::test_scope_refuses_before_fetch",
         ),
         (

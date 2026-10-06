@@ -23,6 +23,7 @@ from chimera.config import ChimeraConfig
 from chimera.models import Page, Record, Scope
 from chimera.passive_worker import private_directory, read_bounded
 from chimera.refusals import ChimeraRefused, RefusalCode
+from chimera.response import REDIRECT_STATUSES, redirect_target
 
 
 class ResourceFetcher(Protocol):
@@ -59,6 +60,7 @@ class IsolatedBrowserRenderer:
         if config.browser is None:
             raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         self.config, self._user_agent = config.browser, config.user_agent
+        self._redirect_limit = config.http.max_redirects if config.http is not None else 0
         try:
             if version("patchright") != "1.63.0":
                 raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -76,7 +78,11 @@ class IsolatedBrowserRenderer:
                 raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
 
     def validate_config(self, config: ChimeraConfig) -> None:
-        if config.browser != self.config or config.user_agent != self._user_agent:
+        if (
+            config.browser != self.config
+            or config.user_agent != self._user_agent
+            or (config.http.max_redirects if config.http is not None else 0) != self._redirect_limit
+        ):
             raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
 
     async def render(
@@ -126,6 +132,7 @@ class IsolatedBrowserRenderer:
         request: ResourceRequest,
         scope: Scope,
         resources: ResourceFetcher,
+        retained: list[RenderResource],
     ) -> RenderResource:
         if (
             request.method != "GET"
@@ -137,17 +144,46 @@ class IsolatedBrowserRenderer:
                 method=request.method,
                 resource_type=request.resource_type,
                 refusal=RefusalCode.OUT_OF_SCOPE,
+                redirected_from=request.redirected_from,
             )
         try:
+            # The untrusted worker supplies an index, not authority. Reconstruct
+            # the chain from parent-retained responses before any new source I/O.
+            previous_index = request.redirected_from
+            urls = {request.url}
+            hops = 0
+            while previous_index is not None:
+                if previous_index >= len(retained):
+                    raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                previous = retained[previous_index]
+                if (
+                    previous.refusal is not None
+                    or previous.status not in REDIRECT_STATUSES
+                    or previous.resource_type != request.resource_type
+                    or (
+                        hops == 0 and redirect_target(previous.url, previous.headers) != request.url
+                    )
+                ):
+                    raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                hops += 1
+                if hops > self._redirect_limit or previous.url in urls:
+                    raise ChimeraRefused(RefusalCode.FETCH_FAILED)
+                urls.add(previous.url)
+                previous_index = previous.redirected_from
             page = await resources.fetch(request.url)
             if not scope.permits(page.final_url):
                 raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)
             if page.final_url != request.url:
-                # Replaying a followed redirect as a 200 at its original URL
-                # changes browser-origin/CORS and relative-URL semantics. Refuse
-                # until the bridge exposes each redirect hop to the browser.
+                raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            if page.status in REDIRECT_STATUSES:
+                target = redirect_target(page.final_url, page.headers)
+                if target is None:
+                    raise ChimeraRefused(RefusalCode.FETCH_FAILED)
+                if not scope.permits(target):
+                    raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)
+            elif page.status >= 300:
                 raise ChimeraRefused(RefusalCode.FETCH_FAILED)
-            if page.content_type not in self.config.resource_content_types:
+            elif page.content_type not in self.config.resource_content_types:
                 raise ChimeraRefused(RefusalCode.CONTENT_TYPE_UNWANTED)
             if len(page.body) > self.config.max_input_bytes:
                 raise ChimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
@@ -162,6 +198,7 @@ class IsolatedBrowserRenderer:
                 source_sha256=hashlib.sha256(page.body).hexdigest(),
                 transport=page.transport,
                 headers=page.headers,
+                redirected_from=request.redirected_from,
             )
         except ChimeraRefused as exc:
             return RenderResource(
@@ -169,6 +206,7 @@ class IsolatedBrowserRenderer:
                 method=request.method,
                 resource_type=request.resource_type,
                 refusal=exc.code,
+                redirected_from=request.redirected_from,
             )
 
     async def _run(
@@ -266,7 +304,7 @@ class IsolatedBrowserRenderer:
                     ):
                         raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT) from None
                     try:
-                        result.validate_policy(self.config)
+                        result.validate_policy(self.config, max_redirects=self._redirect_limit)
                     except ValueError:
                         raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT) from None
                     process.stdin.close()
@@ -278,7 +316,7 @@ class IsolatedBrowserRenderer:
                     raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
                 if len(retained) >= self.config.max_resources:
                     raise ChimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
-                fetched = await self._resource(requested, scope, resources)
+                fetched = await self._resource(requested, scope, resources, retained)
                 retained.append(fetched)
                 response = (
                     ResourceResponse(

@@ -16,6 +16,7 @@ from chimera.config import ChimeraConfig
 from chimera.fetch import FetchRoute
 from chimera.models import FetchRequest, Page
 from chimera.refusals import ChimeraRefused, FetchCancelled, FetchFailure, RefusalCode
+from chimera.response import RETAINED_HEADERS
 from chimera.transport import NetworkGuard as NetworkGuard
 from chimera.transport import Resolver, RoutingConnector, SystemResolver, validate_transition
 from chimera.transport_types import TransportEvidence
@@ -50,8 +51,13 @@ class BoundedHeaders:
     def __init__(self, limit: int) -> None:
         self._limit = limit
         self._read = 0
-        self.values: dict[str, str] = {}
+        self.entries: list[tuple[str, str]] = []
         self.exhausted = False
+
+    @property
+    def values(self) -> dict[str, str]:
+        """Scalar lookup compatibility; wire replay uses entries to keep repeats."""
+        return dict(self.entries)
 
     def write(self, line: bytes) -> int:
         self._read += len(line)
@@ -59,12 +65,12 @@ class BoundedHeaders:
             self.exhausted = True
             return CURL_WRITEFUNC_ERROR
         if line.startswith(b"HTTP/"):
-            self.values.clear()
+            self.entries.clear()
         elif b":" in line:
             name, value = line.split(b":", 1)
             key = name.decode("ascii", errors="replace").lower()
-            if key in {"content-type", "location", "etag", "last-modified", "retry-after"}:
-                self.values[key] = value.decode("latin-1").strip()
+            if key in RETAINED_HEADERS:
+                self.entries.append((key, value.decode("latin-1").strip()))
         return len(line)
 
 
@@ -175,7 +181,7 @@ class CurlRoute(FetchRoute):
                 .strip()
                 .lower(),
                 body=bytes(body.data),
-                headers=tuple(headers.values.items()),
+                headers=tuple(headers.entries),
                 transport=connection.evidence,
             )
         except CurlError as exc:

@@ -201,7 +201,9 @@ class DocumentSource(Record):
         if self.rendered is not None:
             if config.browser is None or len(self.raw) > config.browser.max_input_bytes:
                 raise ValueError("browser rendering requires its input policy and limits")
-            self.rendered.validate_policy(config.browser)
+            self.rendered.validate_policy(
+                config.browser, max_redirects=config.http.max_redirects if config.http else 0
+            )
         evidence = self.extracted.extraction
         if evidence is not None and (
             config.extraction is None
@@ -375,9 +377,13 @@ class Harvest(Record):
             raise ValueError("cluster representatives must have distinct raw content identities")
         for row in self.ledger:
             if row.rendered is not None:
-                if self.receipt.effective_config.browser is None:
+                render_config = self.receipt.effective_config
+                if render_config.browser is None:
                     raise ValueError("render ledger requires its configured policy")
-                row.rendered.validate_policy(self.receipt.effective_config.browser)
+                row.rendered.validate_policy(
+                    render_config.browser,
+                    max_redirects=render_config.http.max_redirects if render_config.http else 0,
+                )
         for doc in self.documents:
             doc.validate_policy(self.receipt.effective_config)
             if doc.occurrences:

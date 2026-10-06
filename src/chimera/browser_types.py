@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from chimera.browser_config import BrowserConfig
 from chimera.refusals import RefusalCode
+from chimera.response import REDIRECT_STATUSES, redirect_target
 from chimera.transport_types import TransportEvidence
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -29,6 +30,7 @@ class ResourceRequest(BrowserRecord):
     url: Text
     method: Text
     resource_type: Text
+    redirected_from: Annotated[int, Field(strict=True, ge=0)] | None = None
 
 
 class RenderResource(BrowserRecord):
@@ -43,6 +45,7 @@ class RenderResource(BrowserRecord):
     transport: TransportEvidence | None = None
     headers: tuple[tuple[str, str], ...] = ()
     refusal: RefusalCode | None = None
+    redirected_from: Annotated[int, Field(strict=True, ge=0)] | None = None
 
     @model_validator(mode="after")
     def bound(self) -> "RenderResource":
@@ -70,6 +73,8 @@ class RenderResource(BrowserRecord):
             or self.source_sha256 != hashlib.sha256(self.body).hexdigest()
         ):
             raise ValueError("successful resource requires original content and digest")
+        elif self.status in REDIRECT_STATUSES and redirect_target(self.url, self.headers) is None:
+            raise ValueError("redirect resource requires one nonempty Location")
         return self
 
 
@@ -92,7 +97,7 @@ class RenderResult(BrowserRecord):
     worker_network_namespace: Annotated[str, Field(pattern=r"^net:\[\d+\]$")]
     resources: tuple[RenderResource, ...]
 
-    def validate_policy(self, policy: BrowserConfig) -> None:
+    def validate_policy(self, policy: BrowserConfig, *, max_redirects: int | None = None) -> None:
         if (
             self.config_digest != policy.content_digest()
             or self.browser_sha256 != policy.executable_sha256
@@ -104,13 +109,30 @@ class RenderResult(BrowserRecord):
             item.refusal is None
             and (
                 item.resource_type not in policy.resource_types
-                or item.content_type not in policy.resource_content_types
+                or (
+                    item.status not in REDIRECT_STATUSES
+                    and item.content_type not in policy.resource_content_types
+                )
                 or len(item.body) > policy.max_input_bytes
                 or item.url != item.final_url
             )
             for item in self.resources
         ):
             raise ValueError("successful rendering resources must obey the declared policy")
+        if max_redirects is not None:
+            for item in self.resources:
+                if item.refusal is not None:
+                    continue  # Over-cap refused hops are retained, but never fetched.
+                ancestor = item.redirected_from
+                hops = 0
+                urls = {item.url}
+                while ancestor is not None:
+                    previous = self.resources[ancestor]
+                    hops += 1
+                    if hops > max_redirects or previous.url in urls:
+                        raise ValueError("successful redirect resources exceed their HTTP policy")
+                    urls.add(previous.url)
+                    ancestor = previous.redirected_from
 
     @model_validator(mode="after")
     def bound(self) -> "RenderResult":
@@ -118,6 +140,20 @@ class RenderResult(BrowserRecord):
             raise ValueError("rendered DOM requires retained content and digest")
         if self.parent_network_namespace == self.worker_network_namespace:
             raise ValueError("browser worker must have its own network namespace")
+        for index, resource in enumerate(self.resources):
+            if resource.redirected_from is None:
+                continue
+            if resource.redirected_from >= index:
+                raise ValueError("redirect resource must follow a retained earlier resource")
+            previous = self.resources[resource.redirected_from]
+            if (
+                previous.refusal is not None
+                or previous.status not in REDIRECT_STATUSES
+                or redirect_target(previous.url, previous.headers) != resource.url
+                or previous.resource_type != resource.resource_type
+                or resource.method != "GET"
+            ):
+                raise ValueError("redirect chain must bind the actual retained Location and kind")
         return self
 
 

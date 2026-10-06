@@ -71,10 +71,31 @@ intercepted control route that is **never fetched**, and also covered by the
 network namespace. Original CSP/CORS response headers are preserved; cookies
 and decoded-body framing/compression headers are not replayed.
 
-Followed subsidiary redirects currently refuse rather than replaying a final
-200 under a false browser origin. Hop-by-hop browser redirect fulfilment remains
-an explicit completion item. No claims of arbitrary authenticated web-app or
-interactive-browser compatibility follow from this adapter.
+Subsidiary redirects use the public `FetchLadder.resource_fetcher` single-hop
+port, sharing the same retry, cache, robots, politeness and accounting mechanism
+as document requests. Chromium's CDP `Fetch` request-stage interception locally
+fulfils each 301/302/303/307/308 and its next request separately. It never uses
+`continueRequest` or a browser-owned network fetch. Ordinary high-level routing
+is not sufficient for all redirect hops; see
+[Playwright's routing note](https://playwright.dev/python/docs/api/class-page#page-route) and the
+[Chromium protocol](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/Fetch.pdl).
+
+The parent verifies the next exact URL against a retained earlier Location,
+resource kind, scope and HTTP redirect limit before source I/O. Loops refuse
+before fetching an already-seen chain URL. Each fetched hop retains its own
+status, headers, raw bytes/hash and transport; `redirected_from` names the
+earlier retained resource index. Intermediate redirect MIME types are not
+mistaken for script/JSON MIME types; the final response must still match policy.
+Re-read checks bind chain identities and reject successful chains exceeding the
+effective HTTP policy. Without an HTTP redirect policy, redirects are not allowed.
+
+Final script/module directories, `Response.url` and CORS remain browser-owned
+semantics, not a replay of final bytes at the wrong origin. The HTTP header
+boundary now retains the allowlisted CSP/CORS and charset metadata needed for
+rendering, including repeated CSP policies; cookies/authentication stay excluded.
+The lower-level interception also records Chromium's implicit favicon attempt
+as an `other` refusal; it does not contact that URL unless explicitly eligible.
+No arbitrary authenticated web-app or interactive-browser compatibility is claimed.
 
 ## Evidence and lifecycle
 
@@ -100,8 +121,8 @@ lifecycle acceptance.
 
 ## What is not closed
 
-Camoufox/nodriver fallback, public Tor browser corpus acceptance, hop-by-hop
-subsidiary redirects, publisher readiness policies and the 30-publisher C1
+Camoufox/nodriver fallback, public Tor browser corpus acceptance,
+publisher readiness policies and the 30-publisher C1
 acceptance corpus remain open. The native Docling full-PDF/Marker recipes,
 real-model/scorer acceptance and governed TAIPAN integration are unchanged open
 requirements. Passing controlled browser tests does not complete the spider.
