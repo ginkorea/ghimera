@@ -1,0 +1,37 @@
+# Non-active schema example: use as the main configuration's [scoring] block.
+# Replace the private service declaration with your authorized real deployment.
+# The original intent is embedded once per run and recorded, not supplied as a
+# fake/pinned fixture digest. Both reference and document calls spend this budget.
+schema = "chimera.scoring/1"
+reference_source = "intent"
+encoding_call_budget = 100
+encoding_char_budget = 100000
+window_chars = 1000
+overlap_chars = 100
+max_windows = 8
+max_links = 20
+max_reference_chunks = 1
+max_anchor_chars = 300
+keyword_weight = 0.2
+
+[encoder]
+schema = "chimera.embedding-service/1"
+endpoint = "https://encoder.invalid/v1/embeddings"
+approved_addresses = ["10.0.0.10"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "none"
+model_id = "replace-with-your-encoder-id"
+revision = "replace-with-your-pinned-revision"
+served_model = "replace-with-your-served-model-name"
+timeout_seconds = 30.0
+max_request_bytes = 65536
+max_response_bytes = 262144
+max_header_bytes = 8192
+require_usage = true
+max_input_chars = 10000
+dimensions = 1024
+request_dimensions = false
+max_batch_texts = 8
+max_text_chars = 2000
+text_prefix = ""

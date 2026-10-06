@@ -469,3 +469,290 @@ def test_scoring_example_is_explicit_and_matches_its_fixture_reference():
     assert parsed.references_sha256 == refs.sha256
     assert parsed.encoder.model_id == refs.model_id
     assert parsed.encoder.revision == refs.revision
+
+
+def intent_policy(cfg, **changes):
+    return policy(
+        cfg, references(cfg), reference_source="intent", references_sha256=None, **changes
+    )
+
+
+def test_intent_mode_is_explicit_and_preserves_pinned_serialization(endpoint):
+    cfg = service(endpoint[0])
+    refs = references(cfg)
+    pinned = policy(cfg, refs)
+    assert "reference_source" not in pinned.model_dump()
+    assert pinned.model_dump()["references_sha256"] == refs.sha256
+    intent = intent_policy(cfg)
+    assert intent.model_dump()["reference_source"] == "intent"
+    assert "references_sha256" not in intent.model_dump()
+    assert ScoringConfig.model_validate_json(intent.model_dump_json()) == intent
+    with pytest.raises(ValidationError, match="pinned scoring"):
+        policy(cfg, refs, references_sha256=None)
+    with pytest.raises(ValidationError, match="intent scoring"):
+        policy(cfg, refs, reference_source="intent")
+    with pytest.raises(ValueError, match="prepares its own"):
+        EmbeddingScorer(intent, SelfHostedEncoder(cfg), refs)
+    with pytest.raises(ValueError, match="requires shelf vectors"):
+        EmbeddingScorer(pinned, SelfHostedEncoder(cfg))
+    assert not endpoint[1]
+
+
+def test_intent_is_encoded_once_with_original_unicode_and_prefix(endpoint):
+    cfg = service(endpoint[0], text_prefix="query: ")
+    scoring = intent_policy(cfg, max_windows=1)
+    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    scorer = EmbeddingScorer(scoring, SelfHostedEncoder(cfg))
+    goal = Goal(text="港口 ports")
+    doc = Extracted(title="native", text="港口 evidence", language="zh")
+
+    async def run():
+        await scorer.score(goal, doc, budget, ledger)
+        await scorer.score(goal, doc, budget, ledger)
+
+    asyncio.run(run())
+    assert [item[1]["input"] for item in endpoint[1]] == [
+        ["query: 港口 ports"],
+        ["query: 港口 evidence"],
+        ["query: 港口 evidence"],
+    ]
+    prepared = [row for row in ledger.snapshot() if row.intent_reference]
+    assert len(prepared) == 1
+    observation = prepared[0].intent_reference
+    assert observation.encoding_sequence == 0
+    assert (
+        observation.references.chunks[0].text_sha256
+        == hashlib.sha256(goal.text.encode()).hexdigest()
+    )
+    assert observation.references.chunks[0].vector == (1.0, 0.0)
+    assert budget.encoding_calls == len(endpoint[1]) == 3
+    assert budget.encoding_chars == sum(len(item[1]["input"][0]) for item in endpoint[1])
+    assert ledger.snapshot()[-1].similarity.document_cosine == 1.0
+    assert ledger.snapshot()[-1].reason == "intent_cosine_not_probability"
+
+
+def test_concurrent_scores_share_preparation_but_runs_never_share_intents(endpoint):
+    cfg = service(endpoint[0])
+    scoring = intent_policy(cfg, max_windows=1)
+    scorer = EmbeddingScorer(scoring, SelfHostedEncoder(cfg))
+    document = Extracted(title="native", text="ports", language="en")
+    first = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    second = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+
+    async def run():
+        await asyncio.gather(
+            scorer.score(Goal(text="ports"), document, *first),
+            scorer.score(Goal(text="ports"), document, *first),
+            scorer.score(Goal(text="opposite"), document, *second),
+        )
+
+    asyncio.run(run())
+    for budget, ledger in (first, second):
+        assert len([row for row in ledger.snapshot() if row.intent_reference]) == 1
+        assert budget.encoding_calls == len([row for row in ledger.snapshot() if row.encoding_call])
+    assert first[1].snapshot()[-1].similarity.document_cosine == 1.0
+    assert second[1].snapshot()[-1].similarity.document_cosine == -1.0
+    assert len(endpoint[1]) == 5
+    for goal, ledger in ((Goal(text="changed intent"), first[1]), (Goal(text="ports"), Ledger())):
+        with pytest.raises(ChimeraRefused, match="adapter_contract"):
+            asyncio.run(scorer.score(goal, document, first[0], ledger))
+    assert len(endpoint[1]) == 5
+
+
+def test_intent_full_loop_roundtrip_and_tampered_preparation_refuse(endpoint):
+    cfg = service(endpoint[0])
+    scoring = intent_policy(cfg, max_windows=1)
+    config = run_config(scoring)
+    loop = GoalLoop(
+        config=config,
+        fetcher=FetchLadder((FakeRoute(),)),
+        extractor=FakeExtractor(),
+        scorer=EmbeddingScorer(scoring, SelfHostedEncoder(cfg)),
+        judge=FakeJudge(),
+    )
+    result = asyncio.run(
+        loop.run(
+            Goal(text="ports", seeds=("https://example.org",)),
+            Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",)),
+        )
+    )
+    assert result.documents and Harvest.model_validate_json(result.model_dump_json()) == result
+    observed = next(row for row in result.ledger if row.intent_reference)
+    assert result.ledger[observed.intent_reference.encoding_sequence].encoding_call.input_chars == 5
+    for mutation in ("goal", "call", "input", "prefix", "missing", "late", "window", "pinned"):
+        raw = result.model_dump(mode="json")
+        prepared = next(row for row in raw["ledger"] if row["event"] == "intent_reference")
+        reference = prepared["intent_reference"]
+        if mutation == "goal":
+            reference["goal_sha256"] = "d" * 64
+        elif mutation == "call":
+            reference["encoding_sequence"] = prepared["sequence"]
+        elif mutation == "input":
+            raw["ledger"][reference["encoding_sequence"]]["encoding_call"]["input_sha256"] = (
+                "e" * 64,
+            )
+        elif mutation == "prefix":
+            reference["references"]["text_prefix"] = "another: "
+        elif mutation == "missing":
+            raw["ledger"].remove(prepared)
+        elif mutation == "late":
+            raw["ledger"].remove(prepared)
+            raw["ledger"].insert(-1, prepared)
+        elif mutation == "window":
+            next(row for row in raw["ledger"] if row["similarity"])["similarity"]["windows"][0][
+                "reference_source_id"
+            ] = "other"
+        else:
+            raw["receipt"]["effective_config"]["scoring"]["reference_source"] = "pinned"
+            raw["receipt"]["effective_config"]["scoring"]["references_sha256"] = reference[
+                "references"
+            ]["chunks"][0]["text_sha256"]
+        for index, row in enumerate(raw["ledger"]):
+            row["sequence"] = index
+        with pytest.raises(ValidationError):
+            Harvest.model_validate(raw)
+
+
+def test_intent_reference_failure_keeps_spend_and_never_invents_vectors(endpoint):
+    cfg = service(endpoint[0])
+    scoring = intent_policy(cfg)
+    endpoint[2]["failure"] = "wrong_model"
+    loop = GoalLoop(
+        config=run_config(scoring),
+        fetcher=FetchLadder((FakeRoute(),)),
+        extractor=FakeExtractor(),
+        scorer=EmbeddingScorer(scoring, SelfHostedEncoder(cfg)),
+        judge=FakeJudge(),
+    )
+    result = asyncio.run(
+        loop.run(
+            Goal(text="ports", seeds=("https://example.org",)),
+            Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",)),
+        )
+    )
+    assert result.receipt.stop_reason == "failed" and result.receipt.encoding_calls == 1
+    assert not result.documents and not any(row.intent_reference for row in result.ledger)
+    assert result.receipt.judge_calls == 0 and len(endpoint[1]) == 1
+    assert Harvest.model_validate_json(result.model_dump_json()) == result
+
+
+@pytest.mark.parametrize("mode", ["calls", "chars", "oversized"])
+def test_intent_preparation_obeys_shared_budget_without_partial_truncation(endpoint, mode):
+    cfg = service(endpoint[0])
+    changes = {"max_windows": 1}
+    goal = "ports"
+    if mode == "calls":
+        changes["encoding_call_budget"] = 1
+    elif mode == "chars":
+        changes["encoding_char_budget"] = 4
+    else:
+        goal = "ports" * 100
+    scoring = intent_policy(cfg, **changes)
+    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    with pytest.raises(ChimeraRefused, match="budget_exhausted"):
+        asyncio.run(
+            EmbeddingScorer(scoring, SelfHostedEncoder(cfg)).score(
+                Goal(text=goal),
+                Extracted(title="native", text="ports", language="en"),
+                budget,
+                ledger,
+            )
+        )
+    assert len(endpoint[1]) == (1 if mode == "calls" else 0)
+    assert budget.encoding_calls == len(endpoint[1])
+    assert not any(row.similarity for row in ledger.snapshot())
+    assert len([row for row in ledger.snapshot() if row.intent_reference]) == (
+        1 if mode == "calls" else 0
+    )
+
+
+def test_intent_research_and_durable_inspection_share_the_prepared_reference(endpoint, tmp_path):
+    from chimera.journal import read_journal
+    from chimera.journal_types import JournalReport
+    from chimera.research import ResearchLoop
+    from chimera.research_types import ResearchRequest, ResearchResult
+    from tests.test_intent_research import (
+        AnalystFixture,
+        PlannerFixture,
+        ReviewerFixture,
+        SearchFixture,
+    )
+    from tests.test_intent_research import (
+        policy as research_policy,
+    )
+    from tests.test_run_journal import configured
+
+    cfg = service(endpoint[0])
+    scoring = intent_policy(cfg, max_windows=1)
+    config = ChimeraConfig.model_validate(
+        dict(
+            run_config(scoring).model_dump(),
+            research=research_policy(),
+            journal=configured(tmp_path).journal,
+        )
+    )
+    collector = GoalLoop(
+        config=config,
+        fetcher=FetchLadder((FakeRoute(),)),
+        extractor=FakeExtractor(),
+        scorer=EmbeddingScorer(scoring, SelfHostedEncoder(cfg)),
+        judge=FakeJudge(satisfied=True),
+    )
+    loop = ResearchLoop(
+        config=config,
+        collector=collector,
+        search=SearchFixture(),
+        planner=PlannerFixture(),
+        analyst=AnalystFixture(),
+        reviewer=ReviewerFixture(),
+    )
+    result = asyncio.run(loop.run(ResearchRequest(intent="find ports"), run_id="intent-research"))
+    assert result.status == "answered" and result.answer.claims[0].citations
+    assert ResearchResult.model_validate_json(result.model_dump_json()) == result
+    report = read_journal(config.journal, "intent-research")
+    assert report.state == "complete" and report.rows == result.harvest.ledger
+    prepared = next(row for row in report.rows if row.intent_reference)
+    assert prepared.intent_reference.goal_sha256 == hashlib.sha256(b"find ports").hexdigest()
+    assert result.harvest.receipt.encoding_calls == len(endpoint[1])
+    raw = report.model_dump(mode="json")
+    next(row for row in raw["rows"] if row["event"] == "intent_reference")["intent_reference"][
+        "goal_sha256"
+    ] = "b" * 64
+    with pytest.raises(ValidationError, match="original goal"):
+        JournalReport.model_validate(raw)
+
+
+def test_cancelled_intent_encoding_never_becomes_a_prepared_reference():
+    cfg = service(1)
+    scoring = intent_policy(cfg, max_windows=1)
+
+    class CancelledWire:
+        config = cfg
+
+        async def post(self, body):
+            from chimera.model_http import ModelWireCancelled
+
+            raise ModelWireCancelled(ModelHttpResponse(200, b"partial-vector", "application/json"))
+
+    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    scorer = EmbeddingScorer(scoring, SelfHostedEncoder(cfg, http=CancelledWire()))
+    with pytest.raises(EncodingCancelled):
+        asyncio.run(
+            scorer.score(
+                Goal(text="ports"),
+                Extracted(title="native", text="ports", language="en"),
+                budget,
+                ledger,
+            )
+        )
+    assert budget.encoding_calls == len(ledger.snapshot()) == 1
+    assert ledger.snapshot()[0].encoding_call.outcome == "cancelled"
+    assert not any(row.intent_reference for row in ledger.snapshot())
+
+
+def test_intent_scoring_example_has_no_fake_pinned_vector_digest():
+    import tomllib
+
+    with Path("examples/intent-scoring.toml").open("rb") as stream:
+        parsed = ScoringConfig.model_validate(tomllib.load(stream))
+    assert parsed.reference_source == "intent" and parsed.references_sha256 is None

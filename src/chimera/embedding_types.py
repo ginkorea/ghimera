@@ -112,3 +112,40 @@ class EmbeddingReferences(BaseModel):
     @property
     def sha256(self) -> str:
         return hashlib.sha256(self.model_dump_json().encode()).hexdigest()
+
+
+class IntentReferenceEvidence(BaseModel):
+    """A run's original intent, encoded by its configured model with recorded spend."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["chimera.intent-reference/1"] = Field(alias="schema")
+    goal_sha256: Digest
+    encoding_sequence: Count
+    references: EmbeddingReferences
+
+    def validate_binding(
+        self, goal_text: str, service: EmbeddingServiceConfig, call: EncodingCall
+    ) -> None:
+        goal_hash = hashlib.sha256(goal_text.encode()).hexdigest()
+        references = self.references
+        if (
+            self.goal_sha256 != goal_hash
+            or len(references.chunks) != 1
+            or references.chunks[0].source_id != "intent:" + goal_hash
+            or references.chunks[0].text_sha256 != goal_hash
+            or (
+                references.model_id,
+                references.revision,
+                references.dimensions,
+                references.text_prefix,
+            )
+            != (service.model_id, service.revision, service.dimensions, service.text_prefix)
+            or call.service != service
+            or call.outcome != "success"
+            or call.input_sha256
+            != (hashlib.sha256((service.text_prefix + goal_text).encode()).hexdigest(),)
+            or call.input_chars != len(service.text_prefix) + len(goal_text)
+        ):
+            raise ValueError(
+                "intent references must bind the original goal and its successful encoding"
+            )

@@ -55,10 +55,13 @@ not silently presented as success.
 The current working branch also has explicit authorized source sessions,
 configurable references/citing-source discovery, persistent publisher-locator
 drift detection with generic recovery and a doctor, and offline model-based PDF
-layout, tables, OCR and column-aware reading order. These are **not included
+layout, tables, OCR and column-aware reading order, durable run journals, and
+intent-based semantic scoring without a prebuilt reference-vector file. These are **not included
 in the published 0.2.0 wheel**. See [source sessions](docs/SOURCE_SESSIONS.md),
 [references](docs/C3_REFERENCES.md), [locator health](docs/C2_HTML.md), and
-[PDF configuration/acceptance](docs/C2_DOCUMENTS.md).
+[PDF configuration/acceptance](docs/C2_DOCUMENTS.md),
+[run journals](docs/RUN_JOURNAL.md) and
+[intent scoring](docs/C3_EMBEDDING_SCORING.md#intent-references-unreleased-source).
 Representative-corpus accuracy and Marker acceptance remain open; passing a
 controlled document check is not a universal quality claim.
 

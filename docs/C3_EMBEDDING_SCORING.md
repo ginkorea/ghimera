@@ -49,6 +49,38 @@ the encoder. Its immutable serialization digest must equal the configured
 reference digest. The bundle is supplied by the caller, not discovered from a
 filesystem or model name. The governed shelf compiler remains a C4 deliverable.
 
+### Intent references (unreleased source)
+
+Standalone intent-only collection can explicitly set `reference_source = "intent"`
+and omit `references_sha256`. See `examples/intent-scoring.toml`. Construct
+`EmbeddingScorer(config.scoring, encoder)` without a reference bundle. The original
+intent—not a model's reformulation or a search snippet—is encoded on the first
+scored document. Empty collection performs no reference call. Oversized intents
+refuse rather than silently clipping them. The configured encoder prefix applies
+to both intent and source windows; select a compatible model input recipe.
+
+The reference call reserves the same encoding call/character budget and run
+deadline as source scoring. Its successful `encoding` ledger row precedes a
+`chimera.intent-reference/1` observation containing the goal hash, model-bound
+vectors and exact call sequence. Failed/cancelled calls keep their spend but
+produce no prepared reference and no keyword or fabricated-vector fallback.
+Later documents and research rounds reuse that run's reference. Concurrent scores
+share one preparation lock; another run, intent or ledger cannot borrow it.
+The cache is weakly keyed by the run budget, not a process-global registry.
+
+Harvest and journal readers check the original goal, configured service, prefixed
+input hashes/character count, prior successful call, vector identity/dimensions,
+reference digest and winning window reference. They refuse absent, reordered,
+duplicate or re-bound preparation. Similarity remains cosine, not calibrated
+confidence. Vectors are client-recorded observations bound to a response hash;
+without the raw model response these records are not independent replay of every
+response byte or remote revision attestation.
+
+The existing pinned mode stays the default and still requires its exact supplied
+bundle. Its prior serialization excludes the new default field, preserving
+published configuration identities. Intent mode explicitly forbids a pinned
+digest or injected reference bundle; the two modes cannot be silently mixed.
+
 Construct explicitly after parsing the main config and admitted references:
 
 ```python
@@ -107,8 +139,9 @@ receipt and configured limits. No credential appears in evidence.
    maximum. Encode native windows and observed URL/anchor text in bounded batches.
    Long anchors are explicitly clipped with omitted-character counts. No text
    behind an unfetched link is invented.
-3. Compare each vector to supplied shelf reference vectors using cosine. Scale
-   before normalization to avoid overflow. Each window records its winning
+3. Compare each vector to supplied shelf reference vectors, or the run's explicit
+   intent reference, using cosine. Scale before normalization to avoid overflow.
+   Each window records its winning
    reference source and text hash. Document similarity is the maximum selected
    native-window cosine, not an average of the whole document.
 4. Link frontier weight is `keyword_weight * keyword_presence +
@@ -133,6 +166,9 @@ calibrated judge decision band remains separate work against real shelf evidence
 ## Remaining full-spider requirements
 
 Real encoder/model admission and multilingual quality acceptance, the calibrated
-keyword/embedding/judge decision policy, one-hop reference expansion, full native
-layout/OCR, additional browser routes, governed shelf/harvest integration and
-egress/runtime acceptance remain open. This component is not full C0–C5 completion.
+keyword/embedding/judge decision policy, representative reference-expansion and
+PDF/OCR quality, Marker and additional browser routes, governed shelf/harvest
+integration and egress/runtime acceptance remain open. Reference expansion and
+offline model-based PDF/OCR now have separate unreleased implementations and
+bounded evidence; they are not closed by the scoring protocol tests. This
+component is not full C0–C5 completion.

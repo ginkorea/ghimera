@@ -11,7 +11,7 @@ from chimera.browser_types import RenderResult
 from chimera.config import ChimeraConfig, Probability
 from chimera.dedup_types import ContentDrift, DedupEvidence
 from chimera.document_types import DocumentLayout, DocumentParseEvidence
-from chimera.embedding_types import EncodingCall
+from chimera.embedding_types import EncodingCall, IntentReferenceEvidence
 from chimera.extraction_attempts import HtmlExtractionAttempt, validate_chain
 from chimera.extraction_types import ExtractionEvidence
 from chimera.graph_types import GraphSnapshot
@@ -330,6 +330,7 @@ class LedgerRow(Record):
         "render",
         "encoding",
         "scoring",
+        "intent_reference",
         "reference",
         "reference_query",
     ]
@@ -354,12 +355,30 @@ class LedgerRow(Record):
     rendered: RenderResult | None = None
     encoding_call: EncodingCall | None = None
     similarity: SimilarityEvidence | None = None
+    intent_reference: IntentReferenceEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     reference: ReferenceDecision | None = None
     reference_query: ReferenceQuery | None = None
     source_session: SourceSessionUse | None = None
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if (self.event == "intent_reference") != (self.intent_reference is not None):
+            raise ValueError(
+                "intent reference events require their prepared vectors and call binding"
+            )
+        if self.intent_reference is not None:
+            references = self.intent_reference.references
+            if (
+                self.url is not None
+                or self.refusal is not None
+                or self.model is None
+                or self.model.location != "self_hosted"
+                or (self.model.model_id, self.model.revision)
+                != (references.model_id, references.revision)
+            ):
+                raise ValueError("intent reference metadata must identify its self-hosted encoder")
         if (self.event == "extraction_attempt") != (self.extraction_attempt is not None):
             raise ValueError("parse attempt events require their bounded source observation")
         if self.extraction_attempt is not None and (
@@ -433,6 +452,7 @@ class Harvest(Record):
     @model_validator(mode="after")
     def consistent(self) -> "Harvest":
         from chimera.references import validate_reference_ledger
+        from chimera.scoring_validation import validate_reference_rows
 
         validate_reference_ledger(self)
         parsing: dict[tuple[str, str, str | None], list[HtmlExtractionAttempt]] = {}
@@ -500,6 +520,7 @@ class Harvest(Record):
                 raise ValueError("document parsing/recovery must reconcile with the run ledger")
         if tuple(row.sequence for row in self.ledger) != tuple(range(len(self.ledger))):
             raise ValueError("ledger sequence must be contiguous")
+        validate_reference_rows(self.receipt.effective_config, self.goal.text, self.ledger)
         if self.receipt.fetches != sum(row.event == "fetch" for row in self.ledger):
             raise ValueError("fetch count does not match ledger")
         if self.receipt.bytes_read != sum(row.bytes_read for row in self.ledger):
@@ -532,13 +553,6 @@ class Harvest(Record):
             for document in self.source_documents
         }
         for row in self.ledger:
-            if row.similarity is not None and (
-                scoring_policy is None
-                or row.similarity.references_sha256 != scoring_policy.references_sha256
-            ):
-                raise ValueError(
-                    "similarity observations must bind their configured reference vectors"
-                )
             if row.similarity is not None:
                 similarity = row.similarity
                 if similarity.goal_sha256 != hashlib.sha256(self.goal.text.encode()).hexdigest():

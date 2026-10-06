@@ -13,7 +13,12 @@ class ScoringConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.scoring/1"] = Field(alias="schema")
     encoder: EmbeddingServiceConfig
-    references_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    reference_source: Literal["pinned", "intent"] = Field(
+        default="pinned", exclude_if=lambda value: value == "pinned"
+    )
+    references_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     encoding_call_budget: Positive
     encoding_char_budget: Positive
     window_chars: Positive
@@ -26,6 +31,10 @@ class ScoringConfig(BaseModel):
 
     @model_validator(mode="after")
     def coherent(self) -> "ScoringConfig":
+        if (self.reference_source == "pinned") != (self.references_sha256 is not None):
+            raise ValueError(
+                "pinned scoring requires a reference digest; intent scoring forbids it"
+            )
         if self.overlap_chars >= self.window_chars:
             raise ValueError("scoring windows require bounded overlap")
         if self.window_chars + len(self.encoder.text_prefix) > self.encoder.max_text_chars:

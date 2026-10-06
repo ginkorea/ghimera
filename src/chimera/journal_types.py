@@ -74,10 +74,13 @@ class JournalReport(Record):
 
     @model_validator(mode="after")
     def coherent(self) -> "JournalReport":
+        from chimera.scoring_validation import validate_reference_rows
+
         if (self.state == "complete") != (self.summary is not None):
             raise ValueError("only a valid completion summary seals a journal")
         if self.state == "complete" and self.incomplete_tail:
             raise ValueError("a partial journal cannot be complete")
         if tuple(row.sequence for row in self.rows) != tuple(range(len(self.rows))):
             raise ValueError("journal rows must be contiguous")
+        validate_reference_rows(self.header.config, self.header.goal.text, self.rows)
         return self

@@ -4,12 +4,21 @@ import asyncio
 import hashlib
 import heapq
 import math
+from dataclasses import dataclass, field
+from weakref import WeakKeyDictionary
 
 from pydantic import ValidationError
 
 from chimera.budget import RunBudget
 from chimera.config import ChimeraConfig
-from chimera.embedding_types import EmbeddingReferences, EncodingBatch, EncodingCall, unit_vector
+from chimera.embedding_types import (
+    EmbeddingReferences,
+    EncodingBatch,
+    EncodingCall,
+    IntentReferenceEvidence,
+    ReferenceChunk,
+    unit_vector,
+)
 from chimera.ledger import Ledger
 from chimera.models import Extracted, Goal, LedgerRow, LinkCandidate
 from chimera.ports import EvidenceEncoder
@@ -46,12 +55,25 @@ def covered_chars(spans: tuple[tuple[int, int], ...]) -> int:
     return total
 
 
+@dataclass
+class _IntentSession:
+    """Weakly budget-keyed state; no references can cross runs or original intents."""
+
+    goal_sha256: str
+    ledger: Ledger
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    references: EmbeddingReferences | None = None
+
+
 class EmbeddingScorer(Scorer):
     name = "shelf_embedding"
     cost = 1
 
     def __init__(
-        self, policy: ScoringConfig, encoder: EvidenceEncoder, references: EmbeddingReferences
+        self,
+        policy: ScoringConfig,
+        encoder: EvidenceEncoder,
+        references: EmbeddingReferences | None = None,
     ) -> None:
         if encoder.model.location != "self_hosted":
             raise ValueError("semantic scoring requires the explicitly self-hosted encoder")
@@ -61,7 +83,11 @@ class EmbeddingScorer(Scorer):
             service.revision,
         ):
             raise ValueError("encoder must match its recorded policy and identity")
-        if (
+        if (policy.reference_source == "pinned") != (references is not None):
+            raise ValueError(
+                "pinned scoring requires shelf vectors; intent scoring prepares its own"
+            )
+        if references is not None and (
             references.sha256 != policy.references_sha256
             or len(references.chunks) > policy.max_reference_chunks
             or (
@@ -74,13 +100,15 @@ class EmbeddingScorer(Scorer):
         ):
             raise ValueError("shelf vectors must match the pinned encoder, dimensions and prefix")
         self._policy, self._encoder, self._references = policy, encoder, references
-        self._vectors = tuple(unit_vector(chunk.vector) for chunk in references.chunks)
+        self._sessions: WeakKeyDictionary[RunBudget, _IntentSession] = WeakKeyDictionary()
 
     def validate_config(self, config: ChimeraConfig) -> None:
         if config.scoring != self._policy:
             raise ValueError("scorer must share the run's exact effective policy")
 
-    def _cosine(self, vector: tuple[float, ...]) -> tuple[float, int]:
+    def _cosine(
+        self, vector: tuple[float, ...], references: tuple[tuple[float, ...], ...]
+    ) -> tuple[float, int]:
         current = unit_vector(vector)
         if len(current) != self._policy.encoder.dimensions:
             raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -92,10 +120,67 @@ class EmbeddingScorer(Scorer):
                     math.fsum(left * right for left, right in zip(current, reference, strict=True)),
                 ),
             )
-            for reference in self._vectors
+            for reference in references
         )
         index = max(range(len(similarities)), key=similarities.__getitem__)
         return similarities[index], index
+
+    async def _references_for(
+        self, goal: Goal, budget: RunBudget, ledger: Ledger
+    ) -> EmbeddingReferences:
+        if self._references is not None:
+            return self._references
+        goal_hash = hashlib.sha256(goal.text.encode()).hexdigest()
+        session = self._sessions.get(budget)
+        if session is None:
+            session = _IntentSession(goal_hash, ledger)
+            self._sessions[budget] = session
+        if session.goal_sha256 != goal_hash or session.ledger is not ledger:
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        async with session.lock:
+            if session.references is not None:
+                return session.references
+            vectors = await self._encode((goal.text,), budget, ledger, None)
+            service = self._policy.encoder
+            references = EmbeddingReferences(
+                schema="chimera.embedding-references/1",
+                model_id=service.model_id,
+                revision=service.revision,
+                dimensions=service.dimensions,
+                text_prefix=service.text_prefix,
+                chunks=(
+                    ReferenceChunk(
+                        source_id="intent:" + goal_hash,
+                        text_sha256=goal_hash,
+                        vector=vectors[0],
+                    ),
+                ),
+            )
+            # One intent is one encoder input/batch. Capture the actual completed
+            # call, not a sequence reserved before other tasks could append rows.
+            encoded = ledger.snapshot()[-1]
+            if encoded.encoding_call is None:
+                raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            evidence = IntentReferenceEvidence(
+                schema="chimera.intent-reference/1",
+                goal_sha256=goal_hash,
+                encoding_sequence=encoded.sequence,
+                references=references,
+            )
+            evidence.validate_binding(goal.text, service, encoded.encoding_call)
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="intent_reference",
+                    model=self._encoder.model,
+                    intent_reference=evidence,
+                    reason="original_intent_reference_not_probability",
+                )
+            )
+            # Cache only after durable ledger acknowledgement, never on a failed
+            # call or a journal-write failure. The run owns both vectors and spend.
+            session.references = references
+            return references
 
     async def _encode(
         self, texts: tuple[str, ...], budget: RunBudget, ledger: Ledger, url: str | None
@@ -201,6 +286,8 @@ class EmbeddingScorer(Scorer):
         spans = selected_windows(document.text, goal, policy)
         if not spans:
             raise ChimeraRefused(RefusalCode.EXTRACTION_FAILED)
+        references = await self._references_for(goal, budget, ledger)
+        reference_vectors = tuple(unit_vector(chunk.vector) for chunk in references.chunks)
         links = tuple(
             sorted(document.links, key=lambda link: keyword_score(goal, link), reverse=True)[
                 : policy.max_links
@@ -214,8 +301,8 @@ class EmbeddingScorer(Scorer):
         vectors = await self._encode(windows + link_texts, budget, ledger, document.canonical_url)
         observations = []
         for (start, end), text, vector in zip(spans, windows, vectors[: len(windows)], strict=True):
-            cosine, index = self._cosine(vector)
-            reference = self._references.chunks[index]
+            cosine, index = self._cosine(vector, reference_vectors)
+            reference = references.chunks[index]
             observations.append(
                 WindowSimilarity(
                     start=start,
@@ -228,7 +315,7 @@ class EmbeddingScorer(Scorer):
             )
         link_observations, ranked = [], []
         for link, text, vector in zip(links, link_texts, vectors[len(windows) :], strict=True):
-            cosine, _ = self._cosine(vector)
+            cosine, _ = self._cosine(vector, reference_vectors)
             keyword = keyword_score(goal, link)
             # Negative similarity is zero frontier weight, not a 50% probability.
             score = policy.keyword_weight * keyword + (1.0 - policy.keyword_weight) * max(
@@ -249,7 +336,7 @@ class EmbeddingScorer(Scorer):
         evidence = SimilarityEvidence(
             schema="chimera.similarity/1",
             text_sha256=hashlib.sha256(document.text.encode()).hexdigest(),
-            references_sha256=self._references.sha256,
+            references_sha256=references.sha256,
             goal_sha256=hashlib.sha256(goal.text.encode()).hexdigest(),
             total_chars=len(document.text),
             selected_chars=selected,
@@ -266,7 +353,11 @@ class EmbeddingScorer(Scorer):
                 url=document.canonical_url,
                 model=self._encoder.model,
                 similarity=evidence,
-                reason="shelf_cosine_not_probability",
+                reason=(
+                    "intent_cosine_not_probability"
+                    if policy.reference_source == "intent"
+                    else "shelf_cosine_not_probability"
+                ),
             )
         )
         return tuple(ranked)

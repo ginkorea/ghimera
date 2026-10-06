@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Explicit intent-reference semantic scoring alongside unchanged pinned-shelf
+  scoring. The original intent's embedding spends the shared run budget once;
+  prepared vectors, call linkage, failure/cancellation and concurrent run
+  isolation are auditable through harvest and journal readers.
+
 - Configured owner-private per-run JSONL observations, fsync-before-ack storage,
   hash-chain replay checks, completion summaries and read-only run inspection.
   Interrupted runs remain explicitly unsealed; no automatic refetch or resume.
