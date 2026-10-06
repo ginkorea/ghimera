@@ -110,5 +110,7 @@ The original completion tracker remains in force: remaining browser adapters,
 Marker and representative multilingual PDF/OCR/publisher acceptance, real served
 model quality/admission/calibration, source/reference adequacy, safe continuation,
 platform seams and live runtime/egress acceptance. Plain text/additional MIME
-adapters and a collection CLI are not delivered by this composition facade.
+adapters are not delivered by this composition facade. The later intent command
+and full-result archive have their separate evidence in
+COLLECTOR_COMMAND_EVIDENCE.md; the facade-only snapshot above predates them.
 This closes the configuration-only assembly gap, not the full spider goal.

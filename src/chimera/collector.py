@@ -133,13 +133,17 @@ class Collector:
     async def run(
         self, request: str | ResearchRequest, *, run_id: str | None = None
     ) -> ResearchResult:
+        return await self._research.run(self.validate_request(request), run_id=run_id)
+
+    def validate_request(self, request: str | ResearchRequest) -> ResearchRequest:
+        """Validate an intent before a caller reserves output or launches work."""
         request = (
             ResearchRequest(intent=request)
             if isinstance(request, str)
             else ResearchRequest.model_validate(request.model_dump())
         )
         self._validate_intent(request.intent)
-        return await self._research.run(request, run_id=run_id)
+        return request
 
     async def collect(self, goal: Goal, scope: Scope, *, run_id: str | None = None) -> Harvest:
         goal = Goal.model_validate(goal.model_dump())

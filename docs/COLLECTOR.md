@@ -92,6 +92,10 @@ Journals retain observations and summaries; preserve the returned harvest/result
 for the original document bodies and final answer. Automatic process-restart
 continuation remains incomplete.
 
+For a command-line run that preserves the complete result and original document
+bodies, see [COLLECTOR_COMMAND.md](COLLECTOR_COMMAND.md). It uses this same concrete
+assembly and explicitly configured inputs; it does not activate model services.
+
 ## Credentials are separate
 
 Constructor/from-TOML keyword inputs accept `model_credentials` (a mapping from
@@ -123,5 +127,6 @@ assembled. Browser/document/Tor/session adapters have their separate tests;
 that does not establish representative public-corpus acceptance for their full
 composition here. Camoufox/optional nodriver, Marker, representative multilingual
 document/publisher quality, real served-model calibration, safe continuation and
-runtime/egress acceptance remain in the original completion tracker. No new CLI,
-publication or deployment is claimed by this facade.
+runtime/egress acceptance remain in the original completion tracker. The separately
+documented command/archive are unreleased source; no publication or deployment is
+claimed by this facade.

@@ -180,6 +180,17 @@ source routing, extraction, optional graph/journal and separately supplied
 credentials. This API is not in the published `go-spider==0.2.0` wheel. The
 lower-level APIs remain supported for custom providers and composition.
 
+The unreleased source also supplies a configured intent command that retains the
+full result, original documents and citations in a private, checksum-sealed archive:
+
+```bash
+python -m chimera --job /absolute/path/collector-command.toml --max-job-bytes 100000
+```
+
+See the [command guide](docs/COLLECTOR_COMMAND.md) and
+`examples/collector-command.toml`. Existing output identities are never overwritten;
+partial results remain partial. This command is not in the published 0.2.0 wheel.
+
 The following guides cover the existing lower-level wiring:
 
 | Area | Guide |

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- An explicit configuration-driven intent command (`python -m chimera`) with
+  bounded input reads, separately named environment credential bindings and
+  private no-overwrite complete-result archives. Originals, citations, graph,
+  ledger and model/extraction provenance survive revalidated checksum readback.
+  Partial outcomes and interrupted/unsealed archives never become answered runs.
+
 - A configuration-driven `Collector` facade assembles actual search, HTTP,
   HTML/document, optional browser, embedding and completion adapters. It supports
   intent research and seeded collection with fresh per-run state, retains the

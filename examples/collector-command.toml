@@ -1,0 +1,13 @@
+# Non-active command. Replace these absolute paths; parent output directory must exist.
+# Keep endpoints, resource limits and source policies in the separate collector recipe.
+schema = "chimera.collector-command/1"
+config_path = "/replace/private/collector.toml"
+request_path = "/replace/private/research-request.json"
+output_directory = "/replace/private/results/research-001"
+run_id = "research-001"
+max_input_bytes = 1000000
+max_result_bytes = 50000000
+# Optional explicit environment-name bindings, never secret values:
+# bindings_path = "/replace/private/credential-bindings.json"
+# Optional pinned shelf vectors; omit when scoring.reference_source = "intent":
+# references_path = "/replace/private/references.json"
