@@ -43,6 +43,24 @@ Publication is a separate native upload/readback outcome, not implied by these
 checks. Final artifact digests and publication responses are retained in private
 release records and can be checked against PyPI metadata; no credentials ship.
 
+## Confirmed publication
+
+GitHub `main` and the immutable `v0.3.0` tag name commit `110f701`. PyPI upload
+completed, and a read-only verification using
+`/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16) downloaded both
+artifacts from the URLs in the public version metadata and proved byte-for-byte
+equality to the tested final artifacts:
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `ghimera-0.3.0-py3-none-any.whl` | 165052 | `ac434926da1646d58df620a203185a11630c3911e0be5a442d790e61f9dc6f17` |
+| `ghimera-0.3.0.tar.gz` | 617788 | `37dcebcf6c7faddb6255e002b8142f4ab240415684baa9f473c818893c5e9b51` |
+
+The post-release challenge gateway is not included in these immutable artifacts.
+The initial failed upload was credential selection, not a rejected token: an
+explicit repository-URL option made Twine ignore the named `.pypirc` section.
+Retrying the verified named section succeeded without changing credentials.
+
 ## Capability boundaries
 
 See [concrete live research](C3_LIVE_RESEARCH.md) for the successful assembled
