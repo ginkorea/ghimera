@@ -14,9 +14,10 @@ implements the complete workflow.
   citations; configurable graph vocabulary and source-bound edge validation;
   durable research transactions and complete result archives. Unreleased source
   now includes model-backed native entity/relationship extraction and projection
-  as explicitly model-asserted, source-local observations.
-- Not implemented: alias resolution with evidence-preserving merge/split; graph-state-driven
-  planning and persistent multi-run expansion; platform graph publication.
+  as explicitly model-asserted, source-local observations. A configured bounded
+  graph view feeds those observations to subsequent within-run planning calls.
+- Not implemented: alias resolution with evidence-preserving merge/split;
+  persistent multi-run expansion; platform graph publication.
 - Not accepted: representative Chinese organization charts, scanned charts,
   diagram topology, entity completeness, temporal hierarchy correctness or
   independent entailment quality. OCR text alone does not recover connecting
@@ -25,7 +26,9 @@ implements the complete workflow.
 The graph records intent, questions, queries, sources and document versions.
 Configured semantic extraction now produces source-local mention/relationship
 observations. This does not equate mentions across sources, corroborate a claim,
-interpret chart arrows or give the planner a graph-driven expansion frontier.
+interpret chart arrows or persist an expansion frontier across runs. The
+planner's bounded graph view can motivate within-run follow-up discovery, with
+retained references to the observed entities/relationships and explicit omissions.
 
 ## Intended reusable workflow
 
@@ -99,7 +102,9 @@ that an entire organization has been exhaustively mapped.
    accuracy acceptance remains open.
 3. Alias/temporal identity and conflict preservation across real documents.
 4. Graph-driven research over a small explicitly scoped organizational subtree,
-   proving that findings change its next research frontier.
+   proving that findings change its next research frontier: within-run source
+   implementation and controlled composed-loop checks exist; real subtree/model
+   acceptance remains open.
 5. Restart-safe graph/frontier continuation and idempotent output projection.
 6. Independent source-entailment checks and a final coverage/gaps report.
 
@@ -111,3 +116,5 @@ Local-input configuration, provenance and current acceptance boundaries are in
 [LOCAL_INPUTS.md](LOCAL_INPUTS.md).
 Semantic-stage configuration, evidence and remaining quality boundaries are in
 [SEMANTIC_EXTRACTION.md](SEMANTIC_EXTRACTION.md).
+Graph-aware planning configuration and replay are in
+[GRAPH_PLANNING.md](GRAPH_PLANNING.md).

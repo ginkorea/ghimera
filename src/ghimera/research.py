@@ -14,6 +14,8 @@ from urllib.parse import urlsplit
 from pydantic import ValidationError
 
 from ghimera.config import GhimeraConfig
+from ghimera.graph_planning import build_context
+from ghimera.graph_planning_types import PlanningGraph
 from ghimera.loop import CollectionSession, GoalLoop
 from ghimera.model_types import ModelCallEvidence
 from ghimera.models import (
@@ -212,6 +214,9 @@ class ModelCalls:
                     if result is not None
                     else "model_cancelled",
                     latency_seconds=max(0.0, budget.clock() - started),
+                    planning_graph=request.graph_context
+                    if isinstance(request, PlanningRequest)
+                    else None,
                 )
             )
 
@@ -302,7 +307,12 @@ class ResearchLoop:
             result[query.content_digest()] = node.id
         return result
 
-    def _validate_plan(self, plan: ResearchPlan, questions: tuple[Question, ...]) -> None:
+    def _validate_plan(
+        self,
+        plan: ResearchPlan,
+        questions: tuple[Question, ...],
+        context: PlanningGraph | None = None,
+    ) -> None:
         ids = {question.id for question in plan.questions}
         if (
             len(ids) != len(plan.questions)
@@ -315,6 +325,8 @@ class ResearchLoop:
                 or not query.text.strip()
                 or not set(query.question_ids) <= ids
                 or len(set(query.question_ids)) != len(query.question_ids)
+                or not set(query.graph_refs)
+                <= (context.references if context is not None else frozenset())
                 for query in plan.queries
             )
         ):
@@ -436,9 +448,10 @@ class ResearchLoop:
                     max_questions=self._policy.max_questions,
                     max_queries=self._policy.max_queries_per_round,
                     max_query_chars=self._policy.max_query_chars,
+                    graph_context=build_context(self._config, session.ledger.snapshot()),
                 )
                 plan = await calls.invoke("plan", self._planner.model, planning, self._planner.plan)
-                self._validate_plan(plan, questions)
+                self._validate_plan(plan, questions, planning.graph_context)
                 questions = plan.questions
                 trace = await self._trace_plan(session, plan)
                 compiler.include_reference_hosts(session.reference_hosts)

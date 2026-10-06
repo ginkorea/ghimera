@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 
+from ghimera.graph_planning_types import PlanningGraph
 from ghimera.local_input_types import LocalDocumentSeed
 from ghimera.model_types import ModelCallEvidence
 from ghimera.models import Document, Harvest, ModelIdentity, Record
@@ -55,6 +56,13 @@ class Question(ResearchRecord):
 class SearchQuery(ResearchRecord):
     text: Text
     question_ids: Annotated[tuple[QuestionId, ...], Field(min_length=1)]
+    graph_refs: tuple[Text, ...] = Field(default=(), exclude_if=lambda v: not v)
+
+    @model_validator(mode="after")
+    def unique_graph_refs(self) -> "SearchQuery":
+        if len(set(self.graph_refs)) != len(self.graph_refs):
+            raise ValueError("search query graph references must be unique")
+        return self
 
 
 class ResearchPlan(ResearchModelResult):
@@ -167,6 +175,7 @@ class PlanningRequest(ResearchRecord):
     max_questions: Annotated[int, Field(strict=True, gt=0)]
     max_queries: Annotated[int, Field(strict=True, gt=0)]
     max_query_chars: Annotated[int, Field(strict=True, gt=0)]
+    graph_context: PlanningGraph | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 class EvidenceRequest(ResearchRecord):
@@ -280,6 +289,27 @@ class ResearchResult(ResearchRecord):
             raise ValueError("research result must bind a valid question pack and research policy")
         if self.search_calls > policy.query_budget:
             raise ValueError("search count exceeds the recorded policy")
+        if policy.graph_context is not None:
+            plans = tuple(row for row in self.harvest.ledger if row.event == "plan")
+            for round_ in self.rounds:
+                if not any(
+                    row.planning_graph is not None
+                    and all(
+                        set(query.graph_refs) <= row.planning_graph.references
+                        for query in round_.queries
+                    )
+                    and row.reason
+                    == "model_response:"
+                    + ResearchPlan(
+                        questions=self.questions,
+                        queries=round_.queries,
+                        model_call=row.model_call,
+                    ).content_digest()
+                    for row in plans
+                ):
+                    raise ValueError(
+                        "research queries must bind the observed graph-aware planning response"
+                    )
         if self.status == "answered":
             if (
                 self.stop_reason != "answered"

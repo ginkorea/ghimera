@@ -143,6 +143,23 @@ class GhimeraConfig(BaseModel):
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
         validate_sessions(self.source_sessions)
+        if self.research is not None and self.research.graph_context is not None:
+            planning, semantic, graph = self.research.graph_context, self.semantics, self.graph
+            if (
+                semantic is None
+                or graph is None
+                or not set(planning.entity_roles) <= set(semantic.entity_roles)
+                or not set(planning.relation_rules) <= set(semantic.relation_rules)
+            ):
+                raise ValueError("graph planning requires its configured extraction ontology")
+            relations = {rule.name: rule for rule in graph.relations}
+            if any(
+                not set(relations[name].source_roles + relations[name].target_roles)
+                <= set(planning.entity_roles)
+                for name in planning.relation_rules
+                if name in relations
+            ):
+                raise ValueError("graph planning relations require all endpoint roles")
         if self.semantics is not None:
             graph, models, semantic = self.graph, self.models, self.semantics
             if graph is None or not graph.enabled or not graph.capture_semantics or models is None:

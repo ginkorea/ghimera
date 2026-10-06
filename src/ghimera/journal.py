@@ -293,9 +293,11 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
         for row in inputs:
             if row.local_input is not None:
                 row.local_input.validate_policy(input_policy)
+        from ghimera.graph_planning import validate_rows as validate_planning_rows
         from ghimera.semantic_graph import validate_rows
 
         validate_rows(header.config, tuple(rows))
+        validate_planning_rows(header.config, tuple(rows))
         summary_path = path / "summary.json"
         if summary_path.exists() or summary_path.is_symlink():
             summary = JournalSummary.model_validate_json(

@@ -15,6 +15,7 @@ from ghimera.document_types import DocumentLayout, DocumentParseEvidence
 from ghimera.embedding_types import EncodingCall, IntentReferenceEvidence
 from ghimera.extraction_attempts import HtmlExtractionAttempt, validate_chain
 from ghimera.extraction_types import ExtractionEvidence
+from ghimera.graph_planning_types import PlanningGraph
 from ghimera.graph_types import GraphSnapshot
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.model_types import ModelCallEvidence
@@ -418,9 +419,12 @@ class LedgerRow(Record):
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     semantic_window: SemanticWindow | None = Field(default=None, exclude_if=lambda v: v is None)
+    planning_graph: PlanningGraph | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if self.planning_graph is not None and self.event != "plan":
+            raise ValueError("planning graph belongs to its observed planning call")
         if self.event == "semantic":
             if (self.semantic_window is None) == (self.refusal is None):
                 raise ValueError("semantic calls require a source-bound projection or refusal")
@@ -774,10 +778,12 @@ class Harvest(Record):
                         raise ValueError(
                             "local graph documents must retain their input observation"
                         )
+        from ghimera.graph_planning import validate_rows as validate_planning_rows
         from ghimera.semantic_graph import validate_harvest
 
         try:
             validate_harvest(self)
+            validate_planning_rows(self.receipt.effective_config, self.ledger)
         except GhimeraRefused:
             raise ValueError("semantic source projection cannot be revalidated") from None
         return self

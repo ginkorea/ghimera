@@ -89,7 +89,8 @@ this stage with graph/journal readback. A concrete Collector composition test
 exercises its actual HTTP completion/search/embedding clients and native HTML
 parser against local protocol fixtures.
 
-Full package gate on 6 October 2026: **398 passed, 0 failed, 0 skipped** in
+Full package gate for the `cf5eff0` semantic extraction line on 6 October 2026:
+**398 passed, 0 failed, 0 skipped** in
 436.34 seconds. Ruff checks passed, 117 files were already formatted, and
 strict mypy passed for 83 source files. The runner was
 `/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16), importing this
@@ -102,5 +103,7 @@ These fixture model responses do not establish real-model entity/relationship
 accuracy, exhaustive chart coverage or independent entailment quality. The
 remaining organizational workflow is tracked in
 [ORGANIZATION_RESEARCH.md](ORGANIZATION_RESEARCH.md): alias/temporal resolution,
-graph-driven discovery and persistent expansion, visual-chart evidence and real
+real graph-driven discovery acceptance and persistent expansion, visual-chart evidence and real
 organization-corpus acceptance. The published 0.3.0 artifacts are unchanged.
+Within-run graph-aware planning is implemented in unreleased source; see
+[GRAPH_PLANNING.md](GRAPH_PLANNING.md).

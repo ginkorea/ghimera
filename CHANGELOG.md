@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Configured graph-aware intent planning over acknowledged native semantic
+  observations, with closed endpoints, exact omissions, retained query references
+  and ledger/archive replay; no extra model phase or automatic identity merging.
+
 - Configured native entity/relationship extraction through the existing
   self-hosted completion client and graph owner. Exact source-local mentions,
   model-asserted edges, held low-confidence relations, sequential window/tail

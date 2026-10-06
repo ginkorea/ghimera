@@ -1,0 +1,12 @@
+# Non-active block to merge into an intent-research recipe. Requires [semantics],
+# enabled [graph] and matching configured roles/rules. Size the existing planner
+# input budget for both native evidence and this bounded view; no model is launched.
+[research.graph_context]
+schema = "ghimera.graph-planning/1"
+entity_roles = ["person", "organization", "position"]
+relation_rules = ["reports_to", "holds_position", "member_of"]
+selection = "newest_first"
+max_entities = 24
+max_relations = 16
+max_evidence_chars = 6000
+max_context_chars = 24000

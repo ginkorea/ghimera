@@ -233,6 +233,12 @@ Post-release source adds an opt-in local challenge gateway with bounded,
 exact-origin clearance reuse; see [challenge recovery](docs/CHALLENGES.md).
 That addition is not in the published 0.3.0 artifacts and does not guarantee
 universal CAPTCHA solving or provide an authenticated-site bypass.
+
+The unreleased semantic extraction stage can also feed a configured, bounded
+graph view into follow-up research planning. Queries retain references to the
+observed entities/relations and omissions remain explicit; see
+[graph-aware planning](docs/GRAPH_PLANNING.md). This does not yet provide alias
+resolution or restart-safe organizational network expansion.
 Tor routing is a transport capability, not a guarantee of anonymity or authority
 to access a source.
 
