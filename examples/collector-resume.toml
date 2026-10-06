@@ -1,0 +1,17 @@
+# Use the SAME recipe, run_id and output_directory as the suspended command.
+# Rebind credentials explicitly if required. Do not set request_path on resume.
+schema = "ghimera.collector-command/2"
+config_path = "/absolute/path/collector.toml"
+output_directory = "/absolute/path/results/research-001"
+run_id = "research-001"
+max_input_bytes = 100000
+max_result_bytes = 50000000
+# bindings_path = "/absolute/path/credential-bindings.json"
+# references_path = "/absolute/path/pinned-reference-vectors.json"
+
+[execution]
+schema = "ghimera.command-execution/1"
+operation = "resume"
+# REPLACE with sha256 from the actual checkpoint receipt printed at suspension.
+checkpoint_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+# suspend_after_rounds = 2

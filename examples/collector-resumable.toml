@@ -1,0 +1,17 @@
+# Post-0.3.0 command source. Replace paths with your owned storage volume.
+# collector.toml must include [journal] and [continuation]; see continuation.toml.
+schema = "ghimera.collector-command/2"
+config_path = "/absolute/path/collector.toml"
+request_path = "/absolute/path/research-request.json"
+output_directory = "/absolute/path/results/research-001"
+run_id = "research-001"
+max_input_bytes = 100000
+max_result_bytes = 50000000
+# bindings_path = "/absolute/path/credential-bindings.json"
+# references_path = "/absolute/path/pinned-reference-vectors.json"
+
+[execution]
+schema = "ghimera.command-execution/1"
+operation = "run"
+suspend_after_rounds = 2
+# Omit suspend_after_rounds to run normally with completed-round checkpoints.

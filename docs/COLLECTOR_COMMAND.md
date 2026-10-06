@@ -36,8 +36,10 @@ The command validates the request through that collector before reserving output
 It then exclusively creates an owner-private output directory, before planning
 or paid work. Existing directories are not reused or overwritten. A failed or
 interrupted command may leave an incomplete directory and any configured graph
-and journal; preserve them, use a new identity for a new run. Automatic resumption
-of a previous frontier remains incomplete.
+and journal; preserve them, use a new identity for a new run. Post-0.3.0 source
+adds explicit completed-round pause/resume through
+[`ghimera.collector-command/2`](COMMAND_CONTINUATION.md), preserving the same
+run/output identity. It does not automatically replay uncertain interrupted calls.
 
 ## Explicit credentials
 
@@ -94,6 +96,8 @@ does not upgrade a partial result or establish real-world model accuracy.
 
 Exit codes: `0` = stored answered result; `1` = stored partial/failed result;
 `2` = named refusal or input/storage failure; `130` = keyboard interruption.
+The new `/2` command also returns `3` for a deliberate completed-round suspension,
+with a checkpoint receipt rather than a completion receipt.
 Named diagnostic lines omit raw exception values. Missing artifacts, interruptions
 or unsealed output do not mean the research finished.
 

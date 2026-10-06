@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Versioned resumable intent commands over the existing concrete Collector,
+  with explicit run/resume/pause policy, digest-pinned original requests,
+  private exact-output reservations and exclusive writers. A pause emits a
+  checkpoint receipt/exit 3, never a completed archive. One-shot `/1` behavior
+  remains unchanged; uncertain external-call replay remains refused.
+
 - Durable completed-round research checkpoints and explicit Collector
   suspend/resume. Native documents, acknowledged graph, priority frontier,
   discovery/assessment history and prior spend survive process restart without

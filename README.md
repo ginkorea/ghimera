@@ -239,7 +239,8 @@ graph view into follow-up research planning. Queries retain references to the
 observed entities/relations and omissions remain explicit; see
 [graph-aware planning](docs/GRAPH_PLANNING.md). Explicit completed-round
 [suspend/resume](docs/CONTINUATION.md) preserves evidence, acknowledged graph,
-pending frontier and cumulative budgets across processes. Alias resolution,
+pending frontier and cumulative budgets across processes, through the library
+and a [versioned resumable command](docs/COMMAND_CONTINUATION.md). Alias resolution,
 fine-grained interrupted-call reconciliation and real organizational-network
 quality acceptance remain open.
 Tor routing is a transport capability, not a guarantee of anonymity or authority

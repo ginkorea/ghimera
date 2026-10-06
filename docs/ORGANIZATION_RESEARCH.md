@@ -107,7 +107,7 @@ that an entire organization has been exhaustively mapped.
    acceptance remains open.
 5. Restart-safe graph/frontier continuation and idempotent output projection:
    completed-round suspend/resume is implemented in unreleased source, with a
-   fresh-process fixture and unchanged cumulative observations/budgets. In-flight
+   fresh-process library/command fixtures and unchanged cumulative observations/budgets. In-flight
    external-call reconciliation and platform output projection remain open.
 6. Independent source-entailment checks and a final coverage/gaps report.
 

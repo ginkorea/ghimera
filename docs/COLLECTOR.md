@@ -98,14 +98,17 @@ other files:
 | Native entity/relation extraction (unreleased) | `[semantics]` with the configured semantic graph; [semantic extraction](SEMANTIC_EXTRACTION.md) |
 | Graph-aware follow-up planning (unreleased) | `[research.graph_context]` over acknowledged semantic observations; [graph planning](GRAPH_PLANNING.md) |
 | Durable run observations | `[journal]`; [journal](RUN_JOURNAL.md) |
+| Completed-round restart (unreleased) | `[continuation]`; [library](CONTINUATION.md) and [resumable command](COMMAND_CONTINUATION.md) |
 
 The graph example includes question/query roles and relations needed by intent
 research. Enable graph/journal by configuration and pass a new, safe `run_id` to
 `run` or `collect`. Private paths are chosen by the application, never implicitly
 placed on a root/home volume. Existing run identities are not overwritten.
 Journals retain observations and summaries; preserve the returned harvest/result
-for the original document bodies and final answer. Automatic process-restart
-continuation remains incomplete.
+for the original document bodies and final answer. Unreleased source now supports
+explicit completed-round suspension/restart with the same run identity and
+cumulative budget. Automatic reconciliation of uncertain in-flight calls remains
+incomplete; it is not inferred from an unsealed journal.
 
 For a command-line run that preserves the complete result and original document
 bodies, see [COLLECTOR_COMMAND.md](COLLECTOR_COMMAND.md). It uses this same concrete
@@ -141,7 +144,8 @@ pretending an extractor exists. Plain text and additional formats are not yet
 assembled. Browser/document/Tor/session adapters have their separate tests;
 that does not establish representative public-corpus acceptance for their full
 composition here. Camoufox/optional nodriver, Marker, representative multilingual
-document/publisher quality, real served-model calibration, safe continuation and
-runtime/egress acceptance remain in the original completion tracker. The
+document/publisher quality, real served-model calibration, fine-grained in-flight
+recovery and runtime/egress acceptance remain in the original completion tracker. The
 command/archive are included in 0.3.0; the separately documented local-file
-intake and challenge-recovery additions remain unreleased source.
+intake, challenge recovery, semantic graph/planning and completed-round
+continuation additions remain unreleased source.

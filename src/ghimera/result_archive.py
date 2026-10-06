@@ -1,5 +1,6 @@
 """Private immutable result archive; a receipt seals bytes, not factual accuracy."""
 
+import fcntl
 import hashlib
 import os
 import re
@@ -22,6 +23,16 @@ class ArchiveReceipt(BaseModel):
     documents: Annotated[int, Field(strict=True, ge=0)]
 
 
+class ArchiveReservation(BaseModel):
+    """Non-secret output identity retained across explicit command invocations."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.command-output/1"] = Field(alias="schema")
+    run_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+    config_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    request_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
 def bounded_file(path: Path, max_bytes: int) -> bytes:
     """Bound the read before parsing and refuse special files/symlink leaves."""
     if type(max_bytes) is not int or max_bytes <= 0:
@@ -38,7 +49,7 @@ def bounded_file(path: Path, max_bytes: int) -> bytes:
 
 
 class ResearchResultArchive:
-    """Own one newly reserved directory and publish complete files without overwrite."""
+    """Own an explicit output identity; publish complete files without overwrite."""
 
     def __init__(self, path: Path, run_id: str) -> None:
         self._path, self._run_id = path, run_id
@@ -62,6 +73,44 @@ class ResearchResultArchive:
         finally:
             os.close(parent)
         return cls(path, run_id)
+
+    @classmethod
+    def reserve(
+        cls, path: Path, *, reservation: ArchiveReservation, max_bytes: int
+    ) -> "ResearchResultArchive":
+        reservation = ArchiveReservation.model_validate(reservation.model_dump())
+        data = reservation.model_dump_json().encode()
+        if type(max_bytes) is not int or max_bytes <= 0 or len(data) > max_bytes:
+            raise ValueError("reservation exceeds its positive byte allowance")
+        archive = cls.create(path, run_id=reservation.run_id)
+        try:
+            fcntl.flock(archive._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            archive._publish("reservation.json", data)
+            return archive
+        except BaseException:
+            archive.close()
+            raise
+
+    @classmethod
+    def resume(
+        cls, path: Path, *, reservation: ArchiveReservation, max_bytes: int
+    ) -> "ResearchResultArchive":
+        reservation = ArchiveReservation.model_validate(reservation.model_dump())
+        if type(max_bytes) is not int or max_bytes <= 0:
+            raise ValueError("a positive reservation byte allowance is required")
+        cls._path_check(path)
+        archive = cls(path, reservation.run_id)
+        try:
+            fcntl.flock(archive._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            observed = ArchiveReservation.model_validate_json(
+                archive._read("reservation.json", max_bytes)
+            )
+            if observed != reservation or set(os.listdir(archive._fd)) != {"reservation.json"}:
+                raise ValueError("resume requires its exact unfinished output reservation")
+            return archive
+        except BaseException:
+            archive.close()
+            raise
 
     @staticmethod
     def _path_check(path: Path) -> None:
@@ -162,6 +211,18 @@ class ResearchResultArchive:
                 result.harvest.documents
             ):
                 raise ValueError("archive receipt does not describe the validated result")
+            if "reservation.json" in os.listdir(archive._fd):
+                reservation = ArchiveReservation.model_validate_json(
+                    archive._read("reservation.json", max_bytes)
+                )
+                observed_config = hashlib.sha256(
+                    result.harvest.receipt.effective_config.model_dump_json().encode()
+                ).hexdigest()
+                if (
+                    reservation.run_id != receipt.run_id
+                    or reservation.config_sha256 != observed_config
+                ):
+                    raise ValueError("archive result differs from its command reservation")
             return result
         finally:
             archive.close()

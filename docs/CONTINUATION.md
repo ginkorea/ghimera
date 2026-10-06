@@ -73,9 +73,10 @@ If interruption happens **after** a saved boundary, preserve and reconcile its
 later journal/graph observations; this implementation refuses to guess whether
 an unfinished external request executed. It neither truncates observations nor
 automatically spends again. Fine-grained in-flight reconciliation, continuation
-after changing the recipe/model or increasing the original budget, and CLI
-suspend/resume options remain separate open work. The existing CLI still runs
-an ordinary complete intent request; it does not turn a pause into an archive.
+after changing the recipe/model or increasing the original budget remain
+separate open work. The versioned [resumable command](COMMAND_CONTINUATION.md)
+now connects these APIs to ordinary terminal/task execution; its suspension
+receipt is not a completed archive. The legacy command remains one-shot.
 
 ## Verification
 

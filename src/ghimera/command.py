@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import hashlib
 import os
 import sys
 import tomllib
@@ -14,10 +15,16 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from ghimera.collector import Collector
 from ghimera.config import GhimeraConfig
+from ghimera.continuation import CheckpointReceipt, CheckpointStore, ResearchSuspended
 from ghimera.embedding_types import EmbeddingReferences
 from ghimera.refusals import GhimeraRefused
 from ghimera.research_types import ResearchRequest
-from ghimera.result_archive import ArchiveReceipt, ResearchResultArchive, bounded_file
+from ghimera.result_archive import (
+    ArchiveReceipt,
+    ArchiveReservation,
+    ResearchResultArchive,
+    bounded_file,
+)
 from ghimera.source_sessions import SourceCredentials
 from ghimera.transport import Resolver
 
@@ -25,20 +32,46 @@ Positive = Annotated[int, Field(strict=True, gt=0)]
 EnvName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
 
 
+class CommandExecution(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.command-execution/1"] = Field(alias="schema")
+    operation: Literal["run", "resume"]
+    checkpoint_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    suspend_after_rounds: Positive | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def checkpoint_binding(self) -> "CommandExecution":
+        if (self.operation == "resume") != (self.checkpoint_sha256 is not None):
+            raise ValueError("only resume requires an explicit checkpoint digest")
+        return self
+
+
 class CommandOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["chimera.collector-command/1"] = Field(alias="schema")
+    schema_version: Literal["chimera.collector-command/1", "ghimera.collector-command/2"] = Field(
+        alias="schema"
+    )
     config_path: Path
-    request_path: Path
+    request_path: Path | None = Field(default=None, exclude_if=lambda value: value is None)
     output_directory: Path
     run_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
     max_input_bytes: Positive
     max_result_bytes: Positive
     bindings_path: Path | None = None
     references_path: Path | None = None
+    execution: CommandExecution | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def paths(self) -> "CommandOptions":
+        if (self.schema_version == "ghimera.collector-command/2") != (self.execution is not None):
+            raise ValueError("command /2 requires an execution policy; legacy /1 forbids it")
+        resuming = self.execution is not None and self.execution.operation == "resume"
+        if resuming == (self.request_path is not None):
+            raise ValueError("run needs a request file; resume uses its pinned original request")
         for path in (
             self.config_path,
             self.request_path,
@@ -121,14 +154,24 @@ class CredentialBindings(BaseModel):
 
 async def execute(
     options: CommandOptions, *, source_resolver: Resolver | None = None
-) -> ArchiveReceipt:
+) -> ArchiveReceipt | CheckpointReceipt:
     options = CommandOptions.model_validate(options.model_dump())
     config = GhimeraConfig.model_validate(
         tomllib.loads(bounded_file(options.config_path, options.max_input_bytes).decode())
     )
-    request = ResearchRequest.model_validate_json(
-        bounded_file(options.request_path, options.max_input_bytes)
-    )
+    execution = options.execution
+    if execution is not None and config.continuation is None:
+        raise ValueError("command /2 requires the recipe's durable continuation policy")
+    if execution is not None and execution.operation == "resume":
+        if execution.checkpoint_sha256 is None:
+            raise ValueError("resume requires its checkpoint digest")
+        request = CheckpointStore(config, options.run_id).read(execution.checkpoint_sha256).request
+    else:
+        if options.request_path is None:
+            raise ValueError("run requires a request file")
+        request = ResearchRequest.model_validate_json(
+            bounded_file(options.request_path, options.max_input_bytes)
+        )
     bindings = (
         CredentialBindings.model_validate_json(
             bounded_file(options.bindings_path, options.max_input_bytes)
@@ -153,10 +196,43 @@ async def execute(
     )
     request = collector.validate_request(request)
     # Reserve output before any paid/discovery work; an existing result is not reusable.
-    archive = ResearchResultArchive.create(options.output_directory, run_id=options.run_id)
+    if execution is None:
+        archive = ResearchResultArchive.create(options.output_directory, run_id=options.run_id)
+    else:
+        reservation = ArchiveReservation(
+            schema="ghimera.command-output/1",
+            run_id=options.run_id,
+            config_sha256=hashlib.sha256(config.model_dump_json().encode()).hexdigest(),
+            request_sha256=request.content_digest(),
+        )
+        if execution.operation == "resume":
+            archive = ResearchResultArchive.resume(
+                options.output_directory, reservation=reservation, max_bytes=options.max_input_bytes
+            )
+        else:
+            archive = ResearchResultArchive.reserve(
+                options.output_directory, reservation=reservation, max_bytes=options.max_input_bytes
+            )
     try:
-        result = await collector.run(request, run_id=options.run_id)
+        if execution is not None and execution.operation == "resume":
+            if execution.checkpoint_sha256 is None:
+                raise ValueError("resume requires its checkpoint digest")
+            result = await collector.resume(
+                options.run_id,
+                checkpoint_sha256=execution.checkpoint_sha256,
+                suspend_after_rounds=execution.suspend_after_rounds,
+            )
+        else:
+            result = await collector.run(
+                request,
+                run_id=options.run_id,
+                suspend_after_rounds=execution.suspend_after_rounds
+                if execution is not None
+                else None,
+            )
         return archive.write(result, max_bytes=options.max_result_bytes)
+    except ResearchSuspended as paused:
+        return paused.receipt
     finally:
         archive.close()
 
@@ -195,4 +271,6 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write("command_interrupted\n")
         return 130
     sys.stdout.write(receipt.model_dump_json() + "\n")
+    if isinstance(receipt, CheckpointReceipt):
+        return 3
     return 0 if receipt.status == "answered" else 1

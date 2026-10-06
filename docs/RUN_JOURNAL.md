@@ -73,7 +73,9 @@ It performs no source/network request and changes no journal file.
 
 ## Remaining work
 
-Frontier/content-index/research-plan checkpoints and safe continuation across a
-process restart remain a separate adapter. Neither an interrupted journal nor a
-graph checkpoint alone can prove that all paid/in-flight calls have reconciled.
+Unreleased source now persists frontier/content-index/research-plan checkpoints
+and supports explicit completed-round process restart through the
+[continuation owner](CONTINUATION.md) and [command](COMMAND_CONTINUATION.md).
+Neither an interrupted journal nor a graph checkpoint alone can prove that all
+paid/in-flight calls have reconciled; later observations still refuse blind replay.
 Node runtime/egress doctor and production deployment acceptance are also distinct.
