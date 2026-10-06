@@ -1,5 +1,6 @@
 """One parse boundary for operator configuration; no environment or hidden defaults."""
 
+import ipaddress
 import tomllib
 from pathlib import Path
 from typing import Annotated, Literal
@@ -9,6 +10,71 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 PositiveFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+
+
+class NetworkPolicy(BaseModel):
+    """Public crawling cannot inherit a test-network exception."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["chimera.network/1"] = Field(alias="schema")
+    mode: Literal["public", "loopback_fixture"]
+    fixture_addresses: tuple[str, ...] = ()
+    fixture_ports: tuple[Annotated[int, Field(strict=True, ge=1, le=65535)], ...] = ()
+
+    @model_validator(mode="after")
+    def isolated(self) -> "NetworkPolicy":
+        if self.mode == "public" and (self.fixture_addresses or self.fixture_ports):
+            raise ValueError("public networking cannot carry fixture exceptions")
+        if self.mode == "loopback_fixture":
+            if not self.fixture_addresses or not self.fixture_ports:
+                raise ValueError("fixture mode requires exact addresses and ports")
+            if any(not ipaddress.ip_address(value).is_loopback for value in self.fixture_addresses):
+                raise ValueError("fixtures may permit only loopback addresses")
+        return self
+
+
+class RobotsDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    decision_id: Annotated[str, Field(min_length=1)]
+    decided_by: Annotated[str, Field(min_length=1)]
+    reason: Annotated[str, Field(min_length=1)]
+    allowed_hosts: Annotated[tuple[str, ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def nonblank(self) -> "RobotsDecision":
+        if not all(value.strip() for value in (self.decision_id, self.decided_by, self.reason)):
+            raise ValueError("robots override must identify a decision, actor and reason")
+        if any(host != host.lower() or "/" in host or ":" in host for host in self.allowed_hosts):
+            raise ValueError("override scope must be exact lowercase host names")
+        return self
+
+
+class RobotsPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["chimera.robots/1"] = Field(alias="schema")
+    mode: Literal["honor", "recorded_override"]
+    product_token: Annotated[str, Field(pattern=r"^[A-Za-z_-]+$")]
+    decision: RobotsDecision | None = None
+
+    @model_validator(mode="after")
+    def explicit_override(self) -> "RobotsPolicy":
+        if (self.mode == "recorded_override") != (self.decision is not None):
+            raise ValueError("only recorded_override requires a scoped decision record")
+        return self
+
+
+class HttpPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["chimera.http/1"] = Field(alias="schema")
+    max_response_bytes: PositiveInt
+    max_header_bytes: PositiveInt
+    max_redirects: Annotated[int, Field(strict=True, ge=0)]
+    retry_backoff_seconds: PositiveFloat
+    retry_jitter_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    robots_cache_seconds: PositiveFloat
+    conditional_cache_entries: PositiveInt
+    network: NetworkPolicy
+    robots: RobotsPolicy
 
 
 class ChimeraConfig(BaseModel):
@@ -35,6 +101,7 @@ class ChimeraConfig(BaseModel):
     user_agent: Annotated[str, Field(min_length=1)]
     egress_feature: Literal["crawl_egress"]
     model_policy: Literal["self_hosted_only"]
+    http: HttpPolicy | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> "ChimeraConfig":
@@ -44,6 +111,8 @@ class ChimeraConfig(BaseModel):
             raise ValueError("per_host_concurrency cannot exceed global_concurrency")
         if "\n" in self.user_agent or "\r" in self.user_agent:
             raise ValueError("user_agent must be one HTTP header line")
+        if self.http is not None and self.http.robots.product_token not in self.user_agent:
+            raise ValueError("robots product_token must identify this user_agent")
         return self
 
     @classmethod

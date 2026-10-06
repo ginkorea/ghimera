@@ -40,6 +40,9 @@ class Scope(Record):
     allowed_hosts: Annotated[tuple[str, ...], Field(min_length=1)]
     max_depth: NonNegative
     content_types: Annotated[tuple[str, ...], Field(min_length=1)]
+    allowed_ports: Annotated[
+        tuple[Annotated[int, Field(strict=True, ge=1, le=65535)], ...], Field(min_length=1)
+    ] = (80, 443)
 
     @field_validator("allowed_hosts")
     @classmethod
@@ -67,7 +70,7 @@ class Scope(Record):
                 and parts.username is None
                 and parts.password is None
                 and parts.hostname in self.allowed_hosts
-                and parts.port in {None, 80, 443}
+                and (parts.port or (443 if parts.scheme == "https" else 80)) in self.allowed_ports
                 and not any(ord(char) < 33 for char in url)
             )
         except ValueError:
@@ -84,6 +87,14 @@ class FetchRequest(Record):
     url: NonEmpty
     max_bytes: Annotated[int, Field(strict=True, gt=0)]
     timeout_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    headers: tuple[tuple[Literal["if-none-match", "if-modified-since"], str], ...] = ()
+
+    @field_validator("headers")
+    @classmethod
+    def one_line(cls, value: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+        if any("\r" in text or "\n" in text for _, text in value):
+            raise ValueError("request metadata must be single-line HTTP headers")
+        return value
 
 
 class Page(Record):
@@ -92,6 +103,11 @@ class Page(Record):
     status: Annotated[int, Field(strict=True, ge=100, le=599)]
     content_type: NonEmpty
     body: bytes
+    headers: tuple[tuple[str, str], ...] = ()
+    revalidated: bool = False
+
+    def header(self, name: str) -> str | None:
+        return next((value for key, value in self.headers if key == name.lower()), None)
 
 
 class Extracted(Record):
@@ -140,7 +156,9 @@ class Document(Record):
 
 class LedgerRow(Record):
     sequence: NonNegative
-    event: Literal["fetch", "fallback", "refusal", "verdict", "grade", "duplicate", "stop"]
+    event: Literal[
+        "fetch", "fallback", "refusal", "verdict", "grade", "duplicate", "stop", "policy"
+    ]
     url: str | None = None
     route: str | None = None
     status: int | None = None

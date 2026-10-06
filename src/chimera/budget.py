@@ -14,6 +14,7 @@ class RunBudget:
         self.fetches = 0
         self.bytes_read = 0
         self.judge_calls = 0
+        self._bytes_reserved = 0
 
     @property
     def elapsed(self) -> float:
@@ -40,6 +41,20 @@ class RunBudget:
     def record_bytes(self, count: int) -> None:
         self.bytes_read += count
         if self.bytes_read > self.config.byte_budget:
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+
+    def reserve_bytes(self, maximum: int) -> int:
+        """Atomic on the owning asyncio loop; in-flight requests cannot oversubscribe."""
+        available = self.remaining_bytes - self._bytes_reserved
+        if available <= 0:
+            raise ChimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        allowance = min(maximum, available)
+        self._bytes_reserved += allowance
+        return allowance
+
+    def release_bytes(self, allowance: int) -> None:
+        self._bytes_reserved -= allowance
+        if self._bytes_reserved < 0:
             raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
 
     def reserve_judge(self) -> None:

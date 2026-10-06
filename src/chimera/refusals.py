@@ -1,5 +1,6 @@
 """Closed refusal vocabulary shared by every package boundary."""
 
+import asyncio
 from enum import StrEnum
 from types import MappingProxyType
 
@@ -43,3 +44,27 @@ class ChimeraRefused(Exception):
     def __init__(self, code: RefusalCode) -> None:
         self.code = code
         super().__init__(f"{code.value}: {REFUSALS[code]}")
+
+
+class FetchFailure(ChimeraRefused):
+    """Decoded bytes retained before an interrupted or oversized transfer."""
+
+    def __init__(self, code: RefusalCode, bytes_read: int) -> None:
+        self.bytes_read = bytes_read
+        super().__init__(code)
+
+
+class FetchCancelled(asyncio.CancelledError):
+    """Preserve partial body spend without turning cancellation into a retry."""
+
+    def __init__(self, bytes_read: int) -> None:
+        self.bytes_read = bytes_read
+        super().__init__()
+
+
+class HttpStatusRefused(ChimeraRefused):
+    """A final HTTP response, not a retryable transport failure."""
+
+    def __init__(self, status: int) -> None:
+        self.status = status
+        super().__init__(RefusalCode.FETCH_FAILED)

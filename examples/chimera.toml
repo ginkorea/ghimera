@@ -15,7 +15,29 @@ per_host_concurrency = 2
 global_concurrency = 4
 global_requests_per_second = 1.0
 retry_budget = 2
-impersonation_profile = "chrome"
+impersonation_profile = "chrome145"
 user_agent = "Chimera/0.1 (contact: operator@example.invalid)"
 egress_feature = "crawl_egress"
 model_policy = "self_hosted_only"
+
+[http]
+schema = "chimera.http/1"
+max_response_bytes = 16777216
+max_header_bytes = 65536
+max_redirects = 5
+retry_backoff_seconds = 1.0
+retry_jitter_seconds = 0.5
+robots_cache_seconds = 3600.0
+conditional_cache_entries = 100
+
+[http.network]
+schema = "chimera.network/1"
+mode = "public"
+
+[http.robots]
+schema = "chimera.robots/1"
+mode = "honor"
+product_token = "Chimera"
+# To override for a shelf: mode = "recorded_override", with a [http.robots.decision]
+# containing decision_id, decided_by, reason and exact allowed_hosts. Every use
+# lands in the run ledger. This does not disable login/paywall/challenge refusals.
