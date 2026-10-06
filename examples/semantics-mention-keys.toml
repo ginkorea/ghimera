@@ -1,0 +1,17 @@
+# Non-active addition to the collector's [semantics] block.
+# Explicit opt-in; existing version-1 recipes retain their original prompt.
+schema = "ghimera.semantics/2"
+prompt_profile = "explicit_mention_keys"
+model_role = "analyst"
+window_chars = 1500
+max_windows_per_document = 64
+max_calls_per_run = 256
+max_mentions_per_window = 32
+max_relations_per_window = 32
+entity_roles = ["person", "organization", "position"]
+relation_rules = ["reports_to", "holds_position", "member_of"]
+mention_rule = "mentions"
+
+# Declare matching roles/rules under [graph] as in semantics.toml, and bind an
+# existing self-hosted model role with adequate context and output budgets.
+# The profile strengthens instructions, not validators or model guarantees.

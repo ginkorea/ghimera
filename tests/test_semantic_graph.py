@@ -18,7 +18,7 @@ from ghimera.model_client import SelfHostedModel
 from ghimera.model_http import ModelHttpResponse
 from ghimera.models import Document, Extracted, Verdict
 from ghimera.refusals import GhimeraRefused
-from ghimera.semantic_graph import SemanticStage
+from ghimera.semantic_graph import SemanticStage, validate_rows
 from ghimera.semantic_types import SemanticConfig
 from tests.test_c0 import config
 from tests.test_served_models import service
@@ -86,6 +86,7 @@ class SemanticWire:
 
     async def post(self, body):
         request = json.loads(body)
+        self.system = request["messages"][0]["content"]
         packet = json.loads(request["messages"][1]["content"])
         self.requests.append(packet)
         window = packet["evidence"]["windows"][0]
@@ -171,6 +172,59 @@ def test_automatic_semantics_are_source_bound_assertions_not_name_based_identity
         assert row.semantic_window.proposal.model_call == row.model_call
         assert row.semantic_window.entities[0].evidence.quote == "甲委員會"
     assert wire.requests[0]["semantic_recipe"]["relation_rules"] == ["reports_to"]
+
+
+def test_explicit_mention_key_profile_is_versioned_and_recorded(tmp_path):
+    cfg = configured(tmp_path, schema="ghimera.semantics/2", prompt_profile="explicit_mention_keys")
+    wire = SemanticWire(cfg.models.analyst)
+    _, rows, _ = exercise(cfg, wire, (document(),))
+    assert cfg.semantics.effective_prompt_revision == "ghimera-semantic-extraction/2"
+    assert rows[0].model_call.prompt_revision == cfg.semantics.effective_prompt_revision
+    assert wire.requests[0]["semantic_recipe"]["prompt_profile"] == "explicit_mention_keys"
+    assert rows[0].semantic_window.policy_digest == cfg.semantics.content_digest()
+    assert "Build the bounded mentions list FIRST" in wire.system
+    forged = rows[0].model_copy(
+        update={
+            "model_call": rows[0].model_call.model_copy(
+                update={"prompt_revision": "ghimera-semantic-extraction/1"}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="provenance differs"):
+        validate_rows(cfg, (forged,))
+
+
+def test_legacy_semantic_profile_identity_and_invalid_version_choices(tmp_path):
+    cfg = configured(tmp_path)
+    policy = cfg.semantics
+    assert policy.effective_prompt_revision == "ghimera-semantic-extraction/1"
+    assert "prompt_profile" not in policy.model_dump(by_alias=True)
+    wire = SemanticWire(cfg.models.analyst)
+    _, rows, _ = exercise(cfg, wire, (document(),))
+    assert rows[0].model_call.prompt_revision == "ghimera-semantic-extraction/1"
+    assert "Build the bounded mentions list FIRST" not in wire.system
+    with pytest.raises(ValidationError):
+        configured(tmp_path, prompt_profile="explicit_mention_keys")
+    with pytest.raises(ValidationError):
+        configured(tmp_path, schema="ghimera.semantics/2")
+    with pytest.raises(ValidationError):
+        configured(tmp_path, schema="ghimera.semantics/2", prompt_profile="guess_endpoints")
+
+
+def test_explicit_profile_retains_refusal_for_unlisted_relationship_endpoints(tmp_path):
+    cfg = configured(tmp_path, schema="ghimera.semantics/2", prompt_profile="explicit_mention_keys")
+
+    class DanglingWire(SemanticWire):
+        async def post(self, body):
+            response = await super().post(body)
+            raw = json.loads(response.body)
+            proposal = json.loads(raw["choices"][0]["message"]["content"])
+            proposal["relations"][0]["target"] = "missing_key"
+            raw["choices"][0]["message"]["content"] = json.dumps(proposal)
+            return ModelHttpResponse(200, json.dumps(raw).encode(), "application/json")
+
+    with pytest.raises(GhimeraRefused, match="model_unavailable"):
+        exercise(cfg, DanglingWire(cfg.models.analyst), (document(),))
 
 
 @pytest.mark.parametrize("bad", ("wrong_surface", "unknown_citation"))

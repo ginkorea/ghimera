@@ -167,3 +167,10 @@ Still open: a deployed, egress-restricted real gateway, representative authorize
 public challenge sites, more solver adapters,
 human-assisted interaction, and same-browser handling where a clearance cookie
 cannot be replayed by the ordinary HTTP client. These gaps must remain explicit.
+
+The subsequent full package gate including the version-2 semantic prompt
+profile passed on 6 October 2026: **472 passed, zero failed, zero skipped**,
+500.74 seconds, with the same owned Python 3.11.16 interpreter and isolated
+local browser. Lint/formatting passed for 127 files and strict typing for 89
+source files. No live gateway was listening on the configured local solver
+ports during that check; this does not close remote challenge acceptance.

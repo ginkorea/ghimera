@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Explicit version-2 semantic prompt profile for unique mention keys and
+  closed relationship endpoints. Policy/call/graph provenance bind the selected
+  revision, while version-1 recipe identities and validation remain unchanged.
+  Invalid endpoints still refuse; stronger instructions are not model accuracy
+  or successful real-world extraction evidence.
+
 - Explicit version-2 binary-PDF download policy for publishers serving PDFs
   as generic binary MIME types. Header admission requires both configured
   media types and collection scope, followed by the real bounded parser.

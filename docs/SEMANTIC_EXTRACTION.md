@@ -13,6 +13,17 @@ not launch a model, acquire a GPU or introduce another credential boundary.
 The normal self-hosted completion client owns authentication, input/output
 limits, exact model binding, cancellation and call provenance.
 
+Version-1 recipes retain `ghimera-semantic-extraction/1` and their original
+serialized policy shape. To select the stronger mention-key instructions,
+use [the version-2 example](../examples/semantics-mention-keys.toml):
+`schema="ghimera.semantics/2"`, `prompt_profile="explicit_mention_keys"`.
+This profile asks the model to build unique mention keys first and restrict
+every relation endpoint to that same response's included mentions. The profile
+and `ghimera-semantic-extraction/2` revision are retained in policy and call
+evidence; archive readers reject mismatched revisions. Neither profile relaxes
+native-span, citation, ontology or endpoint validation. Stronger instructions
+are not a guarantee that a served model returns valid or accurate claims.
+
 Enable `[graph]` with `capture_semantics=true` and declare the entity roles,
 document-to-entity mention rule and allowed entity-to-entity relation rules.
 Keep the existing research question/query/source/document trace vocabulary.
@@ -101,7 +112,11 @@ a live inference service.
 
 These fixture model responses do not establish real-model entity/relationship
 accuracy, exhaustive chart coverage or independent entailment quality. The
-remaining organizational workflow is tracked in
+subsequent [real-model PDF diagnostics](ORGANIZATION_MODEL_EVIDENCE.md) retain
+four refused trials and the exact acceptance boundary; they are not a success
+claim. The explicit mention-key profile passed a full 472-test gate, but actual
+native occurrence matching remains unresolved.
+The remaining organizational workflow is tracked in
 [ORGANIZATION_RESEARCH.md](ORGANIZATION_RESEARCH.md): alias/temporal resolution,
 real graph-driven discovery acceptance and persistent expansion, visual-chart evidence and real
 organization-corpus acceptance. The published 0.3.0 artifacts are unchanged.

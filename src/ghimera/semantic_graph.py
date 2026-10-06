@@ -22,7 +22,6 @@ from ghimera.model_config import ModelServiceConfig
 from ghimera.model_types import ModelCallEvidence
 from ghimera.models import Document, Harvest, LedgerRow, ModelIdentity
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
-from ghimera.semantic_types import SEMANTIC_PROMPT_REVISION as PROMPT_REVISION
 from ghimera.semantic_types import SemanticConfig, SemanticEntity, SemanticProposal, SemanticWindow
 
 MENTION_REVISION = "ghimera-source-mention/1"
@@ -63,7 +62,7 @@ def project(
         or call is None
         or call.service != bound_service(config)
         or call.task != "semantic_extract"
-        or call.prompt_revision != PROMPT_REVISION
+        or call.prompt_revision != policy.effective_prompt_revision
         or call.outcome != "success"
         or len(proposal.mentions) > policy.max_mentions_per_window
         or len(proposal.relations) > policy.max_relations_per_window
@@ -96,7 +95,7 @@ def project(
         end=end,
         quote=citation.quote,
     )
-    revision = f"{PROMPT_REVISION}@{call.service.model_id}@{call.service.revision}"
+    revision = f"{policy.effective_prompt_revision}@{call.service.model_id}@{call.service.revision}"
     entities: list[SemanticEntity] = []
     nodes: dict[str, GraphNode] = {}
     edges: dict[str, GraphEdge] = {}
@@ -315,7 +314,7 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
         if row.model_call is not None and (
             row.model_call.service != service
             or row.model_call.task != "semantic_extract"
-            or row.model_call.prompt_revision != PROMPT_REVISION
+            or row.model_call.prompt_revision != policy.effective_prompt_revision
         ):
             raise ValueError("semantic call provenance differs from its configured service")
         if (

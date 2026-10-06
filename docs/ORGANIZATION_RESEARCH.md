@@ -102,7 +102,11 @@ that an entire organization has been exhaustively mapped.
 2. Semantic entity/relation extraction over a real organization PDF, including
    page coverage, omissions and visual-chart limitations: source implementation
    and controlled native-document checks exist; real organization-PDF/model
-   accuracy acceptance remains open.
+   accuracy acceptance remains open. Four actual served-model trials produced
+   no accepted semantic windows: the original profile failed proposal invariants,
+   while the explicit mention-key profile reached structurally valid proposals
+   that still failed native projection. See
+   [ORGANIZATION_MODEL_EVIDENCE.md](ORGANIZATION_MODEL_EVIDENCE.md).
 3. Alias/temporal identity and conflict preservation across real documents.
 4. Graph-driven research over a small explicitly scoped organizational subtree,
    proving that findings change its next research frontier: within-run source

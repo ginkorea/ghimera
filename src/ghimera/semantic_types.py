@@ -22,10 +22,14 @@ from ghimera.model_types import ModelCallEvidence
 CitationId = Annotated[str, Field(pattern=r"^cite:[0-9a-f]{64}$")]
 MentionKey = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]*$")]
 SEMANTIC_PROMPT_REVISION = "ghimera-semantic-extraction/1"
+MENTION_KEY_PROMPT_REVISION = "ghimera-semantic-extraction/2"
 
 
 class SemanticConfig(GraphRecord):
-    schema_version: Literal["ghimera.semantics/1"] = Field(alias="schema")
+    schema_version: Literal["ghimera.semantics/1", "ghimera.semantics/2"] = Field(alias="schema")
+    prompt_profile: Literal["explicit_mention_keys"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     model_role: Literal["analyst", "reviewer", "judge"]
     window_chars: Positive
     max_windows_per_document: Positive
@@ -38,6 +42,10 @@ class SemanticConfig(GraphRecord):
 
     @model_validator(mode="after")
     def distinct(self) -> "SemanticConfig":
+        if (self.schema_version == "ghimera.semantics/2") != (self.prompt_profile is not None):
+            raise ValueError(
+                "version-2 semantics require an explicit prompt profile; legacy has none"
+            )
         if (
             len(set(self.entity_roles)) != len(self.entity_roles)
             or len(set(self.relation_rules)) != len(self.relation_rules)
@@ -45,6 +53,14 @@ class SemanticConfig(GraphRecord):
         ):
             raise ValueError("semantic roles and relation rules must be distinct")
         return self
+
+    @property
+    def effective_prompt_revision(self) -> str:
+        return (
+            MENTION_KEY_PROMPT_REVISION
+            if self.prompt_profile == "explicit_mention_keys"
+            else SEMANTIC_PROMPT_REVISION
+        )
 
 
 class ProposedMention(GraphRecord):
