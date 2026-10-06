@@ -89,7 +89,11 @@ class HtmlExtractor:
             "application/xhtml+xml",
         }:
             raise ChimeraRefused(RefusalCode.CONTENT_TYPE_UNWANTED)
-        if not page.body or len(page.body) > self.config.max_input_bytes:
+        if (
+            not page.body
+            or len(page.body) > self.config.max_input_bytes
+            or (page.rendered is not None and len(page.rendered.html) > self.config.max_input_bytes)
+        ):
             raise ChimeraRefused(RefusalCode.EXTRACTION_FAILED)
         private_directory(self.config.locator_directory)
         request = ExtractionRequest(config=self.config, page=page).model_dump_json().encode()
@@ -110,6 +114,8 @@ class HtmlExtractor:
             or evidence.text_sha256 != hashlib.sha256(result.text.encode()).hexdigest()
             or evidence.config_digest != self.config.content_digest()
             or evidence.parser_revision != self.revision
+            or evidence.rendered_sha256
+            != (page.rendered.html_sha256 if page.rendered is not None else None)
             or len(result.text) > self.config.max_text_chars
             or len(result.links) > self.config.max_links
         ):

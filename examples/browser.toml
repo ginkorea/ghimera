@@ -1,0 +1,25 @@
+# Merge this table as `browser` in chimera.config/1. Install the browser extra
+# offline and provision the pinned artifact separately; no automatic downloads.
+schema = "chimera.browser/1"
+engine = "patchright"
+executable = "/srv/chimera/artifacts/chromium/chrome"
+# Deliberately inert: replace with the SHA-256 of the provisioned executable.
+executable_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+isolator = "/usr/bin/bwrap"
+work_directory = "/srv/chimera/state/browser"
+sandbox_work_directory = "/run/chimera"
+max_workers = 2
+timeout_seconds = 30.0
+cleanup_timeout_seconds = 5.0
+max_input_bytes = 1000000
+max_rendered_bytes = 1000000
+max_protocol_bytes = 8000000
+max_diagnostic_bytes = 32000
+max_resources = 40
+resource_types = ["script", "stylesheet", "fetch", "xhr", "font"]
+resource_content_types = ["application/javascript", "text/javascript", "text/css", "application/json", "font/woff2"]
+# No readiness selector in this generic example. A publisher-specific deployment
+# may configure ready_selector = "article[data-ready]" instead of assuming idle.
+settle_seconds = 0.5
+viewport_width = 1280
+viewport_height = 800

@@ -35,3 +35,4 @@ class ExtractionEvidence(BaseModel):
     language_hint_disagrees: bool
     raw_markdown_sha256: Digest
     omitted_links: Annotated[int, Field(strict=True, ge=0)]
+    rendered_sha256: Digest | None = None

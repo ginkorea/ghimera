@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from chimera.browser_types import RenderResult
 from chimera.config import ChimeraConfig, Probability
 from chimera.dedup_types import ContentDrift, DedupEvidence
 from chimera.document_types import DocumentLayout, DocumentParseEvidence
@@ -113,6 +114,16 @@ class Page(Record):
     headers: tuple[tuple[str, str], ...] = ()
     revalidated: bool = False
     transport: TransportEvidence | None = None
+    rendered: RenderResult | None = None
+
+    @model_validator(mode="after")
+    def rendering_binding(self) -> "Page":
+        if self.rendered is not None and (
+            self.rendered.source_sha256 != hashlib.sha256(self.body).hexdigest()
+            or self.rendered.source_url != self.final_url
+        ):
+            raise ValueError("rendering must bind original retained response bytes and URL")
+        return self
 
     def header(self, name: str) -> str | None:
         return next((value for key, value in self.headers if key == name.lower()), None)
@@ -184,8 +195,13 @@ class DocumentSource(Record):
     extracted: Extracted
     verdict: Verdict
     transport: TransportEvidence | None = None
+    rendered: RenderResult | None = None
 
     def validate_policy(self, config: ChimeraConfig) -> None:
+        if self.rendered is not None:
+            if config.browser is None or len(self.raw) > config.browser.max_input_bytes:
+                raise ValueError("browser rendering requires its input policy and limits")
+            self.rendered.validate_policy(config.browser)
         evidence = self.extracted.extraction
         if evidence is not None and (
             config.extraction is None
@@ -204,11 +220,20 @@ class DocumentSource(Record):
         digest = hashlib.sha256(self.raw).hexdigest()
         if self.sha256 != digest:
             raise ValueError("document digest must bind retained source bytes")
+        if self.rendered is not None and (
+            self.rendered.source_sha256 != digest or self.rendered.source_url != self.url
+        ):
+            raise ValueError("browser rendering must bind this source occurrence")
         if self.extracted.extraction is not None and (
             self.extracted.extraction.source_sha256 != digest
             or self.extracted.extraction.source_url != self.url
         ):
             raise ValueError("extraction evidence must bind this source occurrence")
+        if self.extracted.extraction is not None and (
+            self.extracted.extraction.rendered_sha256
+            != (self.rendered.html_sha256 if self.rendered is not None else None)
+        ):
+            raise ValueError("HTML extraction must identify its rendered or original input")
         if self.extracted.document_parse is not None and (
             self.extracted.document_parse.source_sha256 != digest
             or self.extracted.document_parse.source_url != self.url
@@ -271,6 +296,7 @@ class LedgerRow(Record):
         "discovery",
         "extraction",
         "content_drift",
+        "render",
     ]
     url: str | None = None
     route: str | None = None
@@ -287,9 +313,17 @@ class LedgerRow(Record):
     document_parse: DocumentParseEvidence | None = None
     dedup: DedupEvidence | None = None
     content_drift: ContentDrift | None = None
+    rendered: RenderResult | None = None
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if self.event == "render":
+            if (self.rendered is None) == (self.refusal is None):
+                raise ValueError("render event requires either its result or a refusal")
+            if self.rendered is not None and self.url != self.rendered.source_url:
+                raise ValueError("render event must identify its source occurrence")
+        elif self.rendered is not None:
+            raise ValueError("render evidence belongs to its render event")
         if self.dedup is not None and self.event != "duplicate":
             raise ValueError("dedup evidence belongs only to a duplicate observation")
         if (self.content_drift is not None) != (self.event == "content_drift"):
@@ -339,6 +373,11 @@ class Harvest(Record):
             raise ValueError("only accepted documents belong in harvest")
         if len({doc.sha256 for doc in self.documents}) != len(self.documents):
             raise ValueError("cluster representatives must have distinct raw content identities")
+        for row in self.ledger:
+            if row.rendered is not None:
+                if self.receipt.effective_config.browser is None:
+                    raise ValueError("render ledger requires its configured policy")
+                row.rendered.validate_policy(self.receipt.effective_config.browser)
         for doc in self.documents:
             doc.validate_policy(self.receipt.effective_config)
             if doc.occurrences:

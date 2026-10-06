@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from chimera.browser_config import BrowserConfig
 from chimera.dedup_config import DedupConfig
 from chimera.document_config import DocumentExtractionConfig
 from chimera.extraction_config import ExtractionConfig
@@ -118,6 +119,7 @@ class ChimeraConfig(BaseModel):
     extraction: ExtractionConfig | None = None
     document_extraction: DocumentExtractionConfig | None = None
     dedup: DedupConfig | None = None
+    browser: BrowserConfig | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> "ChimeraConfig":

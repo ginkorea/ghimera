@@ -4018,6 +4018,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+browser = [
+    { name = "patchright" },
+]
 documents = [
     { name = "docling-core" },
     { name = "docling-slim", extra = ["convert-core", "format-docx", "format-pdf"] },
@@ -4044,11 +4047,12 @@ requires-dist = [
     { name = "docling-slim", extras = ["convert-core", "format-docx", "format-pdf"], marker = "extra == 'documents'", specifier = "==2.134.0" },
     { name = "lingua-language-detector", marker = "extra == 'documents'", specifier = "==2.1.1" },
     { name = "lingua-language-detector", marker = "extra == 'html'", specifier = "==2.1.1" },
+    { name = "patchright", marker = "extra == 'browser'", specifier = "==1.63.0" },
     { name = "protego", specifier = "==0.7.0" },
     { name = "pydantic", specifier = "==2.13.5" },
     { name = "scrapling", marker = "extra == 'html'", specifier = "==0.4.2" },
 ]
-provides-extras = ["html", "documents"]
+provides-extras = ["browser", "html", "documents"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["pydantic==2.13.5", "curl_cffi==0.16.3", "protego==0.7.0"]
 
 [project.optional-dependencies]
+browser = ["patchright==1.63.0"]
 html = ["scrapling==0.4.2", "crawl4ai==0.9.4", "lingua-language-detector==2.1.1"]
 documents = ["docling-slim[convert-core,format-docx,format-pdf]==2.134.0", "docling-core==2.99.0", "lingua-language-detector==2.1.1"]
 

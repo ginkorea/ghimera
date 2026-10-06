@@ -107,8 +107,10 @@ def parse(request: ExtractionRequest) -> Extracted:
     from scrapling.parser import Selector
 
     config, page = request.config, request.page
-    actual_encoding = encoding(page, config)
-    source = page.body.decode(actual_encoding, errors="replace")
+    actual_encoding = "utf-8" if page.rendered is not None else encoding(page, config)
+    source = (page.rendered.html if page.rendered is not None else page.body).decode(
+        actual_encoding, errors="replace"
+    )
     profile = next(
         (value for value in config.profiles if value.host == urlsplit(page.final_url).hostname),
         None,
@@ -261,6 +263,7 @@ def parse(request: ExtractionRequest) -> Extracted:
     evidence = ExtractionEvidence(
         schema="chimera.extraction-evidence/1",
         source_sha256=hashlib.sha256(page.body).hexdigest(),
+        rendered_sha256=page.rendered.html_sha256 if page.rendered is not None else None,
         source_url=page.final_url,
         text_sha256=hashlib.sha256(text.encode()).hexdigest(),
         config_digest=config.content_digest(),

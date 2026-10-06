@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import ClassVar, final
 from urllib.parse import urljoin
 
+from chimera.browser import PageRenderer, ResourceFetcher
 from chimera.budget import RunBudget
 from chimera.config import ChimeraConfig
 from chimera.ledger import Ledger
@@ -67,12 +68,15 @@ class FetchRoute(ABC):
 
 
 class FetchLadder:
-    def __init__(self, routes: tuple[FetchRoute, ...]) -> None:
+    def __init__(
+        self, routes: tuple[FetchRoute, ...], *, renderer: PageRenderer | None = None
+    ) -> None:
         if not routes or len({route.name for route in routes}) != len(routes):
             raise ValueError("a ladder needs distinct named routes")
         self._routes = tuple(sorted(routes, key=lambda route: route.cost))
         self._politeness: Politeness | None = None
         self._cache: OrderedDict[str, Page] = OrderedDict()
+        self._renderer = renderer
 
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
@@ -81,6 +85,21 @@ class FetchLadder:
 
     @final
     async def fetch(self, url: str, scope: Scope, budget: RunBudget, ledger: Ledger) -> Page:
+        return await self._fetch(url, scope, budget, ledger, allow_render=True)
+
+    async def _fetch(
+        self,
+        url: str,
+        scope: Scope,
+        budget: RunBudget,
+        ledger: Ledger,
+        *,
+        allow_render: bool,
+    ) -> Page:
+        if self._renderer is not None:
+            self._renderer.validate_config(budget.config)
+        elif budget.config.browser is not None:
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if not scope.permits(url):
             raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)
         for route in self._routes:
@@ -125,7 +144,85 @@ class FetchLadder:
                     reason=reason,
                 )
             )
+            if reason == "javascript_required" and allow_render and self._renderer is not None:
+                return await self._render(route, page, scope, budget, ledger)
         raise ChimeraRefused(RefusalCode.FETCH_FAILED)
+
+    async def _render(
+        self,
+        route: FetchRoute,
+        page: Page,
+        scope: Scope,
+        budget: RunBudget,
+        ledger: Ledger,
+    ) -> Page:
+        renderer, policy = self._renderer, budget.config.browser
+        if renderer is None or policy is None:
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        ladder = self
+        resource_scope = Scope.model_validate(
+            {
+                **scope.model_dump(),
+                "content_types": policy.resource_content_types,
+            }
+        )
+
+        class BoundResources(ResourceFetcher):
+            async def fetch(self, url: str) -> Page:
+                # Same ladder, budget, cache and global/per-host politeness; only
+                # the declared subsidiary MIME types differ. No render recursion.
+                return await ladder._fetch(
+                    url,
+                    resource_scope,
+                    budget,
+                    ledger,
+                    allow_render=False,
+                )
+
+        started = budget.clock()
+        try:
+            result = await renderer.render(
+                page,
+                scope,
+                BoundResources(),
+                timeout_seconds=budget.remaining_seconds,
+            )
+            rendered = Page.model_validate({**page.model_dump(), "rendered": result})
+            # A JS-created challenge/login/paywall is terminal too. The route's
+            # detector sees DOM, while the returned Page still retains raw bytes.
+            inspected = Page.model_validate(
+                {
+                    **page.model_dump(),
+                    "body": result.html,
+                    "rendered": None,
+                }
+            )
+            route.escalation_reason(inspected)
+        except ChimeraRefused as exc:
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="render",
+                    url=page.final_url,
+                    route=renderer.name,
+                    refusal=exc.code,
+                    reason=exc.code.value,
+                    latency_seconds=max(0.0, budget.clock() - started),
+                )
+            )
+            raise
+        ledger.append(
+            LedgerRow(
+                sequence=ledger.next_sequence,
+                event="render",
+                url=page.final_url,
+                route=renderer.name,
+                rendered=result,
+                reason="isolated_render_complete",
+                latency_seconds=max(0.0, budget.clock() - started),
+            )
+        )
+        return rendered
 
     async def _attempt(
         self,
