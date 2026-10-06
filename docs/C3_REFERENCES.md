@@ -50,9 +50,12 @@ judge. Analyst answers still require citations into retained native text.
 A hit means **candidate citing source**, never a verified bibliographic link.
 The ledger records provider/revision, exact query, response digest, candidate
 title/snippet, parent raw/text hashes, decision score, depth and outcome. The
-digest identifies the response; it does not embed its raw bytes or establish
-that the target page really cites the parent. Bibliographic verification is a
-separate content-evidence judgment.
+digest alone does not embed raw bytes. A completed `chimera.research-result/2`
+additionally retains the successful response and binds every citing-source
+candidate to an actual URL/title/snippet hit, the earlier query and its fetch.
+The harvest alone and legacy `/1` results do not provide that raw-response
+guarantee. None of these checks establish that the target page really cites the
+parent. Bibliographic verification is a separate content-evidence judgment.
 
 ## Saved-result checks and remaining acceptance
 

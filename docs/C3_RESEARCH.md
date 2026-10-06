@@ -39,6 +39,9 @@ classDiagram
     ResearchLoop --> ResearchAnalyst
     ResearchLoop --> AnswerReviewer
     ResearchLoop --> GroundedSearch
+    ResearchLoop --> SearchHistory
+    SearchHistory --> GroundedSearch
+    SearchHistory --> Ledger
     GroundedSearch <|-- SearxSearch
     SearxSearch --> CurlRoute
     CurlRoute --> RoutingConnector
@@ -87,6 +90,18 @@ calls charge the same fetch/byte/time budgets as collection. Model phases record
 their declared identities and response digests; failures still consume a call.
 The global wall deadline returns a partial result with reconciled spend.
 
+One per-run `SearchHistory` captures successful search responses immediately at
+the final provider-accounting boundary, before downstream graph/model work can
+fail. New results use `chimera.research-result/2`: native response bytes, parsed
+hits, exact query and question IDs, provider revision, transport and ledger
+sequence survive complete-result archive readback. The reader binds both raw
+bytes and the typed response digest to that fetch. It rejects dropped, duplicate
+or substituted observations and citing-source candidates absent from actual
+hits. Failed searches remain accounted refusals, not invented observations.
+Legacy `/1` results remain readable but make no raw-discovery retention claim.
+This is not interruption recovery: an unsealed run's journal still does not
+retain complete discovery payloads. See [search evidence](C3_SEARCH_EVIDENCE.md).
+
 The SearXNG adapter reuses the direct/Tor connector: TLS verification, no ambient
 proxy/credentials, no redirect following, bounded decoded content and no Tor-to-
 direct fallback. A strict JSON wire boundary refuses unavailable JSON output or
@@ -102,9 +117,10 @@ and verifies remote resolution rather than local source DNS.
   still require acceptance.
 - Bounded native-text selection now exists. Embedding-based context reranking,
   representative real-data adequacy checks and handling propagation remain.
-- The configured Collector now retains its SearXNG recipe in the effective
-  run configuration. Provider-response archive retention and representative
-  retrieval adequacy remain separate acceptance; a digest is not a raw archive.
+- The configured Collector retains its SearXNG recipe and completed results
+  retain successful provider responses. Representative retrieval adequacy and
+  successful public-provider acceptance remain open; retaining evidence does
+  not establish that a search service is available or returns sufficient sources.
 - Browser ladder with all-subrequest Tor enforcement, extraction/PDF adapters,
   public/onion discovery acceptance, harvest reader and TAIPAN projection/runtime.
 - Complete C0–C5 acceptance against the PRD. Passing offline model doubles is

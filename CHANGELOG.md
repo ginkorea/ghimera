@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Completed intent results now retain successful search responses, exact queries,
+  parsed hits and transport in `chimera.research-result/2`. Readback binds each
+  response to its accounted fetch and refuses missing, substituted or duplicate
+  discovery evidence. Citing-source candidates must be actual observed hits.
+  Legacy `/1` results remain readable without claiming raw-search retention;
+  snippets still cannot serve as answer citations.
+
 - Collection grading now explicitly evaluates retained evidence sufficiency,
   not the presence of an answer draft, with a distinct recorded prompt revision.
   A real self-hosted-model follow-up accepted sufficient native documentation

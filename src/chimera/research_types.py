@@ -8,6 +8,7 @@ from pydantic import Field, field_validator, model_validator
 
 from chimera.model_types import ModelCallEvidence
 from chimera.models import Document, Harvest, ModelIdentity, Record
+from chimera.reference_types import SearchReference
 from chimera.transport_types import TransportEvidence
 
 Text = Annotated[str, Field(min_length=1)]
@@ -147,6 +148,15 @@ class SearchResponse(ResearchRecord):
     transport: TransportEvidence | None = None
 
 
+class SearchObservation(ResearchRecord):
+    schema_version: Literal["chimera.search-observation/1"] = Field(alias="schema")
+    sequence: Index
+    provider: Text
+    provider_revision: Text
+    query: SearchQuery
+    response: SearchResponse
+
+
 class PlanningRequest(ResearchRecord):
     intent: Text
     questions: tuple[Question, ...]
@@ -180,7 +190,9 @@ class ResearchRound(ResearchRecord):
 
 
 class ResearchResult(ResearchRecord):
-    schema_version: Literal["chimera.research-result/1"] = Field(alias="schema")
+    schema_version: Literal["chimera.research-result/1", "chimera.research-result/2"] = Field(
+        alias="schema"
+    )
     status: Literal["answered", "partial", "failed"]
     stop_reason: Literal["answered", "rounds_exhausted", "budget_exhausted", "failed"]
     harvest: Harvest
@@ -195,6 +207,68 @@ class ResearchResult(ResearchRecord):
     search_provider: str
     search_revision: str
     search_calls: Index
+    search_observations: tuple[SearchObservation, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+
+    @model_validator(mode="after")
+    def retained_discovery(self) -> "ResearchResult":
+        if self.schema_version == "chimera.research-result/1":
+            if self.search_observations:
+                raise ValueError("legacy results do not claim retained search responses")
+            return self
+        attempts = tuple(
+            row
+            for row in self.harvest.ledger
+            if row.event == "fetch" and row.route is not None and row.route.startswith("search:")
+        )
+        rows = {row.sequence: row for row in attempts if row.refusal is None}
+        if {observation.sequence for observation in self.search_observations} != rows.keys() or len(
+            self.search_observations
+        ) != len(rows):
+            raise ValueError("every successful search fetch requires exactly one retained response")
+        policy = self.harvest.receipt.effective_config.research
+        if policy is None or len(attempts) > self.search_calls:
+            raise ValueError("retained discovery requires its research policy and spent calls")
+        ids = {question.id for question in self.questions}
+        for observation in self.search_observations:
+            row = rows[observation.sequence]
+            response = observation.response
+            if (
+                observation.provider != self.search_provider
+                or observation.provider_revision != self.search_revision
+                or row.route != f"search:{observation.provider}@{observation.provider_revision}"
+                or row.query != observation.query.text
+                or not set(observation.query.question_ids) <= ids
+                or not observation.query.text.strip()
+                or len(observation.query.text) > policy.max_query_chars
+                or len(response.hits) > policy.results_per_query
+                or row.bytes_read != len(response.raw)
+                or row.reason != "grounded_search:" + hashlib.sha256(response.raw).hexdigest()
+                or row.search_response_sha256 != response.content_digest()
+                or row.transport != response.transport
+            ):
+                raise ValueError("retained search response must bind its recorded fetch")
+        for row in self.harvest.ledger:
+            reference = row.reference.reference if row.reference is not None else None
+            if not isinstance(reference, SearchReference):
+                continue
+            if not any(
+                reference.query_sequence < observation.sequence < row.sequence
+                and observation.provider == reference.provider
+                and observation.provider_revision == reference.provider_revision
+                and observation.query.text == reference.query
+                and hashlib.sha256(observation.response.raw).hexdigest()
+                == reference.response_sha256
+                and any(
+                    (hit.url, hit.title, hit.snippet)
+                    == (reference.target_url, reference.anchor, reference.snippet)
+                    for hit in observation.response.hits
+                )
+                for observation in self.search_observations
+            ):
+                raise ValueError("citing-source reference must bind a retained actual search hit")
+        return self
 
     @model_validator(mode="after")
     def complete_status(self) -> "ResearchResult":

@@ -56,10 +56,16 @@ not the research answer. Preserve the private result for authorized consumers.
 ## Complete artifacts and reading
 
 The output directory is `0700`; `result.json` and `receipt.json` are `0600`.
-`result.json` is the full `chimera.research-result/1`: original bytes, native text,
+`result.json` is the full `chimera.research-result/2`: original bytes, native text,
 retained duplicate occurrences, source and extraction provenance, verdicts,
 effective configuration, ledger, graph snapshot, questions, rounds, draft/review
-and exact native-text citations. It is not just a journal summary or search snippet.
+and exact native-text citations. Successful discovery responses also retain raw
+bytes, parsed hits, query/question IDs, transport and their ledger bindings.
+It is not just a journal summary or search snippet. These responses count toward
+the serialized-result byte allowance; callers must budget archive space as well
+as fetch bytes. Legacy `/1` archives remain readable without a raw-discovery
+retention guarantee. Failed search requests retain their refusal observations,
+not fabricated successful responses.
 
 Files are fsynced and published without overwrite. The receipt is written last,
 with run ID, result byte count/SHA-256, status and document count. No receipt means

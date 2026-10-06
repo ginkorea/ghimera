@@ -48,6 +48,7 @@ from chimera.research_types import (
     SearchResponse,
 )
 from chimera.search import GroundedSearch
+from chimera.search_history import SearchHistory
 
 T = TypeVar("T", bound=ResearchModelResult)
 R = TypeVar("R", bound=ResearchRecord)
@@ -370,13 +371,14 @@ class ResearchLoop:
         queries: tuple[SearchQuery, ...],
         compiler: ResearchScopeCompiler,
         trace: dict[str, str],
+        history: SearchHistory,
     ) -> tuple[str, ...]:
         semaphore = asyncio.Semaphore(self._policy.search_concurrency)
 
         async def search(query: SearchQuery) -> tuple[str, ...]:
             async with semaphore:
                 try:
-                    response = await self._search.discover(query, session.budget, session.ledger)
+                    response = await history.discover(query)
                     return tuple(hit.url for hit in response.hits)
                 except ChimeraRefused as exc:
                     self._refuse(session, exc.code)
@@ -407,6 +409,7 @@ class ResearchLoop:
             Goal(text=request.intent, seeds=request.seeds), run_id=run_id
         )
         calls, compiler = ModelCalls(session, self._policy), ResearchScopeCompiler(self._policy)
+        history = SearchHistory(self._search, session.budget, session.ledger)
         questions: tuple[Question, ...] = ()
         rounds: list[ResearchRound] = []
         assessment = None
@@ -431,7 +434,7 @@ class ResearchLoop:
                 questions = plan.questions
                 trace = await self._trace_plan(session, plan)
                 compiler.include_reference_hosts(session.reference_hosts)
-                urls = await self._discover(session, plan.queries, compiler, trace)
+                urls = await self._discover(session, plan.queries, compiler, trace, history)
                 if number == 1:
                     allowed_seeds: list[str] = []
                     for seed in request.seeds:
@@ -453,7 +456,7 @@ class ResearchLoop:
                         allow_grade=False,
                     )
                     if collection_stop not in {"failed", "budget_exhausted"}:
-                        cited_urls = await self._cited_by(session, scope, questions)
+                        cited_urls = await self._cited_by(session, scope, questions, history)
                         urls = tuple(dict.fromkeys(urls + cited_urls))
                         remaining = self._policy.max_pages_per_round - (
                             session.budget.fetches - quantum_start
@@ -558,7 +561,7 @@ class ResearchLoop:
         )
         harvest = self._collector.finish(session, stop)
         return ResearchResult(
-            schema="chimera.research-result/1",
+            schema="chimera.research-result/2",
             status="answered"
             if answer is not None
             else "failed"
@@ -577,6 +580,7 @@ class ResearchLoop:
             search_provider=self._search.name,
             search_revision=self._search.revision,
             search_calls=session.budget.search_calls,
+            search_observations=history.observations,
         )
 
     async def _cited_by(
@@ -584,6 +588,7 @@ class ResearchLoop:
         session: CollectionSession,
         scope: Scope,
         questions: tuple[Question, ...],
+        history: SearchHistory,
     ) -> tuple[str, ...]:
         """Query observed sources, concurrently, then score using native parent context.
 
@@ -636,7 +641,7 @@ class ResearchLoop:
         async def search(query: SearchQuery) -> SearchResponse | None:
             async with semaphore:
                 try:
-                    return await self._search.discover(query, session.budget, session.ledger)
+                    return await history.discover(query)
                 except ChimeraRefused as exc:
                     self._refuse(session, exc.code)
                     return None

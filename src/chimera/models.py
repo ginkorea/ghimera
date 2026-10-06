@@ -344,6 +344,9 @@ class LedgerRow(Record):
     transport: TransportEvidence | None = None
     model: ModelIdentity | None = None
     query: str | None = None
+    search_response_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     model_call: ModelCallEvidence | None = None
     extraction: ExtractionEvidence | None = None
     extraction_attempt: HtmlExtractionAttempt | None = Field(
@@ -364,6 +367,14 @@ class LedgerRow(Record):
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if self.search_response_sha256 is not None and (
+            self.event != "fetch"
+            or self.route is None
+            or not self.route.startswith("search:")
+            or self.refusal is not None
+            or self.query is None
+        ):
+            raise ValueError("search response digest requires a successful search fetch")
         if (self.event == "intent_reference") != (self.intent_reference is not None):
             raise ValueError(
                 "intent reference events require their prepared vectors and call binding"

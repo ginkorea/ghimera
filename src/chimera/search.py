@@ -84,6 +84,9 @@ class GroundedSearch(ABC):
                     event="fetch",
                     route=f"search:{self.name}@{self.revision}",
                     query=query.text,
+                    search_response_sha256=response.content_digest()
+                    if response is not None and code is None
+                    else None,
                     refusal=code,
                     bytes_read=size,
                     latency_seconds=max(0.0, budget.clock() - started),
