@@ -62,5 +62,22 @@ max_source_hosts = 80
 allowed_ports = [80, 443]
 content_types = ["text/html", "text/plain", "application/pdf"]
 max_depth = 2
+
+# Optional source expansion; all limits share the original run's budgets.
+# Choose depth and host policy here, not by editing Python.
+[references]
+schema = "chimera.references/1"
+follow_document_references = true
+discover_cited_by = true
+outside_scope = "observed_public"
+denied_hosts = []
+max_hops = 1
+max_parents = 8
+max_candidates_per_parent = 8
+max_queued_per_run = 32
+max_extra_hosts = 16
+cited_by_query_budget = 8
+cited_by_query_template = '"{title}" "{url}" cited by'
+max_query_title_chars = 160
 # For Tor, supply [transport] and [transport.tor] from chimera-tor.toml.
 # For graph capture, supply [graph] from research-graph.toml (profile version 2).

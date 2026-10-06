@@ -16,7 +16,16 @@ from pydantic import ValidationError
 from chimera.config import ChimeraConfig
 from chimera.loop import CollectionSession, GoalLoop
 from chimera.model_types import ModelCallEvidence
-from chimera.models import Document, Goal, LedgerRow, ModelIdentity, Scope, StopReason
+from chimera.models import (
+    Document,
+    Goal,
+    LedgerRow,
+    LinkCandidate,
+    ModelIdentity,
+    Scope,
+    StopReason,
+)
+from chimera.reference_types import ReferenceQuery, ReferenceSource, SearchReference
 from chimera.refusals import ChimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from chimera.research_config import ResearchConfig
 from chimera.research_types import (
@@ -36,6 +45,7 @@ from chimera.research_types import (
     ResearchRound,
     ReviewRequest,
     SearchQuery,
+    SearchResponse,
 )
 from chimera.search import GroundedSearch
 
@@ -119,6 +129,18 @@ class ResearchScopeCompiler:
             return True
         except (ValueError, ValidationError):
             return False
+
+    def include_reference_hosts(self, hosts: tuple[str, ...]) -> None:
+        """Reserve previously admitted reference hosts before new discovery.
+
+        Reference admission already enforces this policy against the current
+        discovery scope. This handoff prevents follow-up rounds spending the
+        same remaining host capacity a second time.
+        """
+        combined = self._hosts | set(hosts)
+        if len(combined) > self._policy.max_source_hosts:
+            raise ChimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+        self._hosts = combined
 
     def scope(self) -> Scope | None:
         if not self._hosts:
@@ -408,6 +430,7 @@ class ResearchLoop:
                 self._validate_plan(plan, questions)
                 questions = plan.questions
                 trace = await self._trace_plan(session, plan)
+                compiler.include_reference_hosts(session.reference_hosts)
                 urls = await self._discover(session, plan.queries, compiler, trace)
                 if number == 1:
                     allowed_seeds: list[str] = []
@@ -420,6 +443,7 @@ class ResearchLoop:
                     urls = tuple(dict.fromkeys(seeds + urls))
                 scope = compiler.scope()
                 collection_stop = "frontier_empty"
+                quantum_start = session.budget.fetches
                 if scope is not None:
                     collection_stop = await self._collector.collect(
                         session,
@@ -428,6 +452,20 @@ class ResearchLoop:
                         fetch_limit=self._policy.max_pages_per_round,
                         allow_grade=False,
                     )
+                    if collection_stop not in {"failed", "budget_exhausted"}:
+                        cited_urls = await self._cited_by(session, scope, questions)
+                        urls = tuple(dict.fromkeys(urls + cited_urls))
+                        remaining = self._policy.max_pages_per_round - (
+                            session.budget.fetches - quantum_start
+                        )
+                        if cited_urls and remaining > 0:
+                            collection_stop = await self._collector.collect(
+                                session,
+                                scope,
+                                (),
+                                fetch_limit=remaining,
+                                allow_grade=False,
+                            )
                 if collection_stop in {"failed", "budget_exhausted"}:
                     rounds.append(
                         ResearchRound(
@@ -540,3 +578,107 @@ class ResearchLoop:
             search_revision=self._search.revision,
             search_calls=session.budget.search_calls,
         )
+
+    async def _cited_by(
+        self,
+        session: CollectionSession,
+        scope: Scope,
+        questions: tuple[Question, ...],
+    ) -> tuple[str, ...]:
+        """Query observed sources, concurrently, then score using native parent context.
+
+        A search result is a candidate citing source, not a verified citation.
+        Queries and fetches charge the same run budget as ordinary discovery.
+        """
+        policy = self._config.references
+        if policy is None or not policy.discover_cited_by:
+            return ()
+        parents: list[tuple[Document, SearchQuery, int]] = []
+        for source in session.evidence_documents:
+            text = policy.cited_by_query_template.format(
+                title=source.extracted.title[: policy.max_query_title_chars],
+                url=source.url,
+            )
+            if len(text) > self._policy.max_query_chars:
+                self._refuse(session, RefusalCode.RESEARCH_CONTRACT, url=source.url)
+                continue
+            if not session.claim_cited_by(source):
+                continue
+            query = SearchQuery(
+                text=text, question_ids=tuple(question.id for question in questions)
+            )
+            sequence = session.ledger.next_sequence
+            session.ledger.append(
+                LedgerRow(
+                    sequence=sequence,
+                    event="reference_query",
+                    url=source.url,
+                    query=text,
+                    reason="candidate_citing_sources",
+                    reference_query=ReferenceQuery(
+                        schema="chimera.reference-query/1",
+                        source=ReferenceSource(
+                            url=source.url,
+                            sha256=source.sha256,
+                            text_sha256=hashlib.sha256(source.extracted.text.encode()).hexdigest(),
+                        ),
+                        parent_hops=session.reference_hops(source.url),
+                        origin_url=session.reference_origin(source.url),
+                        query=text,
+                        provider=self._search.name,
+                        provider_revision=self._search.revision,
+                    ),
+                )
+            )
+            parents.append((source, query, sequence))
+        semaphore = asyncio.Semaphore(self._policy.search_concurrency)
+
+        async def search(query: SearchQuery) -> SearchResponse | None:
+            async with semaphore:
+                try:
+                    return await self._search.discover(query, session.budget, session.ledger)
+                except ChimeraRefused as exc:
+                    self._refuse(session, exc.code)
+                    return None
+
+        batches = await asyncio.gather(*(search(query) for _, query, _ in parents))
+        accepted: list[str] = []
+        for (source, query, sequence), response in zip(parents, batches, strict=True):
+            if response is None:
+                continue
+            proofs: dict[tuple[str, str], SearchReference] = {}
+            for hit in response.hits:
+                try:
+                    proof = SearchReference(
+                        schema="chimera.search-reference/1",
+                        target_url=hit.url,
+                        anchor=hit.title,
+                        snippet=hit.snippet,
+                        provider=self._search.name,
+                        provider_revision=self._search.revision,
+                        query=query.text,
+                        response_sha256=hashlib.sha256(response.raw).hexdigest(),
+                        query_sequence=sequence,
+                    )
+                except ValidationError:
+                    self._refuse(session, RefusalCode.OUT_OF_SCOPE, url=hit.url)
+                    continue
+                proofs[(proof.target_url, proof.anchor)] = proof
+            ranked = await self._collector.score_discovery(
+                session,
+                source,
+                tuple(LinkCandidate(url=url, anchor=anchor) for url, anchor in proofs),
+            )
+            for link in ranked[: policy.max_candidates_per_parent]:
+                queued = await self._collector.queue_reference(
+                    session,
+                    source,
+                    proofs[(link.url, link.anchor)],
+                    link,
+                    scope,
+                    session.reference_hops(source.url),
+                    origin_url=session.reference_origin(source.url),
+                )
+                if queued:
+                    accepted.append(link.url)
+        return tuple(dict.fromkeys(accepted))

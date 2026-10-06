@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Configurable document-reference depth and citing-source discovery through the
+  injected search provider, using native parent context and the existing scorer.
+- Source-bound reference decisions and native Docling URL/hyperlink locators;
+  saved-harvest validation of source hashes, query/provider binding and budgets.
+- Shared reference/discovery host, parent, per-parent candidate and query limits
+  across follow-up rounds, with versioned configuration and an example.
+
 ## 0.2.0 — 2026-10-06
 
 Rebuild of go-spider as a typed, configured standalone library. Distribution

@@ -19,12 +19,15 @@ from chimera.models import (
     Goal,
     Harvest,
     LedgerRow,
+    LinkCandidate,
     ModelIdentity,
     Receipt,
     Scope,
     StopReason,
 )
 from chimera.ports import Extractor, Judge
+from chimera.reference_types import DocumentReference, SearchReference
+from chimera.references import ReferenceBook
 from chimera.refusals import ChimeraRefused, ModelFailure, RefusalCode
 from chimera.scoring import Scorer
 
@@ -41,6 +44,10 @@ class CollectionSession:
         self._documents: dict[str, Document] = {}
         self._frontier: list[tuple[float, str, int]] = []
         self._visited: set[str] = set()
+        self._reference_book = ReferenceBook(budget.config)
+        self._reference_scopes: dict[str, Scope] = {}
+        self._reference_hops: dict[str, int] = {}
+        self._reference_origins: dict[str, str] = {}
         self._window_start, self._window_new, self._last_grade = 0, 0, 0
         self._closed = False
         self._content = (
@@ -54,6 +61,27 @@ class CollectionSession:
     @property
     def evidence_documents(self) -> tuple[Document, ...]:
         return tuple(item for doc in self.documents for item in doc.evidence_sources())
+
+    def reference_hops(self, url: str) -> int:
+        return self._reference_hops.get(url, 0)
+
+    @property
+    def reference_hosts(self) -> tuple[str, ...]:
+        return self._reference_book.extra_hosts
+
+    def reference_origin(self, url: str) -> str | None:
+        return self._reference_origins.get(url)
+
+    def claim_cited_by(self, document: Document) -> bool:
+        """Reserve a source-derived query once, before I/O, across research rounds."""
+        policy = self.budget.config.references
+        if (
+            policy is None
+            or not policy.discover_cited_by
+            or self.reference_hops(document.url) >= policy.max_hops
+        ):
+            return False
+        return self._reference_book.claim_query(document)
 
 
 class GoalLoop:
@@ -143,9 +171,14 @@ class GoalLoop:
             visited.add(url)
             try:
                 budget.check_time()
-                if depth > scope.max_depth or not scope.permits(url):
+                active_scope = session._reference_scopes.get(url, scope)
+                parent_hops = session._reference_hops.get(url, 0)
+                if depth > active_scope.max_depth or not active_scope.permits(url):
                     raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)
-                page = await self._fetcher.fetch(url, scope, budget, ledger)
+                page = await self._fetcher.fetch(url, active_scope, budget, ledger)
+                if parent_hops:
+                    session._reference_hops[page.final_url] = parent_hops
+                    session._reference_origins[page.final_url] = session._reference_origins[url]
                 extraction_started = self._clock()
                 async with asyncio.timeout(budget.remaining_seconds):
                     extracted = await self._extractor.extract(page)
@@ -285,11 +318,34 @@ class GoalLoop:
                         session._window_new += 1
                     if content is not None:
                         content.observe(candidate)
+                    reference_policy = self._config.references
+                    if reference_policy is not None and candidate in session.evidence_documents:
+                        by_target = {item.target_url: item for item in extracted.references}
+                        reference_links = tuple(link for link in ranked if link.url in by_target)
+                        for link in reference_links[: reference_policy.max_candidates_per_parent]:
+                            await self.queue_reference(
+                                session,
+                                candidate,
+                                by_target[link.url],
+                                link,
+                                active_scope,
+                                parent_hops,
+                                origin_url=session.reference_origin(url),
+                            )
+                reference_targets = {item.target_url for item in extracted.references}
                 for link in ranked[: self._config.max_links_per_page]:
+                    if link.url in reference_targets:
+                        continue
                     if link.score >= self._config.min_link_score and link.url not in visited:
                         if graph is not None and document_node_id is not None:
                             await graph.discovered(link.url, document_node_id)
                         heapq.heappush(frontier, (-link.score, link.url, depth + 1))
+                        if parent_hops:
+                            session._reference_scopes.setdefault(link.url, active_scope)
+                            session._reference_hops.setdefault(link.url, parent_hops)
+                            session._reference_origins.setdefault(
+                                link.url, session._reference_origins.get(url, url)
+                            )
             except (ChimeraRefused, TimeoutError) as exc:
                 code = exc.code if isinstance(exc, ChimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
                 if code in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}:
@@ -355,6 +411,74 @@ class GoalLoop:
                     stop = "goal_satisfied"
                     break
         return stop
+
+    async def score_discovery(
+        self,
+        session: CollectionSession,
+        source: Document,
+        links: tuple[LinkCandidate, ...],
+    ) -> tuple[LinkCandidate, ...]:
+        """Use native source context with provider-observed candidates, not invented URLs."""
+        if (
+            session._closed
+            or session.budget.config != self._config
+            or (source not in session.evidence_documents)
+        ):
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        document = source.extracted.model_validate(
+            dict(
+                source.extracted.model_dump(),
+                links=links,
+                references=(),
+            )
+        )
+        return await self._scorer.score(session.goal, document, session.budget, session.ledger)
+
+    async def queue_reference(
+        self,
+        session: CollectionSession,
+        source: Document,
+        proof: DocumentReference | SearchReference,
+        link: LinkCandidate,
+        scope: Scope,
+        parent_hops: int,
+        *,
+        origin_url: str | None = None,
+    ) -> bool:
+        if session._closed or session.budget.config != self._config:
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        if source not in session.evidence_documents or (link.url, link.anchor) != (
+            proof.target_url,
+            proof.anchor,
+        ):
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        selected = session._reference_book.consider(
+            source,
+            proof,
+            link,
+            scope,
+            parent_hops,
+            session._visited,
+            session.ledger,
+            origin_url,
+        )
+        if selected is None:
+            return False
+        session._reference_scopes[link.url] = selected
+        session._reference_hops[link.url] = parent_hops + 1
+        session._reference_origins[link.url] = link.url
+        heapq.heappush(session._frontier, (-link.score, link.url, 0))
+        if session.graph is not None:
+            graph = session.graph
+            parent = await graph.document(
+                source.url,
+                source.raw,
+                source.extracted.text,
+                self._extractor.revision,
+                transport=source.transport,
+            )
+            await graph.discovered(link.url, parent)
+        return True
 
     def finish(self, session: CollectionSession, stop: StopReason) -> Harvest:
         if session._closed or session.budget.config != self._config:

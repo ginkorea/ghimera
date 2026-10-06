@@ -13,6 +13,7 @@ from chimera.document_config import DocumentExtractionConfig
 from chimera.extraction_config import ExtractionConfig
 from chimera.graph_types import GraphConfig
 from chimera.model_config import ModelBindingsConfig
+from chimera.reference_config import ReferenceConfig
 from chimera.research_config import ResearchConfig
 from chimera.scoring_config import ScoringConfig
 from chimera.transport_types import TransportConfig
@@ -122,9 +123,16 @@ class ChimeraConfig(BaseModel):
     dedup: DedupConfig | None = None
     browser: BrowserConfig | None = None
     scoring: ScoringConfig | None = None
+    references: ReferenceConfig | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> "ChimeraConfig":
+        if (
+            self.references is not None
+            and self.references.discover_cited_by
+            and self.research is None
+        ):
+            raise ValueError("cited-by discovery requires a research policy")
         if self.saturation_min_new > self.saturation_window:
             raise ValueError("saturation_min_new cannot exceed saturation_window")
         if self.per_host_concurrency > self.global_concurrency:

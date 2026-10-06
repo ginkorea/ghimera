@@ -15,6 +15,7 @@ from chimera.embedding_types import EncodingCall
 from chimera.extraction_types import ExtractionEvidence
 from chimera.graph_types import GraphSnapshot
 from chimera.model_types import ModelCallEvidence
+from chimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
 from chimera.refusals import RefusalCode
 from chimera.scoring_types import SimilarityEvidence
 from chimera.transport_types import TransportEvidence
@@ -142,9 +143,19 @@ class Extracted(Record):
     extraction: ExtractionEvidence | None = None
     document_parse: DocumentParseEvidence | None = None
     document_layout: DocumentLayout | None = None
+    references: tuple[DocumentReference, ...] = ()
 
     @model_validator(mode="after")
     def text_binding(self) -> "Extracted":
+        eligible = {(link.url, link.anchor) for link in self.links}
+        if any(
+            (item.target_url, item.anchor) not in eligible
+            or not item.matches(self.text, self.document_layout)
+            for item in self.references
+        ):
+            raise ValueError("references must bind observed native text/layout and extracted links")
+        if len({item.target_url for item in self.references}) != len(self.references):
+            raise ValueError("reference URLs must be unique within a document")
         if (
             self.extraction is not None
             and self.extraction.text_sha256 != hashlib.sha256(self.text.encode()).hexdigest()
@@ -303,6 +314,8 @@ class LedgerRow(Record):
         "render",
         "encoding",
         "scoring",
+        "reference",
+        "reference_query",
     ]
     url: str | None = None
     route: str | None = None
@@ -322,9 +335,21 @@ class LedgerRow(Record):
     rendered: RenderResult | None = None
     encoding_call: EncodingCall | None = None
     similarity: SimilarityEvidence | None = None
+    reference: ReferenceDecision | None = None
+    reference_query: ReferenceQuery | None = None
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if (self.event == "reference_query") != (self.reference_query is not None):
+            raise ValueError("reference query events require their explicit source binding")
+        if self.reference_query is not None and (
+            self.url != self.reference_query.source.url or self.query != self.reference_query.query
+        ):
+            raise ValueError("reference query must match its ledger source and query")
+        if (self.event == "reference") != (self.reference is not None):
+            raise ValueError("reference events require their explicit native source decision")
+        if self.reference is not None and self.url != self.reference.reference.target_url:
+            raise ValueError("reference event URL must match its target")
         if (self.event == "encoding") != (self.encoding_call is not None):
             raise ValueError("encoding events require their explicit call evidence")
         if (self.event == "scoring") != (self.similarity is not None):
@@ -379,6 +404,9 @@ class Harvest(Record):
 
     @model_validator(mode="after")
     def consistent(self) -> "Harvest":
+        from chimera.references import validate_reference_ledger
+
+        validate_reference_ledger(self)
         if tuple(row.sequence for row in self.ledger) != tuple(range(len(self.ledger))):
             raise ValueError("ledger sequence must be contiguous")
         if self.receipt.fetches != sum(row.event == "fetch" for row in self.ledger):

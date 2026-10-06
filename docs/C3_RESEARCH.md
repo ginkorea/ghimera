@@ -59,6 +59,8 @@ all follow-up rounds. A round is a collection quantum, not a fresh run.
    collection. Public DNS/address and scope checks still apply at fetch time.
 4. Collection preserves native bytes/text and shared limits. The legacy grade
    cannot terminate an intent run as answered.
+   Configured reference expansion and candidate citing-source queries use that
+   same session and budget; see [Sources-of-sources](C3_REFERENCES.md).
 5. Analyst reports coverage with exact native-text citations. Unresolved or
    contradictory coverage triggers further discovery within the same limits.
 6. A draft must cover every question. The reviewer checks the original intent

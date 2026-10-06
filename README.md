@@ -161,9 +161,15 @@ a separate private-service boundary. Your application owns authorization,
 deployment and storage; no external scheduler or registry is required to import
 or use the library.
 
+Configurable source expansion follows observed document URLs and discovers
+candidate citing sources through your search provider. Depth, host policy and
+budgets live in `[references]`, not in Python. Source hashes and native locators
+are retained; a citing-source search hit is not proof that a citation exists.
+See [reference expansion](docs/C3_REFERENCES.md).
+
 Still required for the complete planned spider: the remaining browser adapters,
 representative publisher/locator acceptance, full PDF/OCR and Marker validation,
-one-hop references/cited-by expansion, real served-model quality/admission and
+real reference/cited-by adequacy, real served-model quality/admission and
 calibrated decision policy and live runtime/egress acceptance.
 The repository's detailed tracker retains those requirements; this release
 does not erase them or describe fixture results as real-world model accuracy.

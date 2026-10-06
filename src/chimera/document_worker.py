@@ -15,6 +15,7 @@ from chimera.documents import DOCX_TYPE, DocumentExtractor, DocumentRequest, che
 from chimera.extraction import ExtractionResponse
 from chimera.html_worker import no_network, public_link
 from chimera.models import Extracted, LinkCandidate
+from chimera.reference_types import DocumentReference, ReferenceSpan
 from chimera.refusals import ChimeraRefused, RefusalCode
 
 
@@ -160,16 +161,50 @@ def parse(request: DocumentRequest) -> Extracted:
         docling_json=layout_json,
         sha256=hashlib.sha256(layout_json.encode()).hexdigest(),
     )
-    candidates = [str(item.hyperlink) for item in document.texts if item.hyperlink is not None]
-    candidates.extend(re.findall(r"https?://[^\s<>\[\]`]+", text))
+    references: list[DocumentReference] = []
+    for match in re.finditer(r"https?://[^\s<>\[\]`]+", text):
+        observed = match.group().rstrip(".,;:)")
+        target = public_link(page.final_url, observed)
+        if target is not None:
+            references.append(
+                DocumentReference(
+                    schema="chimera.document-reference/1",
+                    target_url=target,
+                    anchor="document reference",
+                    kind="native_url",
+                    base_url=page.final_url,
+                    span=ReferenceSpan(
+                        start=match.start(), end=match.start() + len(observed), quote=observed
+                    ),
+                )
+            )
+    for index, item in enumerate(document.texts):
+        if item.hyperlink is None:
+            continue
+        observed = str(item.hyperlink)
+        target = public_link(page.final_url, observed)
+        if target is not None:
+            references.append(
+                DocumentReference(
+                    schema="chimera.document-reference/1",
+                    target_url=target,
+                    anchor=item.text,
+                    kind="docling_hyperlink",
+                    layout_index=index,
+                    observed_url=observed,
+                    base_url=page.final_url,
+                )
+            )
     links: list[LinkCandidate] = []
+    retained: list[DocumentReference] = []
     seen: set[str] = set()
-    for candidate in candidates:
-        target = public_link(page.final_url, candidate.rstrip(".,;:)"))
-        if target is not None and target not in seen:
+    for reference in references:
+        target = reference.target_url
+        if target not in seen:
             seen.add(target)
             if len(links) < config.max_links:
-                links.append(LinkCandidate(url=target, anchor="document reference"))
+                links.append(LinkCandidate(url=target, anchor=reference.anchor))
+                retained.append(reference)
     evidence = DocumentParseEvidence(
         schema="chimera.document-parse/1",
         source_sha256=source_hash,
@@ -193,6 +228,7 @@ def parse(request: DocumentRequest) -> Extracted:
         text=text,
         language=language,
         links=tuple(links),
+        references=tuple(retained),
         document_parse=evidence,
         document_layout=layout,
     )
