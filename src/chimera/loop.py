@@ -9,11 +9,13 @@ from typing import Literal
 
 from chimera.budget import RunBudget
 from chimera.config import ChimeraConfig
+from chimera.content_dedup import ContentIndex
 from chimera.fetch import FetchLadder
 from chimera.graph import DirectoryGraphSink, GraphSink, ResearchGraph
 from chimera.ledger import Ledger
 from chimera.models import (
     Document,
+    DuplicateOccurrence,
     Goal,
     Harvest,
     LedgerRow,
@@ -41,10 +43,17 @@ class CollectionSession:
         self._visited: set[str] = set()
         self._window_start, self._window_new, self._last_grade = 0, 0, 0
         self._closed = False
+        self._content = (
+            ContentIndex(budget.config.dedup) if budget.config.dedup is not None else None
+        )
 
     @property
     def documents(self) -> tuple[Document, ...]:
         return tuple(self._documents.values())
+
+    @property
+    def evidence_documents(self) -> tuple[Document, ...]:
+        return tuple(item for doc in self.documents for item in doc.evidence_sources())
 
 
 class GoalLoop:
@@ -202,31 +211,75 @@ class GoalLoop:
                         break
                 if verdict is not None and verdict.decision == "accept":
                     digest = hashlib.sha256(page.body).hexdigest()
-                    if digest in documents:
-                        original = documents[digest]
-                        documents[digest] = original.model_copy(
-                            update={
-                                "duplicate_urls": original.duplicate_urls + (page.final_url,),
-                            }
+                    candidate = Document(
+                        url=page.final_url,
+                        sha256=digest,
+                        raw=page.body,
+                        extracted=extracted,
+                        verdict=verdict,
+                        transport=page.transport,
+                    )
+                    content = session._content
+                    matched = content.match(candidate) if content is not None else None
+                    drift = content.drift(candidate) if content is not None else None
+                    if drift is not None:
+                        ledger.append(
+                            LedgerRow(
+                                sequence=ledger.next_sequence,
+                                event="content_drift",
+                                url=page.final_url,
+                                reason=drift.reason,
+                                content_drift=drift,
+                            )
+                        )
+                    representative = (
+                        matched.representative_sha256 if matched is not None else digest
+                    )
+                    if representative in documents:
+                        original = documents[representative]
+                        occurrences = original.occurrences
+                        if (
+                            matched is not None
+                            and (candidate.url, digest) != (original.url, original.sha256)
+                            and not any(
+                                (item.url, item.sha256) == (candidate.url, digest)
+                                for item in occurrences
+                            )
+                        ):
+                            occurrence = DuplicateOccurrence.model_validate(
+                                dict(
+                                    candidate.model_dump(exclude={"duplicate_urls", "occurrences"}),
+                                    dedup=matched.model_dump(by_alias=True),
+                                )
+                            )
+                            occurrences += (occurrence,)
+                        urls = tuple(
+                            dict.fromkeys(
+                                original.duplicate_urls
+                                + ((page.final_url,) if page.final_url != original.url else ())
+                            )
+                        )
+                        documents[representative] = Document.model_validate(
+                            dict(
+                                original.model_dump(), duplicate_urls=urls, occurrences=occurrences
+                            )
                         )
                         ledger.append(
                             LedgerRow(
                                 sequence=ledger.next_sequence,
                                 event="duplicate",
                                 url=url,
-                                reason="content_sha256",
+                                reason=matched.reason if matched is not None else "content_sha256",
+                                dedup=matched,
                             )
                         )
                     else:
-                        documents[digest] = Document(
-                            url=page.final_url,
-                            sha256=digest,
-                            raw=page.body,
-                            extracted=extracted,
-                            verdict=verdict,
-                            transport=page.transport,
-                        )
+                        if content is not None:
+                            content.add(candidate)
+                        documents[digest] = candidate
                         session._window_new += 1
+                    if content is not None:
+                        content.observe(candidate)
                 ranked = await self._scorer.score(goal, extracted, budget)
                 for link in ranked[: self._config.max_links_per_page]:
                     if link.score >= self._config.min_link_score and link.url not in visited:

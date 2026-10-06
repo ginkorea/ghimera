@@ -20,6 +20,17 @@ user_agent = "Chimera/0.1 (contact: operator@example.invalid)"
 egress_feature = "crawl_egress"
 model_policy = "self_hosted_only"
 
+[dedup]
+schema = "chimera.dedup/1"
+tracking_parameters = ["fbclid", "gclid"]
+tracking_prefixes = ["utm_"]
+shingle_chars = 5
+max_hamming_distance = 3
+min_near_chars = 100
+max_index_documents = 400
+max_text_chars = 500000
+min_length_ratio = 0.9
+
 [http]
 schema = "chimera.http/1"
 max_response_bytes = 16777216

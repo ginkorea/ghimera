@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from chimera.config import ChimeraConfig, Probability
+from chimera.dedup_types import ContentDrift, DedupEvidence
 from chimera.document_types import DocumentLayout, DocumentParseEvidence
 from chimera.extraction_types import ExtractionEvidence
 from chimera.graph_types import GraphSnapshot
@@ -176,17 +177,30 @@ class ModelIdentity(Record):
     location: Literal["self_hosted", "external", "test_double"]
 
 
-class Document(Record):
+class DocumentSource(Record):
     url: NonEmpty
     sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     raw: bytes
     extracted: Extracted
     verdict: Verdict
-    duplicate_urls: tuple[str, ...] = ()
     transport: TransportEvidence | None = None
 
+    def validate_policy(self, config: ChimeraConfig) -> None:
+        evidence = self.extracted.extraction
+        if evidence is not None and (
+            config.extraction is None
+            or evidence.config_digest != config.extraction.content_digest()
+        ):
+            raise ValueError("extraction must bind the effective run configuration")
+        parsed = self.extracted.document_parse
+        if parsed is not None and (
+            config.document_extraction is None
+            or parsed.config_digest != config.document_extraction.content_digest()
+        ):
+            raise ValueError("document conversion must bind the effective run configuration")
+
     @model_validator(mode="after")
-    def source_binding(self) -> "Document":
+    def source_binding(self) -> "DocumentSource":
         digest = hashlib.sha256(self.raw).hexdigest()
         if self.sha256 != digest:
             raise ValueError("document digest must bind retained source bytes")
@@ -200,6 +214,42 @@ class Document(Record):
             or self.extracted.document_parse.source_url != self.url
         ):
             raise ValueError("document conversion must bind this source occurrence")
+        return self
+
+
+class DuplicateOccurrence(DocumentSource):
+    dedup: DedupEvidence
+
+    @model_validator(mode="after")
+    def dedup_binding(self) -> "DuplicateOccurrence":
+        if self.dedup.current.source_sha256 != self.sha256:
+            raise ValueError("duplicate evidence must bind this source occurrence")
+        if self.verdict.decision != "accept":
+            raise ValueError("duplicate occurrences must have their own acceptance verdict")
+        return self
+
+
+class Document(DocumentSource):
+    duplicate_urls: tuple[str, ...] = ()
+    occurrences: tuple[DuplicateOccurrence, ...] = ()
+
+    def evidence_sources(self) -> tuple["Document", ...]:
+        """Every retained occurrence remains independently citable by its raw digest."""
+        return (self,) + tuple(
+            Document.model_validate(item.model_dump(exclude={"dedup"})) for item in self.occurrences
+        )
+
+    @model_validator(mode="after")
+    def occurrences_binding(self) -> "Document":
+        keys = {(item.url, item.sha256) for item in self.occurrences}
+        if len(keys) != len(self.occurrences):
+            raise ValueError("source occurrences cannot repeat")
+        if any(item.dedup.representative_sha256 != self.sha256 for item in self.occurrences):
+            raise ValueError("duplicate occurrence must name this representative")
+        if self.occurrences and self.duplicate_urls != tuple(
+            dict.fromkeys(item.url for item in self.occurrences if item.url != self.url)
+        ):
+            raise ValueError("duplicate URLs must project the retained source occurrences")
         return self
 
 
@@ -220,6 +270,7 @@ class LedgerRow(Record):
         "review",
         "discovery",
         "extraction",
+        "content_drift",
     ]
     url: str | None = None
     route: str | None = None
@@ -234,6 +285,16 @@ class LedgerRow(Record):
     model_call: ModelCallEvidence | None = None
     extraction: ExtractionEvidence | None = None
     document_parse: DocumentParseEvidence | None = None
+    dedup: DedupEvidence | None = None
+    content_drift: ContentDrift | None = None
+
+    @model_validator(mode="after")
+    def identity_evidence(self) -> "LedgerRow":
+        if self.dedup is not None and self.event != "duplicate":
+            raise ValueError("dedup evidence belongs only to a duplicate observation")
+        if (self.content_drift is not None) != (self.event == "content_drift"):
+            raise ValueError("content drift events require their explicit revision evidence")
+        return self
 
 
 class Receipt(Record):
@@ -255,6 +316,10 @@ class Harvest(Record):
     receipt: Receipt
     graph: GraphSnapshot | None = None
 
+    @property
+    def source_documents(self) -> tuple[Document, ...]:
+        return tuple(item for doc in self.documents for item in doc.evidence_sources())
+
     @model_validator(mode="after")
     def consistent(self) -> "Harvest":
         if tuple(row.sequence for row in self.ledger) != tuple(range(len(self.ledger))):
@@ -272,20 +337,56 @@ class Harvest(Record):
             raise ValueError("accepted count does not match harvest")
         if any(doc.verdict.decision != "accept" for doc in self.documents):
             raise ValueError("only accepted documents belong in harvest")
+        if len({doc.sha256 for doc in self.documents}) != len(self.documents):
+            raise ValueError("cluster representatives must have distinct raw content identities")
         for doc in self.documents:
-            evidence = doc.extracted.extraction
-            extraction_config = self.receipt.effective_config.extraction
-            if evidence is not None and (
-                extraction_config is None
-                or evidence.config_digest != extraction_config.content_digest()
-            ):
-                raise ValueError("extraction must bind the effective run configuration")
-            parsed = doc.extracted.document_parse
-            document_config = self.receipt.effective_config.document_extraction
-            if parsed is not None and (
-                document_config is None or parsed.config_digest != document_config.content_digest()
-            ):
-                raise ValueError("document conversion must bind the effective run configuration")
+            doc.validate_policy(self.receipt.effective_config)
+            if doc.occurrences:
+                from chimera.content_dedup import ContentIndex
+
+                policy = self.receipt.effective_config.dedup
+                if policy is None:
+                    raise ValueError("retained dedup evidence requires its effective policy")
+                index = ContentIndex(policy)
+                index.add(doc)
+                for item in doc.occurrences:
+                    if index.match(item) != item.dedup:
+                        raise ValueError("duplicate similarity evidence does not match its content")
+                    item.validate_policy(self.receipt.effective_config)
+        if any(row.dedup is not None or row.content_drift is not None for row in self.ledger):
+            from chimera.content_dedup import ContentIndex, fingerprint
+
+            identity_policy = self.receipt.effective_config.dedup
+            if identity_policy is None:
+                raise ValueError("identity ledger requires its effective configuration")
+            sources = {(doc.sha256, doc.url): doc for doc in self.source_documents}
+            representatives = {doc.sha256: doc for doc in self.documents}
+            revisions = {
+                (doc.sha256, fingerprint(doc, identity_policy).canonical_url): doc
+                for doc in self.source_documents
+            }
+            for row in self.ledger:
+                if row.dedup is not None:
+                    if row.url is None:
+                        raise ValueError("duplicate ledger must identify its source URL")
+                    current = sources.get((row.dedup.current.source_sha256, row.url))
+                    representative = representatives.get(row.dedup.representative_sha256)
+                    if current is None or representative is None:
+                        raise ValueError("duplicate ledger must reference retained source evidence")
+                    verification = ContentIndex(identity_policy)
+                    verification.add(representative)
+                    if verification.match(current) != row.dedup:
+                        raise ValueError("duplicate ledger similarity evidence was altered")
+                if row.content_drift is not None:
+                    drift = row.content_drift
+                    previous = revisions.get((drift.previous_sha256, drift.canonical_url))
+                    now = revisions.get((drift.current_sha256, drift.canonical_url))
+                    if previous is None or now is None or row.url != now.url:
+                        raise ValueError("drift ledger requires both retained source revisions")
+                    verification = ContentIndex(identity_policy)
+                    verification.add(previous)
+                    if verification.drift(now) != drift:
+                        raise ValueError("content drift evidence was altered")
         graph_enabled = (
             self.receipt.effective_config.graph is not None
             and self.receipt.effective_config.graph.enabled

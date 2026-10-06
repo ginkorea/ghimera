@@ -82,11 +82,11 @@ def citation_for(document: Document, start: int, end: int) -> Citation:
 
 class CitationValidator:
     def __init__(self, documents: tuple[Document, ...]) -> None:
-        self._documents = {doc.sha256: doc for doc in documents}
+        self._documents = {(doc.sha256, doc.url): doc for doc in documents}
 
     def validate(self, citations: tuple[Citation, ...]) -> None:
         for citation in citations:
-            doc = self._documents.get(citation.document_sha256)
+            doc = self._documents.get((citation.document_sha256, citation.source_url))
             if doc is None or not citation.matches(doc):
                 raise ChimeraRefused(RefusalCode.UNSUPPORTED_ANSWER)
 
@@ -398,7 +398,7 @@ class ResearchLoop:
                 planning = PlanningRequest(
                     intent=request.intent,
                     questions=questions,
-                    documents=session.documents,
+                    documents=session.evidence_documents,
                     assessment=assessment,
                     max_questions=self._policy.max_questions,
                     max_queries=self._policy.max_queries_per_round,
@@ -441,7 +441,7 @@ class ResearchLoop:
                     reason = "failed" if collection_stop == "failed" else "budget_exhausted"
                     break
                 evidence = EvidenceRequest(
-                    intent=request.intent, questions=questions, documents=session.documents
+                    intent=request.intent, questions=questions, documents=session.evidence_documents
                 )
                 assessment = await calls.invoke(
                     "assessment",
@@ -449,7 +449,7 @@ class ResearchLoop:
                     evidence,
                     self._analyst.assess,
                 )
-                self._validate_assessment(assessment, questions, session.documents)
+                self._validate_assessment(assessment, questions, session.evidence_documents)
                 rounds.append(
                     ResearchRound(
                         number=number,
@@ -464,7 +464,7 @@ class ResearchLoop:
                 answering = AnswerRequest(
                     intent=request.intent,
                     questions=questions,
-                    documents=session.documents,
+                    documents=session.evidence_documents,
                     assessment=assessment,
                 )
                 candidate = await calls.invoke(
@@ -473,11 +473,11 @@ class ResearchLoop:
                     answering,
                     self._analyst.answer,
                 )
-                self._validate_answer(candidate, questions, session.documents)
+                self._validate_answer(candidate, questions, session.evidence_documents)
                 reviewing = ReviewRequest(
                     intent=request.intent,
                     questions=questions,
-                    documents=session.documents,
+                    documents=session.evidence_documents,
                     answer=candidate,
                 )
                 checked = await calls.invoke(

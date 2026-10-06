@@ -61,31 +61,31 @@ class ContextSelector:
         *,
         required: tuple[Citation, ...] = (),
     ) -> EvidenceContext:
-        by_digest = {doc.sha256: doc for doc in documents}
-        windows: dict[tuple[str, int, int], ContextWindow] = {}
-        chosen: dict[str, Document] = {}
+        by_digest = {(doc.sha256, doc.url): doc for doc in documents}
+        windows: dict[tuple[str, str, int, int], ContextWindow] = {}
+        chosen: dict[tuple[str, str], Document] = {}
         used = 0
         for citation in required:
-            doc = by_digest.get(citation.document_sha256)
+            doc = by_digest.get((citation.document_sha256, citation.source_url))
             if doc is None or not citation.matches(doc):
                 raise ChimeraRefused(RefusalCode.UNSUPPORTED_ANSWER)
-            key = (doc.sha256, citation.start, citation.end)
+            key = (doc.sha256, doc.url, citation.start, citation.end)
             if key in windows:
                 continue
             if used + len(citation.quote) > self._policy.max_chars:
                 raise ChimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
             windows[key] = ContextWindow(citation=citation)
-            chosen[doc.sha256] = doc
+            chosen[(doc.sha256, doc.url)] = doc
             used += len(citation.quote)
         if len(chosen) > self._policy.max_documents:
             raise ChimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         terms = tuple(dict.fromkeys(re.findall(r"\w+", intent)))
         # Required answer citations always precede discretionary context.
         ordered = tuple(chosen.values()) + tuple(
-            doc for doc in documents if doc.sha256 not in chosen
+            doc for doc in documents if (doc.sha256, doc.url) not in chosen
         )
         for doc in ordered:
-            if doc.sha256 not in chosen and len(chosen) >= self._policy.max_documents:
+            if (doc.sha256, doc.url) not in chosen and len(chosen) >= self._policy.max_documents:
                 continue
             text = doc.extracted.text
             starts = {0}
@@ -110,7 +110,7 @@ class ContextSelector:
                 ),
             )
             for start in ranked:
-                count = sum(key[0] == doc.sha256 for key in windows)
+                count = sum(key[:2] == (doc.sha256, doc.url) for key in windows)
                 if count >= self._policy.max_windows_per_document:
                     break
                 room = self._policy.max_chars - used
@@ -118,17 +118,22 @@ class ContextSelector:
                     break
                 end = min(len(text), start + self._policy.window_chars, start + room)
                 if end <= start or any(
-                    key[0] == doc.sha256 and start < key[2] and end > key[1] for key in windows
+                    key[:2] == (doc.sha256, doc.url) and start < key[3] and end > key[2]
+                    for key in windows
                 ):
                     continue
-                windows[(doc.sha256, start, end)] = ContextWindow(
+                windows[(doc.sha256, doc.url, start, end)] = ContextWindow(
                     citation=native_citation(doc, start, end)
                 )
-                chosen[doc.sha256] = doc
+                chosen[(doc.sha256, doc.url)] = doc
                 used += end - start
         metadata: list[ContextDocument] = []
         for doc in chosen.values():
-            spans = sorted((start, end) for digest, start, end in windows if digest == doc.sha256)
+            spans = sorted(
+                (start, end)
+                for digest, url, start, end in windows
+                if (digest, url) == (doc.sha256, doc.url)
+            )
             covered, cursor = 0, 0
             for start, end in spans:
                 covered += max(0, end - max(start, cursor))
@@ -150,6 +155,6 @@ class ContextSelector:
             omitted_documents=tuple(
                 ContextOmission(document_id="doc:" + doc.sha256, reason="context_limit")
                 for doc in documents
-                if doc.sha256 not in chosen
+                if (doc.sha256, doc.url) not in chosen
             ),
         )

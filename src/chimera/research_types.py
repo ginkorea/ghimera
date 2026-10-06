@@ -221,10 +221,10 @@ class ResearchResult(ResearchRecord):
                 or {qid for claim in self.answer.claims for qid in claim.question_ids} != ids
             ):
                 raise ValueError("answered research requires a complete bound support review")
-            documents = {doc.sha256: doc for doc in self.harvest.documents}
+            documents = {(doc.sha256, doc.url): doc for doc in self.harvest.source_documents}
             for claim in self.answer.claims:
                 for citation in claim.citations:
-                    document = documents.get(citation.document_sha256)
+                    document = documents.get((citation.document_sha256, citation.source_url))
                     if document is None or not citation.matches(document):
                         raise ValueError("answer citations must match retained native evidence")
         elif self.answer is not None:

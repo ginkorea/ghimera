@@ -6,8 +6,9 @@ Package: `taipan-chimera`; import: `chimera`; Python **3.11+**.
 Status: **standalone source candidate, not deployed**. Core collection, real
 direct/Tor HTTP, configurable research graphs, the intent research loop and a
 SearXNG HTTP adapter and configured self-hosted model clients are implemented.
-Native HTML extraction with adaptive locators and language detection is implemented.
-Browser/PDF extraction, admitted real-model acceptance, TAIPAN integration and
+Native HTML extraction with adaptive locators/language detection, DOCX tables,
+native PDF text and canonical/near-duplicate grouping are implemented.
+Browser/full-PDF extraction, admitted real-model acceptance, TAIPAN integration and
 full C0–C5 acceptance remain required.
 See [Tor routing](docs/TOR.md) and [intent research](docs/C3_RESEARCH.md).
 See [model control and evidence context](docs/C3_MODELS.md) for model roles.
@@ -22,13 +23,15 @@ not create a remote, publish a package or modify production services.
 ## Development
 
 ```bash
-uv sync --locked --extra html --python 3.11
+uv sync --locked --extra html --extra documents --python 3.11
 bash scripts/gate.sh
 uv build --no-sources
 ```
 
 Read [the specification and tracker](docs/C0.md) and the explicit
 [configuration example](examples/chimera.toml) before extending the core.
+Content identity and retained duplicate evidence are described in
+[C2 deduplication](docs/C2_DEDUP.md).
 Self-hosted models are injected through ports. A local API is normal;
 external model fallback is refused. No model server or weights ship here.
 

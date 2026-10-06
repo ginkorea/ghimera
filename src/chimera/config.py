@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from chimera.dedup_config import DedupConfig
 from chimera.document_config import DocumentExtractionConfig
 from chimera.extraction_config import ExtractionConfig
 from chimera.graph_types import GraphConfig
@@ -116,6 +117,7 @@ class ChimeraConfig(BaseModel):
     models: ModelBindingsConfig | None = None
     extraction: ExtractionConfig | None = None
     document_extraction: DocumentExtractionConfig | None = None
+    dedup: DedupConfig | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> "ChimeraConfig":
