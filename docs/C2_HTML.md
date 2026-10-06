@@ -41,6 +41,38 @@ Each direct/relocated/missing field is recorded. A missing profile body uses
 the configured generic article/main/body selectors and records the fallback.
 It does not silently represent a relocated field as an exact CSS match.
 
+### Persistent locator drift
+
+The example config includes `locator_drift` (`chimera.locator-drift-policy/1`):
+`consecutive_miss_limit=3` and an explicit SQLite contention timeout. A completed
+publisher-profile attempt with any missing configured field counts once; a
+successful direct/relocated attempt resets the streak. Errors without observed
+selector misses do not count as CSS drift. Failed extractions that did observe
+misses still update health. In-flight completions are serialized by short SQLite
+transactions, not by holding a lock over fetching or parsing.
+
+At the bar, the exact host/profile/policy switches to generic extraction on
+subsequent attempts. It never stops collecting solely because of CSS drift.
+The latch survives controller restarts and stays visible until that exact
+profile is changed or explicitly reset with `LocatorHealthStore.reset(profile)`.
+An already admitted attempt may finish; it cannot silently clear the latch.
+No state crosses hosts or profiles. The owner-only state database is separate
+from Scrapling's adaptive storage and refuses foreign, shared or corrupt files.
+
+`locator_health` is retained in extraction evidence and validated against the
+harvest's effective policy. A drifted extraction adds a `policy` ledger row
+with reason `locator_drift`. Inspect every configured profile without changing
+its state using:
+
+```bash
+python -m chimera.locator_health --config /path/to/extraction.toml
+```
+
+The doctor emits JSON and exits 1 for a drifted profile, 0 for healthy profiles.
+It does not expose source bodies or cookies. Missing optional drift policy in
+an existing configuration preserves its original serialization and digest;
+enabling/changing policy is explicit configuration, not a release-time literal.
+
 Configured boilerplate tags are removed without running scripts. The actual
 `DefaultMarkdownGenerator` and `PruningContentFilterLXML` produce fit Markdown
 from that retained fragment; tables and native prose are exercised. Vendor
@@ -87,11 +119,12 @@ child and releases its slot; no broad process-name kill is used.
 
 ## Remaining C2 and full-goal work
 
-- Docling PDF/DOCX structure and table conversion, Marker math fallback and
-  offline model-artifact admission remain required.
-- Locator drift streaks/doctor integration and the PRD's archived-publisher-pair
-  acceptance corpus remain required; one fixture redesign is not its 90% bar.
-- Canonical/near-duplicate identity policy and retained duplicate evidence remain
-  required; this adapter does not equate a canonical hint with proven identity.
+- Docling native/model PDF and DOCX, explicit offline model-artifact admission,
+  canonical/near-duplicate policy and retained occurrences now have dedicated
+  implementations/evidence; see C2_DOCUMENTS.md and C2_DEDUP.md. Marker math
+  fallback and representative document quality remain required.
+- Persistent locator drift and its doctor are implemented. The PRD's archived
+  real-publisher-pair acceptance remains required; fixture redesigns and streak
+  tests do not establish its 90% relocation bar.
 - Browser/Tor full-route acceptance, real encoder/scoring, TAIPAN integration and
   real served-model intent research still require their own evidence.

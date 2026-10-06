@@ -233,6 +233,8 @@ class DocumentSource(Record):
             or evidence.config_digest != config.extraction.content_digest()
         ):
             raise ValueError("extraction must bind the effective run configuration")
+        if evidence is not None and config.extraction is not None:
+            evidence.validate_policy(config.extraction)
         parsed = self.extracted.document_parse
         if parsed is not None and (
             config.document_extraction is None
@@ -421,6 +423,11 @@ class Harvest(Record):
 
         validate_reference_ledger(self)
         for row in self.ledger:
+            if row.extraction is not None:
+                extraction_policy = self.receipt.effective_config.extraction
+                if extraction_policy is None:
+                    raise ValueError("extraction ledger evidence requires its effective policy")
+                row.extraction.validate_policy(extraction_policy)
             if row.source_session is not None:
                 if row.event != "fetch" or row.url is None:
                     raise ValueError("source session metadata belongs to a source fetch")

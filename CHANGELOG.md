@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Persistent exact-publisher/profile locator health with a configured miss bar,
+  generic extraction recovery, restart-safe/concurrent state, read-only doctor
+  output and source/config-bound harvest ledger findings. No publisher-redesign
+  accuracy claim follows from the regression fixtures.
+
 - Explicit offline PDF layout/table/OCR recipe, pinned worker dependencies and
   artifacts, configurable column-aware reading order and reproducible local PDF
   acceptance with source-bound receipts. Representative-corpus and Marker

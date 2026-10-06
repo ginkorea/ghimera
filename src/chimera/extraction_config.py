@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from chimera.locator_types import LocatorDriftPolicy
+
 Positive = Annotated[int, Field(strict=True, gt=0)]
 Text = Annotated[str, Field(min_length=1)]
 
@@ -57,6 +59,7 @@ class ExtractionConfig(BaseModel):
         tuple[Annotated[str, Field(pattern=r"^[a-z][a-z0-9]*$")], ...], Field(min_length=1)
     ]
     profiles: tuple[LocatorProfile, ...] = ()
+    locator_drift: LocatorDriftPolicy | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def coherent(self) -> "ExtractionConfig":

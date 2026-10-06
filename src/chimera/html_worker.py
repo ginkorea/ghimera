@@ -99,7 +99,7 @@ def public_link(base: str, value: str) -> str | None:
         return None
 
 
-def parse(request: ExtractionRequest) -> Extracted:
+def parse(request: ExtractionRequest, events: list[LocatorEvent]) -> Extracted:
     # These actual pinned vendor types are imported only after the worker guard.
     from crawl4ai.content_filter_strategy_lxml import PruningContentFilterLXML
     from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
@@ -115,6 +115,7 @@ def parse(request: ExtractionRequest) -> Extracted:
         (value for value in config.profiles if value.host == urlsplit(page.final_url).hostname),
         None,
     )
+    active_profile = None if request.generic_only else profile
     profile_key = profile.model_dump_json() if profile else "generic"
     locator_key = f"{urlsplit(page.final_url).hostname}:{profile_key}"
     storage_path = config.locator_directory / (
@@ -127,10 +128,9 @@ def parse(request: ExtractionRequest) -> Extracted:
         url=page.final_url,
         encoding="utf-8",
         huge_tree=False,
-        adaptive=profile is not None,
+        adaptive=active_profile is not None,
         storage_args={"storage_file": str(storage_path), "url": page.final_url},
     )
-    events: list[LocatorEvent] = []
 
     def attribute(node: Selector, name: str) -> str | None:
         value: object = node.attrib.get(name)
@@ -171,9 +171,9 @@ def parse(request: ExtractionRequest) -> Extracted:
         return value.strip() if value and value.strip() else None
 
     def field_value(field: Literal["title", "byline", "date"], selector: str | None) -> str | None:
-        if profile is None:
+        if active_profile is None:
             return None
-        node = located(field, selector, profile)
+        node = located(field, selector, active_profile)
         if node is None:
             return None
         if field == "date" and attribute(node, "datetime"):
@@ -181,7 +181,7 @@ def parse(request: ExtractionRequest) -> Extracted:
         value = str(node.get_all_text(separator=" ", strip=True)).strip()
         return value or None
 
-    body = located("body", profile.body, profile) if profile else None
+    body = located("body", active_profile.body, active_profile) if active_profile else None
     selection: Literal["profile", "relocated", "generic"] = "profile"
     if body is None:
         body = generic(config.generic_body_selectors)
@@ -300,17 +300,20 @@ def parse(request: ExtractionRequest) -> Extracted:
 
 def _cmd_extract() -> int:
     sys.addaudithook(no_network)
+    events: list[LocatorEvent] = []
     try:
         with contextlib.redirect_stdout(sys.stderr):
             request = ExtractionRequest.model_validate_json(sys.stdin.buffer.read())
-            result = parse(request)
-        wire = ExtractionResponse(result=result)
+            result = parse(request, events)
+        wire = ExtractionResponse(result=result, locator_events=tuple(events))
     except ChimeraRefused as exc:
-        wire = ExtractionResponse(refusal=exc.code)
+        wire = ExtractionResponse(refusal=exc.code, locator_events=tuple(events))
     except Exception:
         # Third-party parsing is an untrusted boundary. Never leak vendor errors
         # or return their "Error ..." prose as a document or retry using a fetcher.
-        wire = ExtractionResponse(refusal=RefusalCode.EXTRACTION_FAILED)
+        wire = ExtractionResponse(
+            refusal=RefusalCode.EXTRACTION_FAILED, locator_events=tuple(events)
+        )
     sys.stdout.write(wire.model_dump_json())
     return 0
 

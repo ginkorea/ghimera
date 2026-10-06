@@ -194,6 +194,18 @@ class GoalLoop:
                             latency_seconds=max(0.0, self._clock() - extraction_started),
                         )
                     )
+                    if extracted.extraction is not None:
+                        health = extracted.extraction.locator_health
+                        if health is not None and health.generic_only:
+                            ledger.append(
+                                LedgerRow(
+                                    sequence=ledger.next_sequence,
+                                    event="policy",
+                                    url=page.final_url,
+                                    extraction=extracted.extraction,
+                                    reason="locator_drift: publisher uses generic extraction",
+                                )
+                            )
                 document_node_id = None
                 if graph is not None:
                     document_node_id = await graph.document(

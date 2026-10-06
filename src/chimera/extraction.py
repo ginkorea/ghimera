@@ -1,15 +1,19 @@
 """Bounded subprocess extraction: source I/O remains owned by the fetch ladder."""
 
+import asyncio
 import codecs
 import hashlib
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import model_validator
 
 from chimera.config import ChimeraConfig
 from chimera.extraction_config import ExtractionConfig
+from chimera.extraction_types import ExtractionEvidence, LocatorEvent
+from chimera.locator_health import LocatorHealthStore
 from chimera.models import Extracted, Page, Record
 from chimera.passive_worker import PassiveWorker
 from chimera.passive_worker import private_directory as private_directory
@@ -20,11 +24,13 @@ from chimera.refusals import ChimeraRefused, RefusalCode
 class ExtractionRequest(Record):
     config: ExtractionConfig
     page: Page
+    generic_only: bool = False
 
 
 class ExtractionResponse(Record):
     result: Extracted | None = None
     refusal: RefusalCode | None = None
+    locator_events: tuple[LocatorEvent, ...] = ()
 
     @model_validator(mode="after")
     def one_outcome(self) -> "ExtractionResponse":
@@ -38,6 +44,11 @@ class HtmlExtractor:
         if config.extraction is None:
             raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         self.config = config.extraction
+        self._health = (
+            LocatorHealthStore(self.config.locator_directory, self.config.locator_drift)
+            if self.config.locator_drift is not None
+            else None
+        )
         try:
             actual = tuple(
                 version(name) for name in ("scrapling", "crawl4ai", "lingua-language-detector")
@@ -96,13 +107,35 @@ class HtmlExtractor:
         ):
             raise ChimeraRefused(RefusalCode.EXTRACTION_FAILED)
         private_directory(self.config.locator_directory)
-        request = ExtractionRequest(config=self.config, page=page).model_dump_json().encode()
+        profile = next(
+            (p for p in self.config.profiles if p.host == urlsplit(page.final_url).hostname), None
+        )
+        before = (
+            await asyncio.to_thread(self._health.read, profile)
+            if self._health is not None and profile is not None
+            else None
+        )
+        request = (
+            ExtractionRequest(
+                config=self.config, page=page, generic_only=before.generic_only if before else False
+            )
+            .model_dump_json()
+            .encode()
+        )
         response = await self._worker.run(request)
         try:
             wire = ExtractionResponse.model_validate_json(response)
         except ValueError:
             raise ChimeraRefused(RefusalCode.EXTRACTION_FAILED) from None
         if wire.refusal is not None:
+            if self._health is not None and profile is not None:
+                await asyncio.to_thread(
+                    self._health.observe,
+                    profile,
+                    hashlib.sha256(page.body).hexdigest(),
+                    wire.locator_events,
+                    completed=False,
+                )
             raise ChimeraRefused(wire.refusal)
         result = wire.result
         if result is None or result.extraction is None:
@@ -118,6 +151,20 @@ class HtmlExtractor:
             != (page.rendered.html_sha256 if page.rendered is not None else None)
             or len(result.text) > self.config.max_text_chars
             or len(result.links) > self.config.max_links
+            or wire.locator_events != evidence.locators
+            or evidence.locator_health is not None
         ):
             raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        if self._health is not None and profile is not None:
+            health = await asyncio.to_thread(
+                self._health.observe,
+                profile,
+                hashlib.sha256(page.body).hexdigest(),
+                wire.locator_events,
+            )
+            values = evidence.model_dump(by_alias=True)
+            values["locator_health"] = health.model_dump(by_alias=True)
+            revised = result.model_dump(by_alias=True)
+            revised["extraction"] = ExtractionEvidence.model_validate(values)
+            return Extracted.model_validate(revised)
         return result

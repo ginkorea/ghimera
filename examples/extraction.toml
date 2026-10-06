@@ -23,3 +23,8 @@ language_min_margin = 0.1
 generic_body_selectors = ["article", "main", "body"]
 excluded_tags = ["script", "style", "nav", "footer", "aside", "form", "iframe", "noscript"]
 profiles = []
+
+[locator_drift]
+schema = "chimera.locator-drift-policy/1"
+consecutive_miss_limit = 3
+state_timeout_seconds = 5.0
