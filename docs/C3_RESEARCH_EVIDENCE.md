@@ -48,3 +48,23 @@ an intent through this loop. Concrete model/context adapters and full C0–C5
 acceptance remain open as enumerated in `C3_RESEARCH.md`. Prior Tor Project
 HTTP acceptance in `C1_TOR_EVIDENCE.md` is separate transport evidence; it is
 not evidence that an intent-only real-model research run has completed.
+
+## Built artifact
+
+Source candidate: `5468047` on `gompert/chimera-c3-intent-20261006`.
+Offline wheel build, then installation into the separately owned
+`/tmp/chimera-c3-intent-wheel-20261006` environment:
+
+- Wheel: `dist/c3-intent/taipan_chimera-0.1.0-py3-none-any.whl`.
+- SHA-256: `d5d9b3c336cd3b56729b7b85299798db973592b435502d215af5e5d08b44af7d`.
+- Source archive SHA-256:
+  `67ad9bcde48dab2fa5d3aa8dc9f5ef88c45974a3e4fc2d81bd8ceb0a84dc7061`.
+- Installed interpreter: `/tmp/chimera-c3-intent-wheel-20261006/bin/python`,
+  Python **3.11.16**, executed from `/tmp` with `PYTHONPATH` unset.
+- Actual import:
+  `/tmp/chimera-c3-intent-wheel-20261006/lib64/python3.11/site-packages/chimera/__init__.py`.
+- Installed `ResearchLoop`, `SearxSearch`, intent-only request and policy imports
+  validated; no source-checkout import substituted for the wheel.
+
+This installed-artifact check is not a live search or served-model run. Nothing
+was published; the donor's missing licence remains a public-publication check.
