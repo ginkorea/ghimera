@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from chimera.config import ChimeraConfig, Probability
+from chimera.document_types import DocumentLayout, DocumentParseEvidence
 from chimera.extraction_types import ExtractionEvidence
 from chimera.graph_types import GraphSnapshot
 from chimera.model_types import ModelCallEvidence
@@ -125,6 +126,8 @@ class Extracted(Record):
     date: str | None = None
     canonical_url: str | None = None
     extraction: ExtractionEvidence | None = None
+    document_parse: DocumentParseEvidence | None = None
+    document_layout: DocumentLayout | None = None
 
     @model_validator(mode="after")
     def text_binding(self) -> "Extracted":
@@ -133,6 +136,13 @@ class Extracted(Record):
             and self.extraction.text_sha256 != hashlib.sha256(self.text.encode()).hexdigest()
         ):
             raise ValueError("extraction evidence must bind its native text")
+        if (self.document_parse is None) != (self.document_layout is None):
+            raise ValueError("document conversion requires both provenance and retained layout")
+        if self.document_parse is not None and self.document_layout is not None:
+            if self.document_parse.text_sha256 != hashlib.sha256(self.text.encode()).hexdigest():
+                raise ValueError("document conversion must bind native text")
+            if self.document_parse.layout_sha256 != self.document_layout.sha256:
+                raise ValueError("document conversion must bind retained layout")
         return self
 
 
@@ -185,6 +195,11 @@ class Document(Record):
             or self.extracted.extraction.source_url != self.url
         ):
             raise ValueError("extraction evidence must bind this source occurrence")
+        if self.extracted.document_parse is not None and (
+            self.extracted.document_parse.source_sha256 != digest
+            or self.extracted.document_parse.source_url != self.url
+        ):
+            raise ValueError("document conversion must bind this source occurrence")
         return self
 
 
@@ -218,6 +233,7 @@ class LedgerRow(Record):
     query: str | None = None
     model_call: ModelCallEvidence | None = None
     extraction: ExtractionEvidence | None = None
+    document_parse: DocumentParseEvidence | None = None
 
 
 class Receipt(Record):
@@ -264,6 +280,12 @@ class Harvest(Record):
                 or evidence.config_digest != extraction_config.content_digest()
             ):
                 raise ValueError("extraction must bind the effective run configuration")
+            parsed = doc.extracted.document_parse
+            document_config = self.receipt.effective_config.document_extraction
+            if parsed is not None and (
+                document_config is None or parsed.config_digest != document_config.content_digest()
+            ):
+                raise ValueError("document conversion must bind the effective run configuration")
         graph_enabled = (
             self.receipt.effective_config.graph is not None
             and self.receipt.effective_config.graph.enabled

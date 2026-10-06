@@ -9,6 +9,7 @@ max_text_chars = 250000
 max_links = 200
 max_workers = 4
 timeout_seconds = 60.0
+cleanup_timeout_seconds = 5.0
 default_encoding = "utf-8"
 pruning_threshold = 0.35
 pruning_threshold_type = "dynamic"

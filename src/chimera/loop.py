@@ -139,13 +139,14 @@ class GoalLoop:
                 extraction_started = self._clock()
                 async with asyncio.timeout(budget.remaining_seconds):
                     extracted = await self._extractor.extract(page)
-                if extracted.extraction is not None:
+                if extracted.extraction is not None or extracted.document_parse is not None:
                     ledger.append(
                         LedgerRow(
                             sequence=ledger.next_sequence,
                             event="extraction",
                             url=page.final_url,
                             extraction=extracted.extraction,
+                            document_parse=extracted.document_parse,
                             reason=self._extractor.revision,
                             latency_seconds=max(0.0, self._clock() - extraction_started),
                         )

@@ -39,6 +39,7 @@ class ExtractionConfig(BaseModel):
     max_links: Positive
     max_workers: Positive
     timeout_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    cleanup_timeout_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
     default_encoding: Text
     pruning_threshold: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     pruning_threshold_type: Literal["fixed", "dynamic"]

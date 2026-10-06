@@ -1,0 +1,26 @@
+# Explicit native-text baseline; not the PRD's full PDF table/OCR capability.
+schema = "chimera.document-extraction/1"
+worker_python = "/path/to/private/chimera-documents/bin/python"
+work_directory = "/path/to/private/chimera/documents"
+max_input_bytes = 16777216
+max_output_bytes = 8388608
+max_diagnostic_bytes = 65536
+max_text_chars = 500000
+max_links = 200
+max_workers = 2
+timeout_seconds = 120.0
+cleanup_timeout_seconds = 5.0
+max_pages = 200
+max_archive_entries = 2000
+max_expanded_bytes = 67108864
+max_compression_ratio = 1000.0
+cpu_threads = 4
+pdf_pipeline = "native"
+artifacts = []
+do_ocr = false
+do_table_structure = false
+languages = ["en", "zh", "id", "ja", "ko", "ms", "ru"]
+language_max_chars = 8000
+language_min_chars = 30
+language_min_confidence = 0.5
+language_min_margin = 0.1
