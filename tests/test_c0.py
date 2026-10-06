@@ -118,7 +118,7 @@ def test_byte_and_time_budget_stop_before_another_attempt():
 def test_out_of_scope_and_blocked_pages_are_recorded_not_followed():
     result, route = run(
         config(page_budget=5),
-        route=FakeRoute(extra_links=("https://evil.example/x",)),
+        route=FakeRoute(),
         scoped=scope(max_depth=1),
     )
     assert all("example.org" in request.url for request in route.requests)

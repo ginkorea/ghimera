@@ -27,12 +27,10 @@ class FakeRoute(FetchRoute):
         *,
         same_content: bool = False,
         refusal: RefusalCode | None = None,
-        extra_links: tuple[str, ...] = (),
     ) -> None:
         self.requests: list[FetchRequest] = []
         self.same_content = same_content
         self.refusal = refusal
-        self.extra_links = extra_links
 
     async def attempt(self, request: FetchRequest) -> Page:
         self.requests.append(request)
