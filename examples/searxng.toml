@@ -1,0 +1,7 @@
+# Replace this deliberately non-routable placeholder with an approved instance
+# whose JSON format is enabled. This file configures discovery, not an LLM.
+schema = "chimera.searxng/1"
+endpoint = "https://search.example.invalid/search"
+language = "all"
+safe_search = 0
+time_range = ""

@@ -5,16 +5,46 @@ import hashlib
 import heapq
 import time
 from collections.abc import Callable
+from typing import Literal
 
 from chimera.budget import RunBudget
 from chimera.config import ChimeraConfig
 from chimera.fetch import FetchLadder
 from chimera.graph import DirectoryGraphSink, GraphSink, ResearchGraph
 from chimera.ledger import Ledger
-from chimera.models import Document, Goal, Harvest, LedgerRow, Receipt, Scope, StopReason
+from chimera.models import (
+    Document,
+    Goal,
+    Harvest,
+    LedgerRow,
+    ModelIdentity,
+    Receipt,
+    Scope,
+    StopReason,
+)
 from chimera.ports import Extractor, Judge
 from chimera.refusals import ChimeraRefused, RefusalCode
 from chimera.scoring import Scorer
+
+CollectionStop = StopReason | Literal["round_limit"]
+
+
+class CollectionSession:
+    """One run's state, reused by research rounds without resetting its budget."""
+
+    def __init__(
+        self, goal: Goal, budget: RunBudget, ledger: Ledger, graph: ResearchGraph | None
+    ) -> None:
+        self.goal, self.budget, self.ledger, self.graph = goal, budget, ledger, graph
+        self._documents: dict[str, Document] = {}
+        self._frontier: list[tuple[float, str, int]] = []
+        self._visited: set[str] = set()
+        self._window_start, self._window_new, self._last_grade = 0, 0, 0
+        self._closed = False
+
+    @property
+    def documents(self) -> tuple[Document, ...]:
+        return tuple(self._documents.values())
 
 
 class GoalLoop:
@@ -39,7 +69,15 @@ class GoalLoop:
             raise ChimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
         self._clock = clock
 
-    async def run(self, goal: Goal, scope: Scope, *, run_id: str | None = None) -> Harvest:
+    @property
+    def config(self) -> ChimeraConfig:
+        return self._config
+
+    @property
+    def judge_model(self) -> ModelIdentity:
+        return self._judge.model
+
+    async def open(self, goal: Goal, *, run_id: str | None = None) -> CollectionSession:
         budget = RunBudget(self._config, self._clock)
         ledger = Ledger()
         graph = None
@@ -55,13 +93,39 @@ class GoalLoop:
             await graph.start(goal.text)
             for seed in goal.seeds:
                 await graph.discovered(seed, graph.intent_id)
-        documents: dict[str, Document] = {}
-        frontier = [(-1.0, seed, 0) for seed in goal.seeds]
-        heapq.heapify(frontier)
-        visited: set[str] = set()
-        window_start, window_new, last_grade = 0, 0, 0
-        stop: StopReason = "frontier_empty"
+        return CollectionSession(goal, budget, ledger, graph)
+
+    async def run(self, goal: Goal, scope: Scope, *, run_id: str | None = None) -> Harvest:
+        session = await self.open(goal, run_id=run_id)
+        stop = await self.collect(session, scope, goal.seeds)
+        if stop == "round_limit":
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        return self.finish(session, stop)
+
+    async def collect(
+        self,
+        session: CollectionSession,
+        scope: Scope,
+        seeds: tuple[str, ...],
+        *,
+        fetch_limit: int | None = None,
+        allow_grade: bool = True,
+    ) -> CollectionStop:
+        if session._closed or session.budget.config != self._config:
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        if fetch_limit is not None and fetch_limit <= 0:
+            raise ValueError("collection quantum must be positive")
+        goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
+        documents, frontier, visited = session._documents, session._frontier, session._visited
+        for seed in seeds:
+            if seed not in visited:
+                heapq.heappush(frontier, (-1.0, seed, 0))
+        starting_fetches = budget.fetches
+        stop: CollectionStop = "frontier_empty"
         while frontier:
+            if fetch_limit is not None and budget.fetches - starting_fetches >= fetch_limit:
+                stop = "round_limit"
+                break
             _, url, depth = heapq.heappop(frontier)
             if url in visited:
                 continue
@@ -137,7 +201,7 @@ class GoalLoop:
                             verdict=verdict,
                             transport=page.transport,
                         )
-                        window_new += 1
+                        session._window_new += 1
                 ranked = await self._scorer.score(goal, extracted, budget)
                 for link in ranked[: self._config.max_links_per_page]:
                     if link.score >= self._config.min_link_score and link.url not in visited:
@@ -163,12 +227,12 @@ class GoalLoop:
                 if code in {RefusalCode.ADAPTER_CONTRACT, RefusalCode.MODEL_UNAVAILABLE}:
                     stop = "failed"
                     break
-            if budget.fetches - window_start >= self._config.saturation_window:
-                if window_new < self._config.saturation_min_new:
+            if budget.fetches - session._window_start >= self._config.saturation_window:
+                if session._window_new < self._config.saturation_min_new:
                     stop = "saturated"
                     break
-                window_start, window_new = budget.fetches, 0
-            if budget.fetches - last_grade >= self._config.grade_interval:
+                session._window_start, session._window_new = budget.fetches, 0
+            if allow_grade and budget.fetches - session._last_grade >= self._config.grade_interval:
                 try:
                     budget.reserve_judge()
                 except ChimeraRefused:
@@ -195,21 +259,28 @@ class GoalLoop:
                         reason=f"{grade.satisfied}: {grade.reason}",
                     )
                 )
-                last_grade = budget.fetches
+                session._last_grade = budget.fetches
                 if grade.satisfied and grade.confidence >= self._config.grade_threshold:
                     stop = "goal_satisfied"
                     break
+        return stop
+
+    def finish(self, session: CollectionSession, stop: StopReason) -> Harvest:
+        if session._closed or session.budget.config != self._config:
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        session._closed = True
+        goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
         ledger.append(LedgerRow(sequence=ledger.next_sequence, event="stop", reason=stop))
         return Harvest(
             schema="chimera.harvest/1",
             goal=goal,
-            documents=tuple(documents.values()),
+            documents=session.documents,
             ledger=ledger.snapshot(),
             receipt=Receipt(
                 fetches=budget.fetches,
                 bytes_read=budget.bytes_read,
                 judge_calls=budget.judge_calls,
-                accepted_documents=len(documents),
+                accepted_documents=len(session.documents),
                 elapsed_seconds=budget.elapsed,
                 stop_reason=stop,
                 effective_config=self._config,

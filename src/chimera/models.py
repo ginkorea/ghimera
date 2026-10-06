@@ -28,7 +28,7 @@ class Record(BaseModel):
 
 class Goal(Record):
     text: NonEmpty
-    seeds: Annotated[tuple[str, ...], Field(min_length=1)]
+    seeds: tuple[str, ...] = ()
 
     @field_validator("text")
     @classmethod
@@ -161,7 +161,19 @@ class Document(Record):
 class LedgerRow(Record):
     sequence: NonNegative
     event: Literal[
-        "fetch", "fallback", "refusal", "verdict", "grade", "duplicate", "stop", "policy"
+        "fetch",
+        "fallback",
+        "refusal",
+        "verdict",
+        "grade",
+        "duplicate",
+        "stop",
+        "policy",
+        "plan",
+        "assessment",
+        "answer",
+        "review",
+        "discovery",
     ]
     url: str | None = None
     route: str | None = None
@@ -171,6 +183,8 @@ class LedgerRow(Record):
     refusal: RefusalCode | None = None
     reason: str
     transport: TransportEvidence | None = None
+    model: ModelIdentity | None = None
+    query: str | None = None
 
 
 class Receipt(Record):
@@ -201,7 +215,8 @@ class Harvest(Record):
         if self.receipt.bytes_read != sum(row.bytes_read for row in self.ledger):
             raise ValueError("byte spend does not match ledger")
         if self.receipt.judge_calls != sum(
-            row.event in {"verdict", "grade"} for row in self.ledger
+            row.event in {"verdict", "grade", "plan", "assessment", "answer", "review"}
+            for row in self.ledger
         ):
             raise ValueError("judge spend does not match ledger")
         if self.receipt.accepted_documents != len(self.documents):

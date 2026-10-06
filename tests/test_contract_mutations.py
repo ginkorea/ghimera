@@ -13,6 +13,24 @@ import pytest
     "module,old,new,witness",
     (
         (
+            "search",
+            'if "discover" in cls.__dict__:',
+            "if False:",
+            "test_search_conformance.py::test_search_cannot_override_template_or_spend_without_reservation",
+        ),
+        (
+            "search",
+            "budget.reserve_fetch()",
+            "budget.check_time()",
+            "test_search_conformance.py::test_search_cannot_override_template_or_spend_without_reservation",
+        ),
+        (
+            "search",
+            "if len(response.raw) > allowance or len(response.hits) > request.limit:",
+            "if False:",
+            "test_search_conformance.py::test_search_response_limit_is_a_contract_not_a_suggestion",
+        ),
+        (
             "fetch",
             'if "execute" in cls.__dict__:',
             "if False:",

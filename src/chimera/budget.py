@@ -14,6 +14,7 @@ class RunBudget:
         self.fetches = 0
         self.bytes_read = 0
         self.judge_calls = 0
+        self.search_calls = 0
         self._bytes_reserved = 0
 
     @property
@@ -62,3 +63,12 @@ class RunBudget:
         if self.judge_calls >= self.config.judge_budget:
             raise ChimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         self.judge_calls += 1
+
+    def reserve_search(self) -> None:
+        self.check_time()
+        policy = self.config.research
+        if policy is None:
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        if self.search_calls >= policy.query_budget:
+            raise ChimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        self.search_calls += 1

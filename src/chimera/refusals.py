@@ -24,6 +24,9 @@ class RefusalCode(StrEnum):
     TOR_REQUIRED = "tor_required"
     TOR_UNAVAILABLE = "tor_unavailable"
     INVALID_ONION_ADDRESS = "invalid_onion_address"
+    RESEARCH_CONTRACT = "research_contract"
+    UNSUPPORTED_ANSWER = "unsupported_answer"
+    SEARCH_UNAVAILABLE = "search_unavailable"
 
 
 REFUSALS = MappingProxyType(
@@ -55,6 +58,15 @@ REFUSALS = MappingProxyType(
         ),
         RefusalCode.INVALID_ONION_ADDRESS: (
             "Onion address encoding, version or checksum is invalid."
+        ),
+        RefusalCode.RESEARCH_CONTRACT: (
+            "Research plan, scope or evidence violates its pinned contract."
+        ),
+        RefusalCode.UNSUPPORTED_ANSWER: (
+            "Answer support was not established; retain unresolved questions."
+        ),
+        RefusalCode.SEARCH_UNAVAILABLE: (
+            "Grounded search failed; never invent replacement source URLs."
         ),
     }
 )

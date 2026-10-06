@@ -3,7 +3,7 @@
 schema = "chimera.graph-config/1"
 enabled = true
 profile = "research"
-profile_version = "1"
+profile_version = "2"
 identity_namespace = "my-research"
 projection_mode = "research"
 sink_path = "/tmp/chimera-research-graphs"
@@ -18,6 +18,14 @@ handling_labels = ["research-run"]
 [[roles]]
 name = "intent"
 kind = "research_intent"
+
+[[roles]]
+name = "question"
+kind = "research_question"
+
+[[roles]]
+name = "query"
+kind = "search_query"
 
 [[roles]]
 name = "source"
@@ -35,7 +43,21 @@ kind = "entity"
 name = "discovered"
 predicate = "discovered_from"
 source_roles = ["source"]
-target_roles = ["intent", "document"]
+target_roles = ["intent", "document", "query"]
+semantic = false
+
+[[relations]]
+name = "question_for"
+predicate = "question_for"
+source_roles = ["question"]
+target_roles = ["intent"]
+semantic = false
+
+[[relations]]
+name = "query_for"
+predicate = "query_for"
+source_roles = ["query"]
+target_roles = ["question"]
 semantic = false
 
 [[relations]]

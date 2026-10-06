@@ -3,8 +3,11 @@
 Goal-directed collection, repurposed from the owner's go-spider repository.
 Package: `taipan-chimera`; import: `chimera`; Python **3.11+**.
 
-Status: **C0 source candidate only**. Real fetch/extraction routes, served-model
-bindings and TAIPAN integration follow in C1–C5; none are deployed by this lane.
+Status: **standalone source candidate, not deployed**. Core collection, real
+direct/Tor HTTP, configurable research graphs, the intent research loop and a
+SearXNG HTTP adapter are implemented. Browser/PDF extraction, concrete served-
+model bindings, TAIPAN integration and full C0–C5 acceptance remain required.
+See [Tor routing](docs/TOR.md) and [intent research](docs/C3_RESEARCH.md).
 
 Chimera remains its own repository. TAIPAN consumes a pinned release and wheel
 digest, like judais-lobi. g39 hosting is the working assumption; this lane does

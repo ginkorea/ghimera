@@ -1,0 +1,66 @@
+# Example policy, not an active deployment. Select an approved egress host and
+# explicit self-hosted models separately; the package launches neither.
+schema = "chimera.config/1"
+page_budget = 400
+byte_budget = 2147483648
+wall_seconds = 3600.0
+judge_budget = 500
+grade_interval = 20
+grade_threshold = 0.9
+saturation_window = 20
+saturation_min_new = 1
+max_links_per_page = 10
+min_link_score = 0.5
+request_timeout_seconds = 30.0
+per_host_delay_seconds = 2.0
+per_host_concurrency = 2
+global_concurrency = 4
+global_requests_per_second = 1.0
+retry_budget = 2
+impersonation_profile = "chrome145"
+user_agent = "Chimera/0.1 (contact: operator@example.invalid)"
+egress_feature = "crawl_egress"
+model_policy = "self_hosted_only"
+
+[http]
+schema = "chimera.http/1"
+max_response_bytes = 16777216
+max_header_bytes = 65536
+max_redirects = 5
+retry_backoff_seconds = 1.0
+retry_jitter_seconds = 0.5
+robots_cache_seconds = 3600.0
+conditional_cache_entries = 100
+
+[http.network]
+schema = "chimera.network/1"
+mode = "public"
+
+[http.robots]
+schema = "chimera.robots/1"
+mode = "honor"
+product_token = "Chimera"
+
+[research]
+schema = "chimera.research/1"
+max_rounds = 8
+max_questions = 12
+max_queries_per_round = 4
+query_budget = 32
+results_per_query = 8
+search_concurrency = 2
+max_pages_per_round = 20
+max_query_chars = 500
+max_answer_chars = 20000
+max_model_input_chars = 240000
+min_answer_confidence = 0.9
+require_distinct_reviewer = true
+source_policy = "grounded_public"
+allowed_hosts = []
+denied_hosts = []
+max_source_hosts = 80
+allowed_ports = [80, 443]
+content_types = ["text/html", "text/plain", "application/pdf"]
+max_depth = 2
+# For Tor, supply [transport] and [transport.tor] from chimera-tor.toml.
+# For graph capture, supply [graph] from research-graph.toml (profile version 2).

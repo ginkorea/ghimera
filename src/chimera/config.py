@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from chimera.graph_types import GraphConfig
+from chimera.research_config import ResearchConfig
 from chimera.transport_types import TransportConfig
 
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
@@ -108,6 +109,7 @@ class ChimeraConfig(BaseModel):
     http: HttpPolicy | None = None
     graph: GraphConfig | None = None
     transport: TransportConfig | None = None
+    research: ResearchConfig | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> "ChimeraConfig":
