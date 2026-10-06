@@ -67,8 +67,10 @@ Private local artifact: `gate-work/search-live-20261006/search-results.json`.
 The artifact records the actual interpreter and both outcomes. The public
 [instance registry](https://searx.space/) guided endpoint selection but its
 availability listing does not establish JSON API availability. Successful
-public-provider discovery and a complete real intent-to-reviewed-answer run
-remain open; the refusal trial does not close them.
+public-provider discovery was still open at this first trial; the refusal trial
+does not close it. A later successful configured-provider and actual native
+collection trial is recorded in [C3_LIVE_DISCOVERY.md](C3_LIVE_DISCOVERY.md).
+A complete real intent-to-reviewed-answer run remains open.
 
 A separate, bounded ordinary-HTML observation on the same two configured
 services returned HTTP 302 to `/captcha` and HTTP 418 with a script-cookie

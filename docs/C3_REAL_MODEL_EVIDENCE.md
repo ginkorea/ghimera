@@ -143,6 +143,9 @@ a scoped invocation capability in memory, never the general platform credential.
   with independent judgments; the bounded failure/repair above is not calibration.
 - Run the full intent research loop with real search and a pinned semantic
   encoder, over a representative source/language corpus rather than three docs.
+  The subsequent [live discovery check](C3_LIVE_DISCOVERY.md) fetched and parsed
+  actual search hits; it does not yet join those operations to the complete
+  model/semantic-scoring/review loop.
 - Establish independent reviewer/judge binding and calibrated decision policy;
   successful same-model review is only a diagnostic.
 - Complete the original publisher/locator, browser, PDF/OCR/Marker, checkpoint
