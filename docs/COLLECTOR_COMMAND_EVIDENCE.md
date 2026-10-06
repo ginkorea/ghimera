@@ -66,7 +66,16 @@ Offline local build uses `uv build --offline --no-sources`, the interpreter abov
 `UV_CACHE_DIR=/tmp/chimera-c0-uv-cache` and `--out-dir gate-work/command-dist`.
 The command, archive, entry-point and collector wheel payloads are checked against
 the source; the source archive includes the guide, examples and behavioral tests.
-Build artifacts exclude gate-work, environments, bytecode and Git metadata.
+The first archive audit found the worktree's root `.git` pointer file in the
+source tarball: checking only `.git/` directories had missed it. Explicit Hatch
+exclusions now cover the pointer file as well as directories, task artifacts,
+environments and bytecode. Both rebuilt archives are checked for those entries.
+This packaging-only repair follows the full source gate above; lock and release
+metadata checks and a real offline rebuild/audit verify the changed build rules.
+Release metadata acceptance passed **3 in 0.62 seconds** on the source interpreter
+above; the offline lock still resolves 137 packages. Both final archive audits
+passed, and the entry-point/command/archive/collector payloads plus this evidence
+document match their source bytes.
 
 A fresh base-dependency-only environment is
 `/tmp/chimera-c0-20261006/gate-work/command-wheel-env`. Its Python **3.11.16** imports
@@ -75,6 +84,9 @@ unset. No TAIPAN SDK, pytest, Scrapling, Crawl4AI, Patchright, Docling or torch 
 installed there. CLI help works without optional extras; malformed-argument
 diagnostics do not echo their values. Optional workers remain required for actual
 configured collection and are not claimed to be present in this wheel-only check.
+That installed reader also replayed the controlled-server run's full archive:
+status answered, one retained original document and a matching native citation.
+This is the protocol-fixture result, not an independently established answer.
 
 These are unpublished local snapshots with development metadata 0.2.0; they must
 not replace published 0.2.0 files. No tag, remote rename, push, publication, model
