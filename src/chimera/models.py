@@ -1,0 +1,187 @@
+"""Immutable validated package objects; TAIPAN dataclass conversion belongs to C4."""
+
+import ipaddress
+from typing import Annotated, Literal
+from urllib.parse import urlsplit
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from chimera.config import ChimeraConfig, Probability
+from chimera.refusals import RefusalCode
+
+NonEmpty = Annotated[str, Field(min_length=1)]
+NonNegative = Annotated[int, Field(strict=True, ge=0)]
+StopReason = Literal["frontier_empty", "budget_exhausted", "saturated", "goal_satisfied", "failed"]
+
+
+class Record(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        serialize_by_alias=True,
+        ser_json_bytes="base64",
+        val_json_bytes="base64",
+    )
+
+
+class Goal(Record):
+    text: NonEmpty
+    seeds: Annotated[tuple[str, ...], Field(min_length=1)]
+
+    @field_validator("text")
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("goal text must not be blank")
+        return value
+
+
+class Scope(Record):
+    allowed_hosts: Annotated[tuple[str, ...], Field(min_length=1)]
+    max_depth: NonNegative
+    content_types: Annotated[tuple[str, ...], Field(min_length=1)]
+
+    @field_validator("allowed_hosts")
+    @classmethod
+    def exact_public_hosts(cls, hosts: tuple[str, ...]) -> tuple[str, ...]:
+        for host in hosts:
+            if host != host.lower() or host.endswith(".") or ":" in host or "/" in host:
+                raise ValueError("allowed_hosts must be lowercase exact DNS names without ports")
+            if "." not in host or any(
+                not label or not label.replace("-", "").isalnum() for label in host.split(".")
+            ):
+                raise ValueError("allowed_hosts must be exact public DNS names")
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("IP literals are not permitted as crawl hosts")
+        return hosts
+
+    def permits(self, url: str) -> bool:
+        try:
+            parts = urlsplit(url)
+            return (
+                parts.scheme in {"http", "https"}
+                and parts.username is None
+                and parts.password is None
+                and parts.hostname in self.allowed_hosts
+                and parts.port in {None, 80, 443}
+                and not any(ord(char) < 33 for char in url)
+            )
+        except ValueError:
+            return False
+
+
+class LinkCandidate(Record):
+    url: NonEmpty
+    anchor: str = ""
+    score: Probability = 0.0
+
+
+class FetchRequest(Record):
+    url: NonEmpty
+    max_bytes: Annotated[int, Field(strict=True, gt=0)]
+    timeout_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+
+
+class Page(Record):
+    url: NonEmpty
+    final_url: NonEmpty
+    status: Annotated[int, Field(strict=True, ge=100, le=599)]
+    content_type: NonEmpty
+    body: bytes
+
+
+class Extracted(Record):
+    title: NonEmpty
+    text: NonEmpty
+    language: NonEmpty
+    links: tuple[LinkCandidate, ...] = ()
+
+
+class Verdict(Record):
+    decision: Literal["accept", "reject", "hold"]
+    kind: NonEmpty
+    publisher: NonEmpty
+    language: NonEmpty
+    reason: NonEmpty
+    date: str | None = None
+
+    @field_validator("reason", "kind", "publisher", "language")
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("verdict fields must not be blank")
+        return value
+
+
+class Grade(Record):
+    satisfied: bool
+    confidence: Probability
+    reason: NonEmpty
+
+
+class ModelIdentity(Record):
+    model_id: NonEmpty
+    revision: NonEmpty
+    location: Literal["self_hosted", "external", "test_double"]
+
+
+class Document(Record):
+    url: NonEmpty
+    sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    raw: bytes
+    extracted: Extracted
+    verdict: Verdict
+    duplicate_urls: tuple[str, ...] = ()
+
+
+class LedgerRow(Record):
+    sequence: NonNegative
+    event: Literal["fetch", "fallback", "refusal", "verdict", "grade", "duplicate", "stop"]
+    url: str | None = None
+    route: str | None = None
+    status: int | None = None
+    bytes_read: NonNegative = 0
+    latency_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0
+    refusal: RefusalCode | None = None
+    reason: str
+
+
+class Receipt(Record):
+    fetches: NonNegative
+    bytes_read: NonNegative
+    judge_calls: NonNegative
+    accepted_documents: NonNegative
+    elapsed_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    stop_reason: StopReason
+    effective_config: ChimeraConfig
+    judge: ModelIdentity
+
+
+class Harvest(Record):
+    schema_version: Literal["chimera.harvest/1"] = Field(alias="schema")
+    goal: Goal
+    documents: tuple[Document, ...]
+    ledger: tuple[LedgerRow, ...]
+    receipt: Receipt
+
+    @model_validator(mode="after")
+    def consistent(self) -> "Harvest":
+        if tuple(row.sequence for row in self.ledger) != tuple(range(len(self.ledger))):
+            raise ValueError("ledger sequence must be contiguous")
+        if self.receipt.fetches != sum(row.event == "fetch" for row in self.ledger):
+            raise ValueError("fetch count does not match ledger")
+        if self.receipt.bytes_read != sum(row.bytes_read for row in self.ledger):
+            raise ValueError("byte spend does not match ledger")
+        if self.receipt.judge_calls != sum(
+            row.event in {"verdict", "grade"} for row in self.ledger
+        ):
+            raise ValueError("judge spend does not match ledger")
+        if self.receipt.accepted_documents != len(self.documents):
+            raise ValueError("accepted count does not match harvest")
+        if any(doc.verdict.decision != "accept" for doc in self.documents):
+            raise ValueError("only accepted documents belong in harvest")
+        return self
