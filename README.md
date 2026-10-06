@@ -81,9 +81,11 @@ private, origin-scoped clearance and guarded content verification; this is
 not a universal CAPTCHA solver. See [challenge recovery](docs/CHALLENGES.md).
 It also admits hash-pinned owned PDF/DOCX seeds before intent planning through
 the same document pipeline. See [local inputs](docs/LOCAL_INPUTS.md).
-Neither addition is in the immutable `ghimera==0.3.0` artifacts. Automatic
-organizational entity extraction and graph-driven network expansion remain
-planned, not claims of the existing research graph.
+Configured [semantic extraction](docs/SEMANTIC_EXTRACTION.md) now produces
+native entity/relationship observations as source-local model assertions.
+These additions are not in the immutable `ghimera==0.3.0` artifacts. Alias
+resolution, graph-driven network expansion and organizational accuracy
+acceptance remain open, not claims of the existing research graph.
 
 ## Installation
 

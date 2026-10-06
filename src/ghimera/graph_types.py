@@ -165,6 +165,20 @@ class GraphEdge(GraphRecord):
     handling_labels: tuple[Text, ...]
     confidence: Confidence | None = None
     evidence: tuple[GraphEvidence, ...] = ()
+    claim_status: Literal["model_asserted"] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    model_request_sha256: Digest | None = Field(default=None, exclude_if=lambda v: v is None)
+    valid_from: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    valid_to: str | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @model_validator(mode="after")
+    def asserted(self) -> "GraphEdge":
+        if (self.claim_status is None) != (self.model_request_sha256 is None):
+            raise ValueError("model assertions require their producing request digest")
+        if (self.valid_from is not None or self.valid_to is not None) and self.claim_status is None:
+            raise ValueError("extraction dates require an explicit model assertion")
+        return self
 
 
 class GraphBatch(GraphRecord):

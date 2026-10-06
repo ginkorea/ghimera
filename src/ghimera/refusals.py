@@ -33,10 +33,14 @@ class RefusalCode(StrEnum):
     SEARCH_UNAVAILABLE = "search_unavailable"
     SOURCE_SESSION_UNAVAILABLE = "source_session_unavailable"
     LOCAL_INPUT_FAILED = "local_input_failed"
+    SEMANTIC_EXTRACTION_FAILED = "semantic_extraction_failed"
 
 
 REFUSALS = MappingProxyType(
     {
+        RefusalCode.SEMANTIC_EXTRACTION_FAILED: (
+            "Semantic extraction lacks valid native mentions, citations or configured ontology."
+        ),
         RefusalCode.LOCAL_INPUT_FAILED: (
             "Local seed is unreadable, outside its admission policy, changed or unpinned."
         ),

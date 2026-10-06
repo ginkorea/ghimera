@@ -17,6 +17,7 @@ class RunBudget:
         self.search_calls = 0
         self.challenge_attempts = 0
         self.local_inputs = 0
+        self.semantic_calls = 0
         self.local_input_bytes = 0
         self.encoding_calls = 0
         self.encoding_chars = 0
@@ -98,6 +99,13 @@ class RunBudget:
         allowance = self.reserve_bytes(min(policy.max_input_bytes, remaining))
         self.local_inputs += 1
         return allowance
+
+    def reserve_semantic(self) -> None:
+        policy = self.config.semantics
+        if policy is None or self.semantic_calls >= policy.max_calls_per_run:
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        self.reserve_judge()
+        self.semantic_calls += 1
 
     def reserve_encoding(self, input_chars: int) -> None:
         self.check_time()

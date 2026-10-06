@@ -12,18 +12,20 @@ implements the complete workflow.
   intent API/command before planning; PDF parsing with retained source bytes and layout; direct/Tor
   collection; intent planning/search/coverage/answer review; exact native-text
   citations; configurable graph vocabulary and source-bound edge validation;
-  durable research transactions and complete result archives.
-- Not implemented: model-backed entity/relation extraction into the organizational graph;
-  alias resolution with evidence-preserving merge/split; graph-state-driven
+  durable research transactions and complete result archives. Unreleased source
+  now includes model-backed native entity/relationship extraction and projection
+  as explicitly model-asserted, source-local observations.
+- Not implemented: alias resolution with evidence-preserving merge/split; graph-state-driven
   planning and persistent multi-run expansion; platform graph publication.
 - Not accepted: representative Chinese organization charts, scanned charts,
   diagram topology, entity completeness, temporal hierarchy correctness or
   independent entailment quality. OCR text alone does not recover connecting
   arrows or reporting structure.
 
-The current graph records intent, questions, queries, sources and document
-versions. Its ability to validate a supplied semantic edge must not be described
-as automatic production of those edges.
+The graph records intent, questions, queries, sources and document versions.
+Configured semantic extraction now produces source-local mention/relationship
+observations. This does not equate mentions across sources, corroborate a claim,
+interpret chart arrows or give the planner a graph-driven expansion frontier.
 
 ## Intended reusable workflow
 
@@ -92,7 +94,9 @@ that an entire organization has been exhaustively mapped.
    implemented in unreleased source; bounded actual PDF/DOCX parser and composed
    command/archive checks pass. Real organization-corpus acceptance remains open.
 2. Semantic entity/relation extraction over a real organization PDF, including
-   page coverage, omissions and visual-chart limitations.
+   page coverage, omissions and visual-chart limitations: source implementation
+   and controlled native-document checks exist; real organization-PDF/model
+   accuracy acceptance remains open.
 3. Alias/temporal identity and conflict preservation across real documents.
 4. Graph-driven research over a small explicitly scoped organizational subtree,
    proving that findings change its next research frontier.
@@ -105,3 +109,5 @@ document-research path, not this organizational-network capability.
 
 Local-input configuration, provenance and current acceptance boundaries are in
 [LOCAL_INPUTS.md](LOCAL_INPUTS.md).
+Semantic-stage configuration, evidence and remaining quality boundaries are in
+[SEMANTIC_EXTRACTION.md](SEMANTIC_EXTRACTION.md).

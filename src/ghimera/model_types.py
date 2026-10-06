@@ -8,6 +8,9 @@ from ghimera.model_config import ModelServiceConfig
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Count = Annotated[int, Field(strict=True, ge=0)]
+ModelTask = Literal[
+    "plan", "assessment", "answer", "review", "verdict", "grade", "semantic_extract"
+]
 
 
 class TokenUsage(BaseModel):
@@ -27,7 +30,7 @@ class ModelCallEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.model-call/1"] = Field(alias="schema")
     service: ModelServiceConfig
-    task: Literal["plan", "assessment", "answer", "review", "verdict", "grade"]
+    task: ModelTask
     prompt_revision: str
     request_sha256: Digest
     response_sha256: Digest

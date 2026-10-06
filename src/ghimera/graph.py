@@ -10,7 +10,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import ValidationError
 
@@ -206,6 +206,10 @@ class ResearchGraph:
         *,
         evidence: tuple[GraphEvidence, ...] = (),
         confidence: float | None = None,
+        claim_status: Literal["model_asserted"] | None = None,
+        model_request_sha256: str | None = None,
+        valid_from: str | None = None,
+        valid_to: str | None = None,
     ) -> GraphEdge:
         relation = next((item for item in self._config.relations if item.name == rule), None)
         if relation is None:
@@ -222,6 +226,10 @@ class ResearchGraph:
             handling_labels=self._config.handling_labels,
             confidence=confidence,
             evidence=evidence,
+            claim_status=claim_status,
+            model_request_sha256=model_request_sha256,
+            valid_from=valid_from,
+            valid_to=valid_to,
         )
         return skeleton.model_copy(update={"id": "edge:" + skeleton.content_digest()})
 
@@ -290,6 +298,8 @@ class ResearchGraph:
                 or edge.confidence is None
                 or edge.confidence < self._config.semantic_min_confidence
             ):
+                raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
+            if edge.claim_status is not None and not relation.semantic:
                 raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
             for evidence in edge.evidence:
                 doc = nodes.get(evidence.document_id)

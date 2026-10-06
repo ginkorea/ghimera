@@ -205,6 +205,21 @@ def endpoint():
                     "questions": [{"id": "q1", "text": "Which port?"}],
                     "queries": [{"text": "port report", "question_ids": ["q1"]}],
                 }
+            elif task == "semantic_extract":
+                window = payload["evidence"]["windows"][0]
+                result = {
+                    "mentions": [
+                        {
+                            "key": "place1",
+                            "role": "entity",
+                            "surface": "Taiwan",
+                            "citation_id": window["citation_id"],
+                            "occurrence": 0,
+                            "confidence": 0.95,
+                        }
+                    ],
+                    "relations": [],
+                }
             elif task == "verdict":
                 result = {
                     "decision": "accept",

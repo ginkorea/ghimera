@@ -19,8 +19,9 @@ from ghimera.graph_types import GraphSnapshot
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.model_types import ModelCallEvidence
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
-from ghimera.refusals import RefusalCode
+from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.scoring_types import SimilarityEvidence
+from ghimera.semantic_types import SemanticWindow
 from ghimera.source_session_types import SourceSessionUse
 from ghimera.transport_types import TransportEvidence
 
@@ -379,6 +380,7 @@ class LedgerRow(Record):
         "reference_query",
         "challenge",
         "local_input",
+        "semantic",
     ]
     url: str | None = None
     route: str | None = None
@@ -415,9 +417,20 @@ class LedgerRow(Record):
     )
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    semantic_window: SemanticWindow | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if self.event == "semantic":
+            if (self.semantic_window is None) == (self.refusal is None):
+                raise ValueError("semantic calls require a source-bound projection or refusal")
+            if self.semantic_window is not None and (
+                self.url != self.semantic_window.source_url
+                or self.model_call != self.semantic_window.proposal.model_call
+            ):
+                raise ValueError("semantic ledger metadata must match its window and call")
+        elif self.semantic_window is not None:
+            raise ValueError("semantic projections belong to their call observation")
         if self.event == "local_input":
             if (self.local_input is None) == (self.refusal is None):
                 raise ValueError("local import needs snapshot evidence or a refusal")
@@ -634,7 +647,7 @@ class Harvest(Record):
         if self.receipt.bytes_read != sum(row.bytes_read for row in self.ledger):
             raise ValueError("byte spend does not match ledger")
         if self.receipt.judge_calls != sum(
-            row.event in {"verdict", "grade", "plan", "assessment", "answer", "review"}
+            row.event in {"verdict", "grade", "plan", "assessment", "answer", "review", "semantic"}
             for row in self.ledger
         ):
             raise ValueError("judge spend does not match ledger")
@@ -761,4 +774,10 @@ class Harvest(Record):
                         raise ValueError(
                             "local graph documents must retain their input observation"
                         )
+        from ghimera.semantic_graph import validate_harvest
+
+        try:
+            validate_harvest(self)
+        except GhimeraRefused:
+            raise ValueError("semantic source projection cannot be revalidated") from None
         return self

@@ -80,6 +80,9 @@ class Collector:
             extractor=extractor,
             scorer=scorer,
             judge=models.judge,
+            semantic_extractor=models.service(config.semantics.model_role)
+            if config.semantics is not None
+            else None,
         )
         search_type = SearxHtmlSearch if config.search.response_format == "html" else SearxSearch
         research = ResearchLoop(

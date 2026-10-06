@@ -293,6 +293,9 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
         for row in inputs:
             if row.local_input is not None:
                 row.local_input.validate_policy(input_policy)
+        from ghimera.semantic_graph import validate_rows
+
+        validate_rows(header.config, tuple(rows))
         summary_path = path / "summary.json"
         if summary_path.exists() or summary_path.is_symlink():
             summary = JournalSummary.model_validate_json(
@@ -314,7 +317,8 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
                 or receipt.encoding_chars != sum(call.input_chars for call in encoding)
                 or receipt.judge_calls
                 != sum(
-                    row.event in {"verdict", "grade", "plan", "assessment", "answer", "review"}
+                    row.event
+                    in {"verdict", "grade", "plan", "assessment", "answer", "review", "semantic"}
                     for row in rows
                 )
                 or not rows

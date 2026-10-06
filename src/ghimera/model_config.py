@@ -129,3 +129,13 @@ class ModelBindingsConfig(BaseModel):
     analyst: ModelServiceConfig
     reviewer: ModelServiceConfig
     judge: ModelServiceConfig
+
+    def service(
+        self, role: Literal["planner", "analyst", "reviewer", "judge"]
+    ) -> ModelServiceConfig:
+        return {
+            "planner": self.planner,
+            "analyst": self.analyst,
+            "reviewer": self.reviewer,
+            "judge": self.judge,
+        }[role]

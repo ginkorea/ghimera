@@ -21,6 +21,7 @@ from ghimera.reference_config import ReferenceConfig
 from ghimera.research_config import ResearchConfig
 from ghimera.scoring_config import ScoringConfig
 from ghimera.search_config import SearxConfig
+from ghimera.semantic_types import SemanticConfig
 from ghimera.source_session_types import SourceSessionPolicy, validate_sessions
 from ghimera.transport_types import TransportConfig
 
@@ -137,10 +138,47 @@ class GhimeraConfig(BaseModel):
     local_inputs: LocalInputConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    semantics: SemanticConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
         validate_sessions(self.source_sessions)
+        if self.semantics is not None:
+            graph, models, semantic = self.graph, self.models, self.semantics
+            if graph is None or not graph.enabled or not graph.capture_semantics or models is None:
+                raise ValueError(
+                    "semantic extraction requires enabled semantic graph and bound models"
+                )
+            roles = {item.name for item in graph.roles}
+            if not set(semantic.entity_roles) <= roles or set(semantic.entity_roles) & {
+                "intent",
+                "source",
+                "document",
+                "question",
+                "query",
+            }:
+                raise ValueError("semantic extraction requires explicit entity roles")
+            rules = {item.name: item for item in graph.relations}
+            mention = rules.get(semantic.mention_rule)
+            if (
+                mention is None
+                or not mention.semantic
+                or "document" not in mention.source_roles
+                or not set(semantic.entity_roles) <= set(mention.target_roles)
+            ):
+                raise ValueError("semantic mention rule must bind documents to configured entities")
+            for name in semantic.relation_rules:
+                relation = rules.get(name)
+                if (
+                    relation is None
+                    or not relation.semantic
+                    or not set(relation.source_roles + relation.target_roles)
+                    <= set(semantic.entity_roles)
+                ):
+                    raise ValueError("semantic relations require the configured entity ontology")
+            service = models.service(semantic.model_role)
+            if semantic.window_chars > min(service.context.max_chars, service.context.window_chars):
+                raise ValueError("semantic window exceeds the bound model's native context")
         if self.local_inputs is not None and (
             self.document_extraction is None
             or self.local_inputs.max_input_bytes > self.document_extraction.max_input_bytes

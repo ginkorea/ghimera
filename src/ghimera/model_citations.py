@@ -7,7 +7,7 @@ only, not an archive-wide lookup or a similarity-based quotation repair.
 
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from ghimera.models import Record
 from ghimera.refusals import GhimeraRefused, RefusalCode
@@ -52,7 +52,7 @@ class ReferencedAnswer(Record):
     confidence: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 
 
-def referenced_output(output: type[Record]) -> type[Record]:
+def referenced_output(output: type[BaseModel]) -> type[BaseModel]:
     if output is Assessment:
         return ReferencedAssessment
     if output is AnswerDraft:
@@ -73,7 +73,7 @@ class ModelCitationResolver:
             result.append(citation)
         return tuple(result)
 
-    def content(self, raw: str, output: type[Record]) -> str:
+    def content(self, raw: str, output: type[BaseModel]) -> str:
         if output is Assessment:
             response = ReferencedAssessment.model_validate_json(raw)
             # Application validation still enforces supported status, question

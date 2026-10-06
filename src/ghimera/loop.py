@@ -38,6 +38,7 @@ from ghimera.reference_types import DocumentReference, SearchReference
 from ghimera.references import ReferenceBook
 from ghimera.refusals import GhimeraRefused, ModelFailure, RefusalCode
 from ghimera.scoring import Scorer
+from ghimera.semantic_graph import SemanticExtractor, SemanticStage
 
 CollectionStop = StopReason | Literal["round_limit"]
 
@@ -58,6 +59,7 @@ class CollectionSession:
         self._reference_origins: dict[str, str] = {}
         self._window_start, self._window_new, self._last_grade = 0, 0, 0
         self._closed = False
+        self._semantic_sources: set[str] = set()
         self._content = (
             ContentIndex(budget.config.dedup) if budget.config.dedup is not None else None
         )
@@ -101,6 +103,7 @@ class GoalLoop:
         extractor: Extractor,
         scorer: Scorer,
         judge: Judge,
+        semantic_extractor: SemanticExtractor | None = None,
         graph_sink: GraphSink | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -112,6 +115,11 @@ class GoalLoop:
         scorer.validate_config(config)
         self._judge = judge
         self._graph_sink = graph_sink
+        if (config.semantics is not None) != (semantic_extractor is not None):
+            raise ValueError("semantic policy and extractor must be supplied together")
+        self._semantics = (
+            SemanticStage(config, semantic_extractor) if semantic_extractor is not None else None
+        )
         if judge.model.location == "external":
             raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
         self._clock = clock
@@ -522,6 +530,14 @@ class GoalLoop:
                 session._window_new += 1
             if content is not None:
                 content.observe(candidate)
+            if self._semantics is not None:
+                if graph is None or document_node_id is None:
+                    raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+                if document_node_id not in session._semantic_sources:
+                    await self._semantics.extract(
+                        goal.text, candidate, document_node_id, graph, budget, ledger
+                    )
+                    session._semantic_sources.add(document_node_id)
             reference_policy = self._config.references
             if (
                 reference_policy is not None

@@ -109,6 +109,42 @@ def test_configured_collector_completes_real_adapter_chain_and_keeps_native_evid
     assert all(headers.get("Authorization") is None for _, headers in source_site[3])
 
 
+def test_concrete_collector_wires_required_semantics_and_keeps_assertion_provenance(
+    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint
+):
+    from tests.test_semantic_graph import configured as semantic_config
+
+    semantic = semantic_config(tmp_path)
+    cfg, _ = assembled(
+        tmp_path,
+        source_site,
+        search_endpoint,
+        model_endpoint,
+        encoder_endpoint,
+        graph=semantic.graph,
+        semantics=semantic.semantics,
+    )
+    result = asyncio.run(
+        Collector(cfg, source_resolver=ResolverFixture()).run(
+            "find ports", run_id="semantic-composed"
+        )
+    )
+    assert result.status == "answered"
+    row = next(row for row in result.harvest.ledger if row.event == "semantic")
+    assert row.semantic_window.entities[0].evidence.quote == "Taiwan"
+    assert row.model_call.service == cfg.models.analyst
+    assert result.harvest.receipt.judge_calls == len(model_endpoint[1]) == 6
+    assert all(edge.claim_status == "model_asserted" for edge in row.semantic_window.edges)
+    assert ResearchResult.model_validate_json(result.model_dump_json()) == result
+    broken = result.model_dump()
+    native_graph = broken["harvest"]["graph"]
+    native_graph["edges"] = [
+        edge for edge in native_graph["edges"] if edge.get("claim_status") is None
+    ]
+    with pytest.raises(ValidationError):
+        ResearchResult.model_validate(broken)
+
+
 def test_same_configured_collector_gets_fresh_goal_state_and_charges_each_run(
     tmp_path,
     source_site,

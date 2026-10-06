@@ -24,7 +24,7 @@ from pydantic import (
 )
 
 from ghimera.config import GhimeraConfig
-from ghimera.evidence_context import ContextSelector, EvidenceContext
+from ghimera.evidence_context import ContextSelector, EvidenceContext, native_citation
 from ghimera.model_citations import ModelCitationResolver, referenced_output
 from ghimera.model_config import ModelServiceConfig
 from ghimera.model_http import (
@@ -34,7 +34,7 @@ from ghimera.model_http import (
     ModelWireFailure,
     PinnedModelHttp,
 )
-from ghimera.model_types import ModelCallEvidence, TokenUsage
+from ghimera.model_types import ModelCallEvidence, ModelTask, TokenUsage
 from ghimera.models import Document, Extracted, Goal, Grade, ModelIdentity, Record, Verdict
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from ghimera.research_types import (
@@ -49,15 +49,31 @@ from ghimera.research_types import (
     ResearchPlan,
     ReviewRequest,
 )
+from ghimera.semantic_types import SEMANTIC_PROMPT_REVISION, SemanticConfig, SemanticProposal
 from ghimera.transport import Resolver
 
-Task = Literal["plan", "assessment", "answer", "review", "verdict", "grade"]
-T = TypeVar("T", ResearchPlan, Assessment, AnswerDraft, AnswerReview, Verdict, Grade)
+Task = ModelTask
+T = TypeVar(
+    "T", ResearchPlan, Assessment, AnswerDraft, AnswerReview, Verdict, Grade, SemanticProposal
+)
 PROMPT_REVISION = "chimera-research-prompts/1"
 CITATION_PROMPT_REVISION = "chimera-research-prompts/2"
 GRADE_PROMPT_REVISION = "chimera-collection-grade/2"
 INSTRUCTIONS = MappingProxyType(
     {
+        "semantic_extract": (
+            "Extract native named entity mentions and explicitly asserted relationships only "
+            "from this one supplied source window. Use only configured entity roles and "
+            "relation rules. Copy exact surface text and supplied citation_id; occurrence "
+            "is the zero-based exact occurrence of that surface within the window. "
+            "Relations name mention keys in this response and cite the supplied window. "
+            "Do not equate offices with their holders, merge aliases, translate names, "
+            "infer affiliation from co-occurrence, or add facts from memory. Unknown "
+            "validity dates are null; do not infer them from collection time. "
+            "Claims are model assertions, not corroborated facts. Diagram-only relationships "
+            "without explicit retained text are unsupported. Return empty lists when none "
+            "are supported and obey the supplied mention/relation limits."
+        ),
         "plan": (
             "Decompose the original intent into questions and grounded-search queries. "
             "Preserve supplied question IDs and text exactly. Do not propose URLs. "
@@ -145,6 +161,7 @@ class PromptInput(Record):
     max_questions: int | None = None
     max_queries: int | None = None
     max_query_chars: int | None = None
+    semantic_recipe: SemanticConfig | None = None
 
     def packet(self) -> str:
         return self.model_dump_json(
@@ -218,7 +235,9 @@ class SelfHostedModel:
                 schema="chimera.model-call/1",
                 service=service,
                 task=prompt.task,
-                prompt_revision=GRADE_PROMPT_REVISION
+                prompt_revision=SEMANTIC_PROMPT_REVISION
+                if prompt.task == "semantic_extract"
+                else GRADE_PROMPT_REVISION
                 if prompt.task == "grade"
                 else CITATION_PROMPT_REVISION
                 if service.citation_format == "template_ids"
@@ -340,6 +359,38 @@ class SelfHostedModel:
     ) -> EvidenceContext:
         return self._context.build(intent, documents, required=required)
 
+    async def semantic_extract(
+        self, intent: str, document: Document, start: int, end: int, policy: SemanticConfig
+    ) -> SemanticProposal:
+        if (
+            self._config.semantics != policy
+            or self._config.models is None
+            or self._service != self._config.models.service(policy.model_role)
+            or not 0 <= start < end <= len(document.extracted.text)
+            or end - start > policy.window_chars
+        ):
+            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+        # Exactly one sequential native window, without discretionary context.
+        selector = ContextSelector(
+            self._service.context.model_copy(
+                update={
+                    "max_documents": 1,
+                    "max_windows_per_document": 1,
+                }
+            )
+        )
+        return await self._invoke(
+            PromptInput(
+                task="semantic_extract",
+                intent=intent,
+                semantic_recipe=policy,
+                evidence=selector.build(
+                    intent, (document,), required=(native_citation(document, start, end),)
+                ),
+            ),
+            SemanticProposal,
+        )
+
     async def plan(self, request: PlanningRequest) -> ResearchPlan:
         return await self._invoke(
             PromptInput(
@@ -454,6 +505,14 @@ class SelfHostedModels:
     analyst: SelfHostedModel
     reviewer: SelfHostedModel
     judge: SelfHostedModel
+
+    def service(self, role: Literal["planner", "analyst", "reviewer", "judge"]) -> SelfHostedModel:
+        return {
+            "planner": self.planner,
+            "analyst": self.analyst,
+            "reviewer": self.reviewer,
+            "judge": self.judge,
+        }[role]
 
     @classmethod
     def from_config(

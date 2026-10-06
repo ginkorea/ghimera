@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Configured native entity/relationship extraction through the existing
+  self-hosted completion client and graph owner. Exact source-local mentions,
+  model-asserted edges, held low-confidence relations, sequential window/tail
+  coverage and shared model-budget accounting survive validated archive replay.
+  Alias resolution, graph-driven expansion and real-model organization quality
+  acceptance remain open; fixture checks are not accuracy results.
 - Explicit owned local PDF/DOCX seeds for the configured intent API and command,
   admitted before planning under a versioned root/file/byte policy and pinned
   original hash. Content-addressed source identities and path-free source

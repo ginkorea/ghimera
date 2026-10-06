@@ -1,0 +1,20 @@
+# Non-active addition to the main collector configuration's [semantics] block.
+# Reuse a separately configured self-hosted model role; no server is launched.
+schema = "ghimera.semantics/1"
+model_role = "analyst"
+window_chars = 1500
+max_windows_per_document = 64
+max_calls_per_run = 256
+max_mentions_per_window = 32
+max_relations_per_window = 32
+entity_roles = ["person", "organization", "position"]
+relation_rules = ["reports_to", "holds_position", "member_of"]
+mention_rule = "mentions"
+
+# Also declare those roles and semantic rules under [graph]. Extend the mentions
+# rule to document -> person/organization/position. Bind reports_to to organization
+# -> organization, holds_position to person -> position, member_of to person ->
+# organization. Keep offices distinct from office holders. The existing intent
+# research graph still needs its question/query/discovery/retrieval trace rules.
+# max_batch_bytes must fit one bounded semantic projection; the selected model's
+# context.window_chars and context.max_chars must accommodate window_chars.

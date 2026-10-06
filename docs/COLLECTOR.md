@@ -95,6 +95,7 @@ other files:
 | Reference/citing-source expansion | `[references]`; [references](C3_REFERENCES.md) |
 | Persistent locator health and generic reparse | `[extraction.locator_drift]` and `[extraction.recovery]`; [HTML](C2_HTML.md) |
 | Incremental graph | `[graph]`, `[[graph.roles]]`, `[[graph.relations]]`; [graph](RESEARCH_GRAPH.md) |
+| Native entity/relation extraction (unreleased) | `[semantics]` with the configured semantic graph; [semantic extraction](SEMANTIC_EXTRACTION.md) |
 | Durable run observations | `[journal]`; [journal](RUN_JOURNAL.md) |
 
 The graph example includes question/query roles and relations needed by intent
