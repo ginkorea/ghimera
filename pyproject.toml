@@ -3,11 +3,21 @@ requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "taipan-chimera"
-version = "0.1.0"
-description = "Goal-directed collection through injected fetch and served-model ports"
+name = "go-spider"
+version = "0.2.0"
+description = "Intent-driven web research with bounded collection and source-bound evidence"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Josh Gompert" }]
 requires-python = ">=3.11"
 dependencies = ["pydantic==2.13.5", "curl_cffi==0.16.3", "protego==0.7.0"]
+
+[project.urls]
+Homepage = "https://github.com/ginkorea/spider"
+Repository = "https://github.com/ginkorea/spider"
+Issues = "https://github.com/ginkorea/spider/issues"
+Changelog = "https://github.com/ginkorea/spider/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 browser = ["patchright==1.63.0"]

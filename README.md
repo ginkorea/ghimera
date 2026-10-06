@@ -1,53 +1,199 @@
-# Chimera
+# go-spider
 
-Goal-directed collection, repurposed from the owner's go-spider repository.
-Package: `taipan-chimera`; import: `chimera`; Python **3.11+**.
+Intent-driven web research: discover sources, collect native-language documents,
+follow evidence gaps, and return a source-cited answer—or an explicit partial
+result when the evidence or budget is insufficient.
 
-Status: **standalone source candidate, not deployed**. Core collection, real
-direct/Tor HTTP, configurable research graphs, the intent research loop and a
-SearXNG HTTP adapter and configured self-hosted model clients are implemented.
-Configured self-hosted embeddings, native shelf-vector relevance observations,
-semantic/keyword frontier ranking and audited shared encoding budgets are implemented.
-Native HTML extraction with adaptive locators/language detection, DOCX tables,
-native PDF text and canonical/near-duplicate grouping are implemented.
-Isolated Patchright rendering is implemented as a configured HTTP-ladder
-transformer; remaining browser adapters and public corpus acceptance stay open.
-Full-PDF extraction, admitted real-model acceptance, TAIPAN integration and
-full C0–C5 acceptance remain required.
-See [Tor routing](docs/TOR.md) and [intent research](docs/C3_RESEARCH.md).
-See [browser rendering](docs/C1_BROWSER.md) for network isolation and provenance.
-See [model control and evidence context](docs/C3_MODELS.md) for model roles.
-See [embedding relevance and scoring](docs/C3_EMBEDDING_SCORING.md) for the
-explicit encoder/reference binding and the remaining real-model acceptance.
-See [native HTML extraction](docs/C2_HTML.md) for the pinned parser extra.
-See [offline document conversion](docs/C2_DOCUMENTS.md) for DOCX/native PDF and
-the remaining full PDF/Marker acceptance.
+**v0.2.0 is a standalone Python library release.** The distribution stays
+`go-spider`; its redesigned implementation is imported as `chimera`. It is not
+backward-compatible with v0.1.0's `spider_core` API or `spider` CLI. Python
+**3.11+** is required. Some planned browser/document adapters and public-corpus
+acceptance are still in progress; see the limitations below.
 
-Chimera remains its own repository. TAIPAN consumes a pinned release and wheel
-digest, like judais-lobi. The existing repository remote is
-`https://github.com/ginkorea/spider`; this lane does not create a remote, push,
-publish a package or modify production services.
+go-spider is an independent library. Supply your own search provider,
+self-hosted model services, extraction policies and graph profile.
+
+## What is implemented
+
+- **Goal and intent loops.** Collect from configured seeds with `GoalLoop`, or
+  use `ResearchLoop` to plan questions, discover sources through an injected
+  search provider, assess gaps, and draft/review an evidence-cited answer.
+- **Local models first.** Configured, already-served self-hosted models supply
+  planning, judging, answer generation, review and embeddings. Compatible HTTP
+  interfaces are supported; no external LLM fallback, model weights or model
+  server are included.
+- **Bounded direct and Tor HTTP.** Native v3 onion collection and open-web
+  requests through Tor share the same route policy. Public-network validation,
+  pinned DNS for direct requests, per-hop redirect checks, robots policy,
+  concurrency/rate limits and retries are accounted for before returning data.
+  A failed Tor route never silently falls back to direct access.
+- **Isolated JavaScript rendering.** Patchright runs in a network-isolated
+  Linux worker; the parent fetch boundary handles its permitted HTTP resources,
+  redirects and accounting. Browser binaries are explicitly configured and
+  verified, not downloaded on import. Camoufox/nodriver adapters remain planned.
+- **Native extraction.** Configured HTML fit-Markdown, adaptive locator
+  profiles, language detection, DOCX tables and native PDF text preserve raw
+  bytes beside extracted native-language text. Full PDF/OCR and Marker
+  acceptance remain open.
+- **Relevance and deduplication.** An injected self-hosted encoder scores
+  native text/windows and observed links against pinned reference vectors.
+  Keyword/semantic ranking, encoding budgets, canonical URL handling, SHA-256
+  and configured near-duplicate grouping retain source-qualified evidence.
+  Similarity is not a calibrated probability or a substitute for a verdict.
+- **Graphs and audit records.** A configurable research graph starts with the
+  intent. Typed harvests, receipts and ledger rows retain configuration,
+  transport, model-call spend, omissions, verdicts, refusals and source hashes.
+  Operational discovery traces are distinct from evidence-supported claims.
+
+Every candidate reaching acceptance receives an accept/reject/hold verdict. A hold gets a
+second model pass. An intent is marked answered only after the coverage,
+citations, review and configured confidence checks pass; budget exhaustion is
+not silently presented as success.
+
+## Installation
+
+Use a dedicated virtual environment:
+
+```bash
+python3.11 -m venv .venv
+. .venv/bin/activate
+python -m pip install 'go-spider==0.2.0'
+```
+
+Install the adapters you intend to configure:
+
+```bash
+python -m pip install 'go-spider[html,documents,browser]==0.2.0'
+```
+
+The base package contains the typed core, HTTP/Tor transport, research/search
+and self-hosted model/embedding clients. Extras add pinned HTML, document and
+Patchright dependencies. They do **not** install an inference server, browser
+binary, Tor daemon or PDF/OCR model artifacts. The isolated browser adapter
+requires Linux, a compatible explicitly supplied Chromium binary and Bubblewrap;
+other operating systems have not been accepted for that adapter.
+
+## Configuration and API
+
+Operational choices are typed, versioned configuration—not Python constants:
+scope, budgets, endpoints, model identities/revisions, thresholds, private
+worker directories, browser provenance and direct/Tor policy. Parse once with
+`ChimeraConfig.from_toml(Path(...))`; inject the matching collaborators.
+
+The [examples](https://github.com/ginkorea/spider/tree/v0.2.0/examples) are non-active templates. Replace invalid endpoints,
+contact information, private paths and model identifiers; reference-vector
+fixtures are **not** production relevance data. Adapter blocks belong in the
+main configuration under their named keys, not as unrelated root settings.
+Supply any model credential separately in memory, only to its authorized exact
+endpoint; configuration is not credential or destination approval.
+
+Download the starter configuration, or copy it from the repository:
+
+```bash
+curl --fail --proto '=https' --tlsv1.2 \
+  https://raw.githubusercontent.com/ginkorea/spider/v0.2.0/examples/chimera.toml \
+  --output chimera.toml
+```
+
+An entirely offline smoke example, using explicitly named test doubles:
+
+```python
+import asyncio
+from pathlib import Path
+
+from chimera import ChimeraConfig, Goal, GoalLoop, Harvest, Scope
+from chimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
+from chimera.fetch import FetchLadder
+
+
+async def main() -> None:
+    config = ChimeraConfig.from_toml(Path("chimera.toml"))
+    collector = GoalLoop(
+        config=config,
+        fetcher=FetchLadder((FakeRoute(),)),
+        extractor=FakeExtractor(),
+        scorer=KeywordScorer(),
+        judge=FakeJudge(),
+    )
+    result = await collector.run(
+        Goal(text="ports", seeds=("https://example.org/start",)),
+        Scope(allowed_hosts=("example.org",), max_depth=1, content_types=("text/html",)),
+    )
+    # Reader revalidates retained sources, provenance and receipt accounting.
+    restored = Harvest.model_validate_json(result.model_dump_json())
+    print(restored.receipt.stop_reason)
+
+
+asyncio.run(main())
+```
+
+This example makes no network or real model calls and proves no research
+accuracy. For actual collection bind `CurlRoute`, configured extraction and
+scoring adapters, and the self-hosted judge through their ports. For intent-only
+research, inject those into `ResearchLoop` alongside `GroundedSearch`,
+`IntentPlanner`, `ResearchAnalyst` and `AnswerReviewer`, then call
+`run(ResearchRequest(intent="your research question"))`. `SearxSearch` is the
+implemented search adapter. The following guides cover the concrete wiring:
+
+| Area | Guide |
+|---|---|
+| Intent, discovery, coverage and answer review | [Intent research](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C3_RESEARCH.md) |
+| Model roles, credentials and native evidence context | [Self-hosted models](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C3_MODELS.md) |
+| Reference vectors, encoding and frontier ranking | [Embedding scoring](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C3_EMBEDDING_SCORING.md) |
+| Open web and native onion routing | [Tor policy](https://github.com/ginkorea/spider/blob/v0.2.0/docs/TOR.md) |
+| Browser isolation, resources and redirects | [Browser rendering](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C1_BROWSER.md) |
+| HTML extraction and adaptive locators | [HTML extraction](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C2_HTML.md) |
+| DOCX/native PDF and offline artifacts | [Document extraction](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C2_DOCUMENTS.md) |
+| Canonical and near-duplicate source evidence | [Deduplication](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C2_DEDUP.md) |
+| Configurable research graphs | [Research graph](https://github.com/ginkorea/spider/blob/v0.2.0/docs/RESEARCH_GRAPH.md) |
+| Architecture, contracts and completion tracker | [Specification](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C0.md) |
+
+## Scope and limitations
+
+Robots are honored by default. An override requires a recorded, reasoned,
+exact-host configuration decision; it does not disable CAPTCHA, login, paywall
+or challenge refusal. There is no challenge solver or authenticated-site bypass.
+Tor routing is a transport capability, not a guarantee of anonymity or authority
+to access a source.
+
+Source/search requests run on the host executing the crawler. Model control is
+a separate private-service boundary. Your application owns authorization,
+deployment and storage; no external scheduler or registry is required to import
+or use the library.
+
+Still required for the complete planned spider: the remaining browser adapters,
+representative publisher/locator acceptance, full PDF/OCR and Marker validation,
+one-hop references/cited-by expansion, real served-model quality/admission and
+calibrated decision policy and live runtime/egress acceptance.
+The repository's detailed tracker retains those requirements; this release
+does not erase them or describe fixture results as real-world model accuracy.
 
 ## Development
 
 ```bash
+git clone https://github.com/ginkorea/spider.git
+cd spider
 uv sync --locked --extra html --extra documents --extra browser --python 3.11
-# Set CHIMERA_TEST_BROWSER and CHIMERA_TEST_ISOLATOR explicitly; see C1_BROWSER.md.
+# Explicit browser/isolation paths are required for the complete gate.
+export CHIMERA_TEST_BROWSER=/absolute/path/to/compatible/chrome
+export CHIMERA_TEST_ISOLATOR=/absolute/path/to/bwrap
 bash scripts/gate.sh
 uv build --no-sources
 ```
 
-Read [the specification and tracker](docs/C0.md) and the explicit
-[configuration example](examples/chimera.toml) before extending the core.
-Content identity and retained duplicate evidence are described in
-[C2 deduplication](docs/C2_DEDUP.md).
-Self-hosted models are injected through ports. A local API is normal;
-external model fallback is refused. No model server or weights ship here.
+The gate checks the actual interpreter/import path, lockfile, Ruff, strict mypy
+and the entire test suite. Browser tests refuse absent acceptance prerequisites
+rather than pretending they ran. Evidence records distinguish protocol fixtures,
+installed-artifact checks, public-corpus acceptance and production activation.
 
-The prototype's frontier and self-grading concepts are retained; its OpenAI
-clients, VPN manager, hidden fallbacks, scripts and bytecode are removed on
-this branch. Baseline `6a06245` stays in history and the dirty donor checkout
-is untouched. This is not compatible with the prototype CLI/API.
+## v0.1.0 migration
 
-The donor README declared MIT but its referenced LICENSE file is missing.
-Retain that provenance; verify the owner's licence before public publication.
+`pip install --upgrade go-spider` now installs the rewritten library. Existing
+`spider_core` imports and the old `spider` command are not supplied by v0.2.0;
+migrate to `chimera` and explicit collaborators/configuration, or pin
+`go-spider==0.1.0` while migrating. The old cloud-client, VPN-manager and implicit
+fallback design is not retained. Prototype source remains in Git history.
+
+See [CHANGELOG.md](https://github.com/ginkorea/spider/blob/v0.2.0/CHANGELOG.md) for release changes. Josh Gompert maintains
+the project at [ginkorea/spider](https://github.com/ginkorea/spider).
+Licensed under [MIT](https://github.com/ginkorea/spider/blob/v0.2.0/LICENSE), matching the existing PyPI licence declaration.

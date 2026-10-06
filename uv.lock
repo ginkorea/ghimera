@@ -1211,6 +1211,60 @@ wheels = [
 ]
 
 [[package]]
+name = "go-spider"
+version = "0.2.0"
+source = { editable = "." }
+dependencies = [
+    { name = "curl-cffi" },
+    { name = "protego" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+browser = [
+    { name = "patchright" },
+]
+documents = [
+    { name = "docling-core" },
+    { name = "docling-slim", extra = ["convert-core", "format-docx", "format-pdf"] },
+    { name = "lingua-language-detector" },
+]
+html = [
+    { name = "crawl4ai" },
+    { name = "lingua-language-detector" },
+    { name = "scrapling" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "crawl4ai", marker = "extra == 'html'", specifier = "==0.9.4" },
+    { name = "curl-cffi", specifier = "==0.16.3" },
+    { name = "docling-core", marker = "extra == 'documents'", specifier = "==2.99.0" },
+    { name = "docling-slim", extras = ["convert-core", "format-docx", "format-pdf"], marker = "extra == 'documents'", specifier = "==2.134.0" },
+    { name = "lingua-language-detector", marker = "extra == 'documents'", specifier = "==2.1.1" },
+    { name = "lingua-language-detector", marker = "extra == 'html'", specifier = "==2.1.1" },
+    { name = "patchright", marker = "extra == 'browser'", specifier = "==1.63.0" },
+    { name = "protego", specifier = "==0.7.0" },
+    { name = "pydantic", specifier = "==2.13.5" },
+    { name = "scrapling", marker = "extra == 'html'", specifier = "==0.4.2" },
+]
+provides-extras = ["browser", "html", "documents"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = "==2.4.0" },
+    { name = "pytest", specifier = "==9.1.1" },
+    { name = "ruff", specifier = "==0.16.10" },
+]
+
+[[package]]
 name = "greenlet"
 version = "3.5.6"
 source = { registry = "https://pypi.org/simple" }
@@ -4005,60 +4059,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/46/58/8c37dea7bbf769b20d58e7ace7e5edfe65b849442b00ffcdd56be88697c6/tabulate-0.10.0.tar.gz", hash = "sha256:e2cfde8f79420f6deeffdeda9aaec3b6bc5abce947655d17ac662b126e48a60d", size = 91754, upload-time = "2026-03-04T18:55:34.402Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/99/55/db07de81b5c630da5cbf5c7df646580ca26dfaefa593667fc6f2fe016d2e/tabulate-0.10.0-py3-none-any.whl", hash = "sha256:f0b0622e567335c8fabaaa659f1b33bcb6ddfe2e496071b743aa113f8774f2d3", size = 39814, upload-time = "2026-03-04T18:55:31.284Z" },
-]
-
-[[package]]
-name = "taipan-chimera"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "curl-cffi" },
-    { name = "protego" },
-    { name = "pydantic" },
-]
-
-[package.optional-dependencies]
-browser = [
-    { name = "patchright" },
-]
-documents = [
-    { name = "docling-core" },
-    { name = "docling-slim", extra = ["convert-core", "format-docx", "format-pdf"] },
-    { name = "lingua-language-detector" },
-]
-html = [
-    { name = "crawl4ai" },
-    { name = "lingua-language-detector" },
-    { name = "scrapling" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "crawl4ai", marker = "extra == 'html'", specifier = "==0.9.4" },
-    { name = "curl-cffi", specifier = "==0.16.3" },
-    { name = "docling-core", marker = "extra == 'documents'", specifier = "==2.99.0" },
-    { name = "docling-slim", extras = ["convert-core", "format-docx", "format-pdf"], marker = "extra == 'documents'", specifier = "==2.134.0" },
-    { name = "lingua-language-detector", marker = "extra == 'documents'", specifier = "==2.1.1" },
-    { name = "lingua-language-detector", marker = "extra == 'html'", specifier = "==2.1.1" },
-    { name = "patchright", marker = "extra == 'browser'", specifier = "==1.63.0" },
-    { name = "protego", specifier = "==0.7.0" },
-    { name = "pydantic", specifier = "==2.13.5" },
-    { name = "scrapling", marker = "extra == 'html'", specifier = "==0.4.2" },
-]
-provides-extras = ["browser", "html", "documents"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = "==2.4.0" },
-    { name = "pytest", specifier = "==9.1.1" },
-    { name = "ruff", specifier = "==0.16.10" },
 ]
 
 [[package]]
