@@ -21,6 +21,9 @@ class RefusalCode(StrEnum):
     FETCH_FAILED = "fetch_failed"
     GRAPH_CONTRACT = "graph_contract"
     GRAPH_SINK_FAILED = "graph_sink_failed"
+    TOR_REQUIRED = "tor_required"
+    TOR_UNAVAILABLE = "tor_unavailable"
+    INVALID_ONION_ADDRESS = "invalid_onion_address"
 
 
 REFUSALS = MappingProxyType(
@@ -43,6 +46,15 @@ REFUSALS = MappingProxyType(
         ),
         RefusalCode.GRAPH_SINK_FAILED: (
             "Graph checkpoint was not acknowledged; preserve the journal and inspect its sink."
+        ),
+        RefusalCode.TOR_REQUIRED: (
+            "This source requires configured Tor routing; never try it directly."
+        ),
+        RefusalCode.TOR_UNAVAILABLE: (
+            "The required Tor path failed; inspect Tor without a direct retry."
+        ),
+        RefusalCode.INVALID_ONION_ADDRESS: (
+            "Onion address encoding, version or checksum is invalid."
         ),
     }
 )

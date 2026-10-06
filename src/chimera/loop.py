@@ -80,6 +80,7 @@ class GoalLoop:
                         page.body,
                         extracted.text,
                         self._extractor.revision,
+                        transport=page.transport,
                     )
                 verdict = None
                 for second_look in (False, True):
@@ -134,6 +135,7 @@ class GoalLoop:
                             raw=page.body,
                             extracted=extracted,
                             verdict=verdict,
+                            transport=page.transport,
                         )
                         window_new += 1
                 ranked = await self._scorer.score(goal, extracted, budget)

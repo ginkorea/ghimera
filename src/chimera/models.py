@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from chimera.config import ChimeraConfig, Probability
 from chimera.graph_types import GraphSnapshot
 from chimera.refusals import RefusalCode
+from chimera.transport_types import TransportEvidence
 
 NonEmpty = Annotated[str, Field(min_length=1)]
 NonNegative = Annotated[int, Field(strict=True, ge=0)]
@@ -106,6 +107,7 @@ class Page(Record):
     body: bytes
     headers: tuple[tuple[str, str], ...] = ()
     revalidated: bool = False
+    transport: TransportEvidence | None = None
 
     def header(self, name: str) -> str | None:
         return next((value for key, value in self.headers if key == name.lower()), None)
@@ -153,6 +155,7 @@ class Document(Record):
     extracted: Extracted
     verdict: Verdict
     duplicate_urls: tuple[str, ...] = ()
+    transport: TransportEvidence | None = None
 
 
 class LedgerRow(Record):
@@ -167,6 +170,7 @@ class LedgerRow(Record):
     latency_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0
     refusal: RefusalCode | None = None
     reason: str
+    transport: TransportEvidence | None = None
 
 
 class Receipt(Record):

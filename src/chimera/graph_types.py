@@ -8,6 +8,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from chimera.transport_types import TransportEvidence
+
 Name = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]*$")]
 Text = Annotated[str, Field(min_length=1)]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -111,6 +113,10 @@ class GraphNode(GraphRecord):
     content_sha256: Digest | None = None
     text_sha256: Digest | None = None
     text: str | None = None
+    # Absent evidence must not change the canonical bytes of existing /1 journals.
+    transport: TransportEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def content_bound(self) -> "GraphNode":

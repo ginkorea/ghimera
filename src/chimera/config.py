@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from chimera.graph_types import GraphConfig
+from chimera.transport_types import TransportConfig
 
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 PositiveFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]
@@ -20,6 +21,7 @@ class NetworkPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.network/1"] = Field(alias="schema")
     mode: Literal["public", "loopback_fixture"]
+    allowed_ports: tuple[Annotated[int, Field(strict=True, ge=1, le=65535)], ...] = (80, 443)
     fixture_addresses: tuple[str, ...] = ()
     fixture_ports: tuple[Annotated[int, Field(strict=True, ge=1, le=65535)], ...] = ()
 
@@ -105,6 +107,7 @@ class ChimeraConfig(BaseModel):
     model_policy: Literal["self_hosted_only"]
     http: HttpPolicy | None = None
     graph: GraphConfig | None = None
+    transport: TransportConfig | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> "ChimeraConfig":

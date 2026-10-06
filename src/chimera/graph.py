@@ -24,6 +24,7 @@ from chimera.graph_types import (
     GraphSnapshot,
 )
 from chimera.refusals import ChimeraRefused, RefusalCode
+from chimera.transport_types import TransportEvidence
 
 
 class GraphSink(Protocol):
@@ -355,7 +356,15 @@ class ResearchGraph:
         await self.append(nodes=(source,), edges=(edge,))
         return source.id
 
-    async def document(self, url: str, raw: bytes, text: str, revision: str) -> str:
+    async def document(
+        self,
+        url: str,
+        raw: bytes,
+        text: str,
+        revision: str,
+        *,
+        transport: TransportEvidence | None = None,
+    ) -> str:
         content_digest = hashlib.sha256(raw).hexdigest()
         text_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         # Extraction changes create a new representation of the same source bytes.
@@ -374,6 +383,7 @@ class ResearchGraph:
             content_sha256=content_digest,
             text_sha256=text_digest,
             text=text,
+            transport=transport,
         )
         source = self.node("source", url, url, self._config.profile_version)
         await self.append(

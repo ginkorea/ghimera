@@ -20,6 +20,7 @@ from chimera.refusals import (
     HttpStatusRefused,
     RefusalCode,
 )
+from chimera.transport_types import TransportEvidence
 
 
 class FetchRoute(ABC):
@@ -49,6 +50,13 @@ class FetchRoute(ABC):
 
     def validate_config(self, config: ChimeraConfig) -> None:
         """Stateless fixture routes accept config; stateful routes check their binding."""
+        return None
+
+    def validate_redirect(self, previous: str, target: str) -> None:
+        """Production providers enforce their configured transport transition here."""
+        return None
+
+    def transport_selection(self, url: str) -> TransportEvidence | None:
         return None
 
     @abstractmethod
@@ -186,6 +194,7 @@ class FetchLadder:
                         reason="request_cancelled",
                         bytes_read=bytes_read,
                         latency_seconds=max(0.0, budget.clock() - started),
+                        transport=route.transport_selection(url),
                     )
                 )
                 budget.record_bytes(bytes_read)
@@ -201,6 +210,7 @@ class FetchLadder:
                     bytes_read=bytes_read,
                     refusal=code,
                     reason=code.value if code else "route_result",
+                    transport=page.transport if page else route.transport_selection(url),
                     latency_seconds=max(0.0, budget.clock() - started),
                 )
             )
@@ -280,7 +290,9 @@ class FetchLadder:
                 location = page.header("location")
                 if location is None or hop == policy.max_redirects:
                     raise ChimeraRefused(RefusalCode.FETCH_FAILED)
-                current = urljoin(page.final_url, location)
+                target = urljoin(page.final_url, location)
+                route.validate_redirect(page.final_url, target)
+                current = target
                 ledger.append(
                     LedgerRow(
                         sequence=ledger.next_sequence,
