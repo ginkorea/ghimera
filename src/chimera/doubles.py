@@ -3,6 +3,7 @@
 from chimera.budget import RunBudget
 from chimera.config import ChimeraConfig
 from chimera.fetch import FetchRoute
+from chimera.ledger import Ledger
 from chimera.models import (
     Document,
     Extracted,
@@ -110,7 +111,7 @@ class KeywordScorer(Scorer):
     cost = 0
 
     async def rank(
-        self, goal: Goal, document: Extracted, budget: RunBudget
+        self, goal: Goal, document: Extracted, budget: RunBudget, ledger: Ledger
     ) -> tuple[LinkCandidate, ...]:
         terms = tuple(goal.text.casefold().split())
         return tuple(

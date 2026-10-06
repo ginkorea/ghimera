@@ -4,6 +4,7 @@ import asyncio
 from enum import StrEnum
 from types import MappingProxyType
 
+from chimera.embedding_types import EncodingCall
 from chimera.model_types import ModelCallEvidence
 
 
@@ -99,6 +100,18 @@ class ModelFailure(ChimeraRefused):
 class ModelCancelled(asyncio.CancelledError):
     def __init__(self, model_call: ModelCallEvidence) -> None:
         self.model_call = model_call
+        super().__init__()
+
+
+class EncodingFailure(ChimeraRefused):
+    def __init__(self, code: RefusalCode, call: EncodingCall) -> None:
+        self.call = call
+        super().__init__(code)
+
+
+class EncodingCancelled(asyncio.CancelledError):
+    def __init__(self, call: EncodingCall) -> None:
+        self.call = call
         super().__init__()
 
 

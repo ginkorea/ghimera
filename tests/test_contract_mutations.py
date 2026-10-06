@@ -13,6 +13,24 @@ import pytest
     "module,old,new,witness",
     (
         (
+            "semantic_scoring",
+            "budget.reserve_encoding(size)",
+            "budget.check_time()",
+            "test_embedding_scoring.py::test_semantic_call_budget_reserves_before_spend_and_keeps_partial_ledger",
+        ),
+        (
+            "embedding",
+            "wire.model != service.served_model",
+            "False",
+            "test_embedding_scoring.py::test_encoder_refusals_preserve_bounded_call_evidence[wrong_model]",
+        ),
+        (
+            "embedding",
+            "{item.index for item in wire.data} != set(range(len(inputs)))",
+            "False",
+            "test_embedding_scoring.py::test_encoder_refusals_preserve_bounded_call_evidence[duplicate_index]",
+        ),
+        (
             "politeness",
             "host.next_start = loop.time() + spacing",
             "host.next_start = 0.0",
@@ -90,7 +108,7 @@ import pytest
         ),
         (
             "scoring",
-            "if any(link.url not in eligible for link in ranked):",
+            "if any((link.url, link.anchor) not in eligible for link in ranked):",
             "if False:",
             "test_scorer_conformance.py::test_a_scorer_cannot_invent_candidates_or_override_template",
         ),

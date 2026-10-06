@@ -91,7 +91,9 @@ and verifies remote resolution rather than local source DNS.
 
 - Governed admission and real intent-to-reviewed-answer acceptance against served
   models. Concrete planner/analyst/reviewer/judge HTTP clients and spend records
-  now exist; the encoder/scoring path still needs its concrete binding.
+  now exist; native shelf-vector scoring has its concrete self-hosted binding
+  (C3_EMBEDDING_SCORING.md). Real model quality and calibrated decision policy
+  still require acceptance.
 - Bounded native-text selection now exists. Embedding-based context reranking,
   representative real-data adequacy checks and handling propagation remain.
 - Replayable provider-configuration binding beyond provider name/revision;

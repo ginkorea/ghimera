@@ -11,10 +11,12 @@ from chimera.browser_types import RenderResult
 from chimera.config import ChimeraConfig, Probability
 from chimera.dedup_types import ContentDrift, DedupEvidence
 from chimera.document_types import DocumentLayout, DocumentParseEvidence
+from chimera.embedding_types import EncodingCall
 from chimera.extraction_types import ExtractionEvidence
 from chimera.graph_types import GraphSnapshot
 from chimera.model_types import ModelCallEvidence
 from chimera.refusals import RefusalCode
+from chimera.scoring_types import SimilarityEvidence
 from chimera.transport_types import TransportEvidence
 
 NonEmpty = Annotated[str, Field(min_length=1)]
@@ -299,6 +301,8 @@ class LedgerRow(Record):
         "extraction",
         "content_drift",
         "render",
+        "encoding",
+        "scoring",
     ]
     url: str | None = None
     route: str | None = None
@@ -316,9 +320,24 @@ class LedgerRow(Record):
     dedup: DedupEvidence | None = None
     content_drift: ContentDrift | None = None
     rendered: RenderResult | None = None
+    encoding_call: EncodingCall | None = None
+    similarity: SimilarityEvidence | None = None
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if (self.event == "encoding") != (self.encoding_call is not None):
+            raise ValueError("encoding events require their explicit call evidence")
+        if (self.event == "scoring") != (self.similarity is not None):
+            raise ValueError("scoring events require their native similarity evidence")
+        if self.encoding_call is not None:
+            service = self.encoding_call.service
+            if self.model is None or (self.model.model_id, self.model.revision) != (
+                service.model_id,
+                service.revision,
+            ):
+                raise ValueError("encoding event identity must match its call evidence")
+            if (self.encoding_call.outcome == "success") != (self.refusal is None):
+                raise ValueError("encoding refusal must match its call outcome")
         if self.event == "render":
             if (self.rendered is None) == (self.refusal is None):
                 raise ValueError("render event requires either its result or a refusal")
@@ -337,6 +356,8 @@ class Receipt(Record):
     fetches: NonNegative
     bytes_read: NonNegative
     judge_calls: NonNegative
+    encoding_calls: NonNegative = 0
+    encoding_chars: NonNegative = 0
     accepted_documents: NonNegative
     elapsed_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)]
     stop_reason: StopReason
@@ -371,6 +392,56 @@ class Harvest(Record):
             raise ValueError("judge spend does not match ledger")
         if self.receipt.accepted_documents != len(self.documents):
             raise ValueError("accepted count does not match harvest")
+        encoding = tuple(row.encoding_call for row in self.ledger if row.encoding_call is not None)
+        if self.receipt.encoding_calls != len(encoding) or self.receipt.encoding_chars != sum(
+            call.input_chars for call in encoding
+        ):
+            raise ValueError("encoding spend does not match ledger")
+        scoring_policy = self.receipt.effective_config.scoring
+        if encoding and (
+            scoring_policy is None
+            or any(call.service != scoring_policy.encoder for call in encoding)
+        ):
+            raise ValueError("encoding ledger must bind the effective service configuration")
+        if scoring_policy is not None and (
+            self.receipt.encoding_calls > scoring_policy.encoding_call_budget
+            or self.receipt.encoding_chars > scoring_policy.encoding_char_budget
+        ):
+            raise ValueError("encoding spend exceeds the shared run budget")
+        native_sources = {
+            hashlib.sha256(document.extracted.text.encode()).hexdigest(): document.extracted
+            for document in self.source_documents
+        }
+        for row in self.ledger:
+            if row.similarity is not None and (
+                scoring_policy is None
+                or row.similarity.references_sha256 != scoring_policy.references_sha256
+            ):
+                raise ValueError(
+                    "similarity observations must bind their configured reference vectors"
+                )
+            if row.similarity is not None:
+                similarity = row.similarity
+                if similarity.goal_sha256 != hashlib.sha256(self.goal.text.encode()).hexdigest():
+                    raise ValueError("similarity observations must bind this run's original intent")
+                if scoring_policy is None:
+                    raise ValueError("similarity requires its effective scoring policy")
+                for link in similarity.links:
+                    expected = scoring_policy.keyword_weight * link.keyword_score + (
+                        1.0 - scoring_policy.keyword_weight
+                    ) * max(0.0, link.cosine)
+                    if link.score != expected:
+                        raise ValueError(
+                            "frontier scores must reconcile to cosine and keyword policy"
+                        )
+                native = native_sources.get(similarity.text_sha256)
+                if native is not None:
+                    if len(native.text) != similarity.total_chars or any(
+                        hashlib.sha256(native.text[window.start : window.end].encode()).hexdigest()
+                        != window.text_sha256
+                        for window in similarity.windows
+                    ):
+                        raise ValueError("similarity observations must bind retained native spans")
         if any(doc.verdict.decision != "accept" for doc in self.documents):
             raise ValueError("only accepted documents belong in harvest")
         if len({doc.sha256 for doc in self.documents}) != len(self.documents):

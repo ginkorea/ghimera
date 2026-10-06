@@ -15,6 +15,8 @@ class RunBudget:
         self.bytes_read = 0
         self.judge_calls = 0
         self.search_calls = 0
+        self.encoding_calls = 0
+        self.encoding_chars = 0
         self._bytes_reserved = 0
 
     @property
@@ -72,3 +74,16 @@ class RunBudget:
         if self.search_calls >= policy.query_budget:
             raise ChimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         self.search_calls += 1
+
+    def reserve_encoding(self, input_chars: int) -> None:
+        self.check_time()
+        policy = self.config.scoring
+        if policy is None or input_chars <= 0:
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        if (
+            self.encoding_calls >= policy.encoding_call_budget
+            or self.encoding_chars + input_chars > policy.encoding_char_budget
+        ):
+            raise ChimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        self.encoding_calls += 1
+        self.encoding_chars += input_chars

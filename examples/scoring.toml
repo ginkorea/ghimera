@@ -1,0 +1,37 @@
+# Safe SCHEMA EXAMPLE ONLY. The companion vectors are artificial fixtures.
+# Replace endpoint, approved addresses, declared identity/revision, dimensions,
+# native-text prefix and the reference digest as one validated deployment input.
+# Add this table as [scoring] to the main Chimera config; it is not an implicit default.
+schema = "chimera.scoring/1"
+references_sha256 = "ed044ae9d3298484c1650836e8876fb72e009d162302a64083ad5e109f8645b1"
+encoding_call_budget = 100
+encoding_char_budget = 100000
+window_chars = 1000
+overlap_chars = 100
+max_windows = 8
+max_links = 20
+max_reference_chunks = 1000
+max_anchor_chars = 300
+keyword_weight = 0.2
+
+[encoder]
+schema = "chimera.embedding-service/1"
+endpoint = "https://encoder.invalid/v1/embeddings"
+approved_addresses = ["10.0.0.10"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "none"
+model_id = "fixture-only-not-a-production-model"
+revision = "fixture-1"
+served_model = "fixture-only-not-a-production-model"
+timeout_seconds = 30.0
+max_request_bytes = 65536
+max_response_bytes = 262144
+max_header_bytes = 8192
+require_usage = true
+max_input_chars = 10000
+dimensions = 2
+request_dimensions = false
+max_batch_texts = 8
+max_text_chars = 2000
+text_prefix = ""

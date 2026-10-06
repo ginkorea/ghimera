@@ -10,7 +10,7 @@ from curl_cffi import AsyncCurl, Curl, CurlError, CurlInfo, CurlOpt
 from pydantic import SecretStr
 
 from chimera.http import BoundedBody, BoundedHeaders, CurlMulti
-from chimera.model_config import ModelServiceConfig
+from chimera.model_config import PrivateModelService
 from chimera.refusals import ChimeraRefused, RefusalCode
 from chimera.transport import Destination, Resolver, SystemResolver
 
@@ -36,7 +36,7 @@ class ModelWireCancelled(asyncio.CancelledError):
 
 class ModelHttpPort(Protocol):
     @property
-    def config(self) -> ModelServiceConfig: ...
+    def config(self) -> PrivateModelService: ...
 
     async def post(self, body: bytes) -> ModelHttpResponse: ...
 
@@ -44,7 +44,7 @@ class ModelHttpPort(Protocol):
 class PinnedModelHttp:
     def __init__(
         self,
-        config: ModelServiceConfig,
+        config: PrivateModelService,
         *,
         credential: SecretStr | None = None,
         resolver: Resolver | None = None,
@@ -66,7 +66,7 @@ class PinnedModelHttp:
         self._resolver = resolver or SystemResolver()
 
     @property
-    def config(self) -> ModelServiceConfig:
+    def config(self) -> PrivateModelService:
         return self._config
 
     async def _destination(self) -> Destination:

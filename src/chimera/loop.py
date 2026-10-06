@@ -73,6 +73,7 @@ class GoalLoop:
         self._extractor = extractor
         extractor.validate_config(config)
         self._scorer = scorer
+        scorer.validate_config(config)
         self._judge = judge
         self._graph_sink = graph_sink
         if judge.model.location == "external":
@@ -169,6 +170,9 @@ class GoalLoop:
                         self._extractor.revision,
                         transport=page.transport,
                     )
+                # Score native evidence before the judge. Similarity guides the frontier,
+                # but never replaces a document verdict or factual source evidence.
+                ranked = await self._scorer.score(goal, extracted, budget, ledger)
                 verdict = None
                 for second_look in (False, True):
                     budget.reserve_judge()
@@ -281,7 +285,6 @@ class GoalLoop:
                         session._window_new += 1
                     if content is not None:
                         content.observe(candidate)
-                ranked = await self._scorer.score(goal, extracted, budget)
                 for link in ranked[: self._config.max_links_per_page]:
                     if link.score >= self._config.min_link_score and link.url not in visited:
                         if graph is not None and document_node_id is not None:
@@ -368,6 +371,8 @@ class GoalLoop:
                 fetches=budget.fetches,
                 bytes_read=budget.bytes_read,
                 judge_calls=budget.judge_calls,
+                encoding_calls=budget.encoding_calls,
+                encoding_chars=budget.encoding_chars,
                 accepted_documents=len(session.documents),
                 elapsed_seconds=budget.elapsed,
                 stop_reason=stop,

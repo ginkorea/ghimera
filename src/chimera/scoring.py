@@ -5,7 +5,11 @@ from abc import ABC, abstractmethod
 from types import MappingProxyType
 from typing import ClassVar, final
 
+from pydantic import ValidationError
+
 from chimera.budget import RunBudget
+from chimera.config import ChimeraConfig
+from chimera.ledger import Ledger
 from chimera.models import Extracted, Goal, LinkCandidate
 from chimera.refusals import ChimeraRefused, RefusalCode
 
@@ -30,17 +34,27 @@ class Scorer(ABC):
 
     @final
     async def score(
-        self, goal: Goal, document: Extracted, budget: RunBudget
+        self, goal: Goal, document: Extracted, budget: RunBudget, ledger: Ledger | None = None
     ) -> tuple[LinkCandidate, ...]:
         budget.check_time()
         async with asyncio.timeout(budget.remaining_seconds):
-            ranked = await self.rank(goal, document, budget)
-        eligible = {link.url for link in document.links}
-        if any(link.url not in eligible for link in ranked):
+            ranked = await self.rank(goal, document, budget, ledger or Ledger())
+        eligible = {(link.url, link.anchor) for link in document.links}
+        if any((link.url, link.anchor) not in eligible for link in ranked):
             raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        try:
+            ranked = tuple(LinkCandidate.model_validate(link.model_dump()) for link in ranked)
+        except ValidationError:
+            raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT) from None
         return tuple(sorted(ranked, key=lambda link: link.score, reverse=True))
+
+    def validate_config(self, config: ChimeraConfig) -> None:
+        if config.scoring is not None:
+            raise ValueError(
+                "configured semantic scoring cannot be replaced by a keyword-only scorer"
+            )
 
     @abstractmethod
     async def rank(
-        self, goal: Goal, document: Extracted, budget: RunBudget
+        self, goal: Goal, document: Extracted, budget: RunBudget, ledger: Ledger
     ) -> tuple[LinkCandidate, ...]: ...

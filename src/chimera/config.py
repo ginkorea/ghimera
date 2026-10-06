@@ -14,6 +14,7 @@ from chimera.extraction_config import ExtractionConfig
 from chimera.graph_types import GraphConfig
 from chimera.model_config import ModelBindingsConfig
 from chimera.research_config import ResearchConfig
+from chimera.scoring_config import ScoringConfig
 from chimera.transport_types import TransportConfig
 
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
@@ -120,6 +121,7 @@ class ChimeraConfig(BaseModel):
     document_extraction: DocumentExtractionConfig | None = None
     dedup: DedupConfig | None = None
     browser: BrowserConfig | None = None
+    scoring: ScoringConfig | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> "ChimeraConfig":

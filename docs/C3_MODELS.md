@@ -100,5 +100,7 @@ prompt ceilings and required-citation priority. Three deliberate mutations
 confirm identity, completion and DNS guards are executable.
 
 No real served model or external search instance was queried by this candidate.
-Real model admission/quality, extraction, browser routes, encoder/scoring and
+Native embedding/shelf frontier scoring now has its concrete binding; see
+C3_EMBEDDING_SCORING.md. Real model admission/quality, extraction, additional
+browser routes, calibrated scoring and
 the complete C0–C5 acceptance remain required; this is not the full spider.

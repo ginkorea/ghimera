@@ -26,9 +26,8 @@ class EvidenceContextConfig(BaseModel):
         return self
 
 
-class ModelServiceConfig(BaseModel):
+class PrivateModelService(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["chimera.model-service/1"] = Field(alias="schema")
     endpoint: Text
     approved_addresses: Annotated[tuple[Text, ...], Field(min_length=1)]
     allow_plaintext: bool
@@ -41,16 +40,11 @@ class ModelServiceConfig(BaseModel):
     max_request_bytes: Positive
     max_response_bytes: Positive
     max_header_bytes: Positive
-    max_output_tokens: Positive
-    temperature: Annotated[float, Field(ge=0, le=2, allow_inf_nan=False)]
-    top_p: Annotated[float, Field(gt=0, le=1, allow_inf_nan=False)]
-    response_format: Literal["json_object", "json_schema"]
     require_usage: bool
     max_input_chars: Positive
-    context: EvidenceContextConfig
 
     @model_validator(mode="after")
-    def private_service(self) -> "ModelServiceConfig":
+    def private_service(self) -> "PrivateModelService":
         parsed = urlsplit(self.endpoint)
         try:
             port = parsed.port
@@ -63,12 +57,11 @@ class ModelServiceConfig(BaseModel):
             or parsed.password is not None
             or parsed.query
             or parsed.fragment
-            or not parsed.path.endswith("/chat/completions")
             or (parsed.scheme == "http" and not self.allow_plaintext)
             or port == 0
             or any(ord(char) < 33 for char in self.endpoint)
         ):
-            raise ValueError("configure one credential-free, approved model completion endpoint")
+            raise ValueError("configure one credential-free, approved private model endpoint")
         for address in self.approved_addresses:
             value = ipaddress.ip_address(address)
             if (
@@ -91,6 +84,38 @@ class ModelServiceConfig(BaseModel):
                 raise ValueError("literal model endpoint is not approved")
         if not all(text.strip() for text in (self.model_id, self.revision, self.served_model)):
             raise ValueError("model identity and revision must be nonblank")
+        return self
+
+
+class ModelServiceConfig(PrivateModelService):
+    schema_version: Literal["chimera.model-service/1"] = Field(alias="schema")
+    max_output_tokens: Positive
+    temperature: Annotated[float, Field(ge=0, le=2, allow_inf_nan=False)]
+    top_p: Annotated[float, Field(gt=0, le=1, allow_inf_nan=False)]
+    response_format: Literal["json_object", "json_schema"]
+    context: EvidenceContextConfig
+
+    @model_validator(mode="after")
+    def completion_endpoint(self) -> "ModelServiceConfig":
+        if not urlsplit(self.endpoint).path.endswith("/chat/completions"):
+            raise ValueError("configure an exact completion endpoint")
+        return self
+
+
+class EmbeddingServiceConfig(PrivateModelService):
+    schema_version: Literal["chimera.embedding-service/1"] = Field(alias="schema")
+    dimensions: Positive
+    request_dimensions: bool
+    max_batch_texts: Positive
+    max_text_chars: Positive
+    text_prefix: str
+
+    @model_validator(mode="after")
+    def embedding_endpoint(self) -> "EmbeddingServiceConfig":
+        if not urlsplit(self.endpoint).path.endswith("/embeddings"):
+            raise ValueError("configure an exact embeddings endpoint")
+        if len(self.text_prefix) >= self.max_text_chars:
+            raise ValueError("embedding prefix must leave room for native input")
         return self
 
 

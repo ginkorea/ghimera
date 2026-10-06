@@ -1,0 +1,14 @@
+{
+  "schema": "chimera.embedding-references/1",
+  "model_id": "fixture-only-not-a-production-model",
+  "revision": "fixture-1",
+  "text_prefix": "",
+  "dimensions": 2,
+  "chunks": [
+    {
+      "source_id": "fixture:shelf-reference",
+      "text_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "vector": [1.0, 0.0]
+    }
+  ]
+}

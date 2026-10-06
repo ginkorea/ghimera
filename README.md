@@ -6,6 +6,8 @@ Package: `taipan-chimera`; import: `chimera`; Python **3.11+**.
 Status: **standalone source candidate, not deployed**. Core collection, real
 direct/Tor HTTP, configurable research graphs, the intent research loop and a
 SearXNG HTTP adapter and configured self-hosted model clients are implemented.
+Configured self-hosted embeddings, native shelf-vector relevance observations,
+semantic/keyword frontier ranking and audited shared encoding budgets are implemented.
 Native HTML extraction with adaptive locators/language detection, DOCX tables,
 native PDF text and canonical/near-duplicate grouping are implemented.
 Isolated Patchright rendering is implemented as a configured HTTP-ladder
@@ -15,6 +17,8 @@ full C0–C5 acceptance remain required.
 See [Tor routing](docs/TOR.md) and [intent research](docs/C3_RESEARCH.md).
 See [browser rendering](docs/C1_BROWSER.md) for network isolation and provenance.
 See [model control and evidence context](docs/C3_MODELS.md) for model roles.
+See [embedding relevance and scoring](docs/C3_EMBEDDING_SCORING.md) for the
+explicit encoder/reference binding and the remaining real-model acceptance.
 See [native HTML extraction](docs/C2_HTML.md) for the pinned parser extra.
 See [offline document conversion](docs/C2_DOCUMENTS.md) for DOCX/native PDF and
 the remaining full PDF/Marker acceptance.
