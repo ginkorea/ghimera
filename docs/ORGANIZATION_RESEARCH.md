@@ -95,7 +95,10 @@ that an entire organization has been exhaustively mapped.
 
 1. Local PDF seed intake and provenance with immutable source versions:
    implemented in unreleased source; bounded actual PDF/DOCX parser and composed
-   command/archive checks pass. Real organization-corpus acceptance remains open.
+   command/archive checks pass. The official native Chinese constitutional PDF
+   also passes production-extractor and serialized-reader replay with retained
+   source MIME/bytes; representative chart/organization-corpus acceptance remains
+   open.
 2. Semantic entity/relation extraction over a real organization PDF, including
    page coverage, omissions and visual-chart limitations: source implementation
    and controlled native-document checks exist; real organization-PDF/model
@@ -118,7 +121,9 @@ document-research path, not this organizational-network capability.
 A real official Chinese constitutional PDF has now been retrieved and parsed
 with preserved generic MIME/bytes through an explicitly configured binary-PDF
 policy. Native text checks do not close organization-model accuracy, chart
-topology or the unresolved direct acceptance-harness timing inconsistency.
+topology or the earlier direct acceptance-harness timing inconsistency. Two
+subsequent direct production-extractor runs passed without a production patch,
+deadline increase or automatic retry; the earlier timeouts remain unexplained.
 See [C2_DOCUMENT_DOWNLOAD_EVIDENCE.md](C2_DOCUMENT_DOWNLOAD_EVIDENCE.md).
 
 Local-input configuration, provenance and current acceptance boundaries are in

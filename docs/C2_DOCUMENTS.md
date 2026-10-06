@@ -173,8 +173,10 @@ consumes the same extractor port, not a special case for a vendor package.
 - Representative PDF tables, multicolumn ordering and non-English OCR quality
   beyond the controlled scanned/table fixture.
 - Marker math fallback and its separate pinned dependency/model recipe.
-- A representative real public DOCX/PDF corpus; the current native PDF is a real
-  controlled PDF fixture, not proof of corpus-level layout accuracy.
+- A representative real public DOCX/PDF corpus. In addition to controlled
+  fixtures, the official native Chinese constitutional PDF now passes
+  production parsing and serialized reader replay (see the download evidence).
+  That single text-heavy document is not corpus-level layout/chart acceptance.
 - Representative PDF/DOCX reference-follow-up adequacy under the implemented
   configurable reference policy.
 - Governed TAIPAN landing/registration and the full C5 runtime acceptance.

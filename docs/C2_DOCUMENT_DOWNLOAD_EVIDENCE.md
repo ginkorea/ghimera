@@ -31,6 +31,10 @@ Private local observations (not committed source data):
   effective parser recipes from the two failed direct acceptance attempts.
 - `gate-work/organization-pdf-worker-diagnostic-01/`: bounded diagnostic worker
   output, diagnostic stream and summary.
+- `gate-work/organization-pdf-native-acceptance-03/` and `-04/`: successful
+  production-extractor replay, effective recipes, extracted reader roundtrip
+  and native-text checks. Run `-04` uses a fresh private worker directory and
+  no task observer.
 
 These are local evidence paths, not a shipped corpus or a durable external
 artifact registry. The constitutional text is not a visual organization chart.
@@ -52,6 +56,27 @@ explained or fixed**, and the diagnostic is not substituted for stable end-to-en
 acceptance. No higher deadline, automatic retry or performance claim was added
 to conceal it. Preserve these failures when investigating the worker/harness
 wait state. The configured resource bounds remain enforced.
+
+Two subsequent real-source acceptance runs through the unchanged production
+`DocumentExtractor` completed successfully: **4.848989 seconds** for `-03` and
+**4.810839 seconds** for `-04`, measured with the same owned Python **3.11.16**.
+Both retained the original MIME and source hash, produced the full **47 pages**
+and **24,400 characters**, passed the native-term checks, and replayed the
+serialized output through `Extracted` with exact equality. Both retained the
+configured **120-second** deadline. The `-03` observer never fired; `-04` had
+no observer and a fresh private scratch directory. No production code changed
+between the failed and successful observations. These are successful native
+PDF intake/reader acceptances, not an explanation of the earlier timeouts or
+a general parser-performance guarantee.
+
+The accepted native text SHA-256 is
+`5e6f0135e95fb1977eb4df4a75a7136155fdf5d4bbcfdf95594a305d7c58f936`;
+the layout SHA-256 is
+`9e3440c327437c203c6b2a0c9e1f5ed122da4e3644a0e2b6d65561b146b66ff6`.
+Run `-04`'s parser configuration SHA-256 is
+`90856221b78a23b57c8c64214c62947510c41124cb45eebc3ea8ac92e9b297dd`.
+The recipe digest includes its explicit scratch path, so a different private
+directory correctly changes that identity.
 
 The text checks establish neither entity completeness, hierarchy accuracy,
 diagram topology nor independent source entailment. The remaining organizational
