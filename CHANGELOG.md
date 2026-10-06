@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Explicit version-2 binary-PDF download policy for publishers serving PDFs
+  as generic binary MIME types. Header admission requires both configured
+  media types and collection scope, followed by the real bounded parser.
+  Original MIME/bytes remain intact; versioned evidence binds the resolution,
+  source hash and effective policy. Legacy document recipe/digests stay unchanged.
+
 - Configurable Byparr challenge gateway beside FlareSolverr and the existing
   Patchright renderer. Version-2 policy explicitly selects the seconds-based
   Camoufox-backed 2.x wire or the newer millisecond/cookies-only wire; provider

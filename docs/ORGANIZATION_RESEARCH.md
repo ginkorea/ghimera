@@ -115,6 +115,12 @@ The organizational workflow may not be closed by the earlier English graphlib
 intent diagnostic or by a fixture-only graph test. The graphlib run proves the assembled
 document-research path, not this organizational-network capability.
 
+A real official Chinese constitutional PDF has now been retrieved and parsed
+with preserved generic MIME/bytes through an explicitly configured binary-PDF
+policy. Native text checks do not close organization-model accuracy, chart
+topology or the unresolved direct acceptance-harness timing inconsistency.
+See [C2_DOCUMENT_DOWNLOAD_EVIDENCE.md](C2_DOCUMENT_DOWNLOAD_EVIDENCE.md).
+
 Local-input configuration, provenance and current acceptance boundaries are in
 [LOCAL_INPUTS.md](LOCAL_INPUTS.md).
 Semantic-stage configuration, evidence and remaining quality boundaries are in

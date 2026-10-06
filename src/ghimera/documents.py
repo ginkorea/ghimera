@@ -6,13 +6,13 @@ from pathlib import Path
 
 from ghimera.config import GhimeraConfig
 from ghimera.document_config import DocumentExtractionConfig
+from ghimera.document_media import DOCX_TYPE as DOCX_TYPE
+from ghimera.document_media import resolve_document_media
 from ghimera.extraction import ExtractionResponse
 from ghimera.models import Extracted, Page, Record
 from ghimera.passive_worker import PassiveWorker
 from ghimera.ports import Extractor
 from ghimera.refusals import GhimeraRefused, RefusalCode
-
-DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 class DocumentRequest(Record):
@@ -82,9 +82,7 @@ class DocumentExtractor:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
 
     async def extract(self, page: Page) -> Extracted:
-        mime = page.content_type.split(";", 1)[0].strip().lower()
-        if mime not in {"application/pdf", DOCX_TYPE}:
-            raise GhimeraRefused(RefusalCode.CONTENT_TYPE_UNWANTED)
+        mime, media = resolve_document_media(page.content_type, page.body, self.config.media)
         if not page.body or len(page.body) > self.config.max_input_bytes:
             raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED)
         request = DocumentRequest(config=self.config, page=page).model_dump_json().encode()
@@ -106,6 +104,7 @@ class DocumentExtractor:
             or evidence.config_digest != self.config.content_digest()
             or evidence.parser_revision != self.revision
             or evidence.pipeline != pipeline
+            or evidence.media != media
             or evidence.artifact_manifest_digest
             != (self.config.artifact_digest() if pipeline == "standard" else None)
             or len(result.text) > self.config.max_text_chars

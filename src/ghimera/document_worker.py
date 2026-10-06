@@ -10,6 +10,7 @@ from importlib.metadata import version
 from pathlib import PurePosixPath
 from typing import Literal
 
+from ghimera.document_media import resolve_document_media
 from ghimera.document_types import DocumentLayout, DocumentParseEvidence
 from ghimera.documents import DOCX_TYPE, DocumentExtractor, DocumentRequest, check_artifacts
 from ghimera.extraction import ExtractionResponse
@@ -70,7 +71,7 @@ def parse(request: DocumentRequest) -> Extracted:
     config, page = request.config, request.page
     if not page.body or len(page.body) > config.max_input_bytes:
         raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED)
-    mime = page.content_type.split(";", 1)[0].strip().lower()
+    mime, media = resolve_document_media(page.content_type, page.body, config.media)
     options: dict[InputFormat, FormatOption] = {}
     pipeline: Literal["docx", "native", "standard"]
     if mime == DOCX_TYPE:
@@ -199,7 +200,8 @@ def parse(request: DocumentRequest) -> Extracted:
                 links.append(LinkCandidate(url=target, anchor=reference.anchor))
                 retained.append(reference)
     evidence = DocumentParseEvidence(
-        schema="chimera.document-parse/1",
+        schema="chimera.document-parse/2" if media is not None else "chimera.document-parse/1",
+        media=media,
         source_sha256=source_hash,
         source_url=page.final_url,
         text_sha256=hashlib.sha256(text.encode()).hexdigest(),

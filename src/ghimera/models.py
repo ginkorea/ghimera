@@ -271,6 +271,12 @@ class DocumentSource(Record):
             or parsed.config_digest != config.document_extraction.content_digest()
         ):
             raise ValueError("document conversion must bind the effective run configuration")
+        if parsed is not None and config.document_extraction is not None:
+            media_policy = config.document_extraction.media
+            if (parsed.media is None) != (media_policy is None):
+                raise ValueError("document conversion must retain its configured media evidence")
+            if parsed.media is not None and media_policy is not None:
+                parsed.media.validate_policy(media_policy, self.raw)
 
     @model_validator(mode="after")
     def source_binding(self) -> "DocumentSource":
@@ -315,6 +321,11 @@ class DocumentSource(Record):
             or self.extracted.document_parse.source_url != self.url
         ):
             raise ValueError("document conversion must bind this source occurrence")
+        if (
+            self.extracted.document_parse is not None
+            and self.extracted.document_parse.media is not None
+        ):
+            self.extracted.document_parse.media.validate_source(self.raw)
         return self
 
 

@@ -174,6 +174,32 @@ def test_same_configured_collector_gets_fresh_goal_state_and_charges_each_run(
     assert Harvest.model_validate_json(second.model_dump_json()) == second
 
 
+def test_binary_pdf_scope_requires_explicit_document_policy_before_any_io(
+    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint
+):
+    from tests.test_document_media import enabled
+
+    documents = enabled(tmp_path).document_extraction
+    cfg, _ = assembled(
+        tmp_path,
+        source_site,
+        search_endpoint,
+        model_endpoint,
+        encoder_endpoint,
+        document_extraction=documents,
+        research=research_policy(
+            allowed_ports=[source_site[0]], content_types=["application/octet-stream"]
+        ),
+    )
+    assert Collector(cfg, source_resolver=ResolverFixture()).config == cfg
+    legacy = cfg.model_dump(by_alias=True)
+    legacy["document_extraction"].update(schema="chimera.document-extraction/1")
+    legacy["document_extraction"].pop("media")
+    with pytest.raises(ValueError, match="matching configured extraction adapters"):
+        Collector(GhimeraConfig.model_validate(legacy), source_resolver=ResolverFixture())
+    assert not any((source_site[1], search_endpoint[1], model_endpoint[1], encoder_endpoint[1]))
+
+
 def test_configured_html_search_runs_the_full_concrete_collector_chain(
     tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint
 ):

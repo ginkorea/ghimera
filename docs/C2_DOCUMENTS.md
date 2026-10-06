@@ -16,6 +16,18 @@ Its operator must supply a private interpreter and scratch directory; no shared
 runtime or personal cache is changed. The TOML omits `artifacts_directory` in
 native mode because TOML has no null; the model supplies only that absence.
 
+`chimera.document-extraction/2` additionally requires an explicit
+`ghimera.document-media/1` policy. `pdf_download_types` admits only selected
+generic binary MIME types (`application/octet-stream`, `binary/octet-stream`)
+and only when the original bytes begin with `%PDF-`. The actual PDF parser must
+still validate the document; a signature is not validity or safety proof.
+There is no extension-based guess, HTML relabeling, generic ZIP/DOCX sniffing,
+or automatic fallback. The fetch/research scope must separately include the
+selected MIME type; `Collector` checks both before any source/model I/O.
+Use the non-active `examples/documents-downloads.toml` recipe at the full
+configuration's `document_extraction` field. `/1` continues to reject generic
+binary downloads and omits the new field, preserving its existing digest.
+
 The pinned `documents` extra uses `docling-slim[convert-core,format-docx,format-pdf]`
 **2.134.0**, `docling-core` **2.99.0** and Lingua **2.1.1**. Format extras do
 not install Torch/CUDA or a model server. Full `standard` PDF processing needs
@@ -139,6 +151,17 @@ layout hash, policy digest, parser revision, pipeline (`docx`, `native`,
 language-confidence/sample shape. Language scores are not calibrated
 probabilities. Headings/first text provide a derived title; no missing publisher
 identity, author or publication date is invented.
+
+With the `/2` recipe, `chimera.document-parse/2` carries
+`ghimera.document-media-evidence/1`: unchanged publisher MIME declaration,
+resolved parser format, `declared` or `pdf_header_at_start` method, source hash
+and media-policy digest. The original `Page` and raw source bytes are never
+rewritten to fit the parser. Parent/worker and result readers validate the
+resolution against the original bytes and effective policy. This is parser
+provenance, not authentication of the publisher's claims. `/1` receipts retain
+their original shape. Actual primary-source fetch observations and their
+remaining parse-acceptance boundary are in
+[C2_DOCUMENT_DOWNLOAD_EVIDENCE.md](C2_DOCUMENT_DOWNLOAD_EVIDENCE.md).
 
 The existing `Extracted`, `Document`, `Harvest` reader and extraction ledger
 carry and revalidate these records. A changed native text, layout hash, raw

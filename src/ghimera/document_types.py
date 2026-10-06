@@ -5,6 +5,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghimera.document_media import DOCX_TYPE, DocumentMediaEvidence
+
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Count = Annotated[int, Field(strict=True, ge=0)]
 
@@ -38,7 +40,12 @@ class DocumentLayout(BaseModel):
 
 class DocumentParseEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["chimera.document-parse/1"] = Field(alias="schema")
+    schema_version: Literal["chimera.document-parse/1", "chimera.document-parse/2"] = Field(
+        alias="schema"
+    )
+    media: DocumentMediaEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     source_sha256: Digest
     source_url: str
     text_sha256: Digest
@@ -54,3 +61,14 @@ class DocumentParseEvidence(BaseModel):
     language_margin: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     language_sample_chars: Count
     omitted_links: Count
+
+    @model_validator(mode="after")
+    def media_binding(self) -> "DocumentParseEvidence":
+        if (self.schema_version == "chimera.document-parse/2") != (self.media is not None):
+            raise ValueError("document-parse/2 requires media evidence; /1 retains its old shape")
+        if self.media is not None and (
+            self.media.source_sha256 != self.source_sha256
+            or (self.media.resolved_content_type == DOCX_TYPE) != (self.pipeline == "docx")
+        ):
+            raise ValueError("document media must bind the parser's exact source and format")
+        return self

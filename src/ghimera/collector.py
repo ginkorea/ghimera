@@ -7,7 +7,7 @@ from pydantic import SecretStr
 
 from ghimera.browser import IsolatedBrowserRenderer
 from ghimera.config import GhimeraConfig
-from ghimera.documents import DOCX_TYPE, DocumentExtractionSuite, DocumentExtractor
+from ghimera.documents import DocumentExtractionSuite, DocumentExtractor
 from ghimera.embedding import SelfHostedEncoder
 from ghimera.embedding_types import EmbeddingReferences
 from ghimera.extraction import HtmlExtractor
@@ -26,7 +26,6 @@ from ghimera.source_sessions import SourceCredentials
 from ghimera.transport import Resolver
 
 HTML_TYPES = frozenset({"text/html", "application/xhtml+xml"})
-DOCUMENT_TYPES = frozenset({"application/pdf", DOCX_TYPE})
 
 
 class Collector:
@@ -60,7 +59,9 @@ class Collector:
                 "Collector requires http, research, search, models, scoring and extraction recipes"
             )
         self._content_types = HTML_TYPES | (
-            DOCUMENT_TYPES if config.document_extraction is not None else frozenset()
+            config.document_extraction.supported_content_types
+            if config.document_extraction is not None
+            else frozenset()
         )
         if not set(config.research.content_types) <= self._content_types:
             raise ValueError(

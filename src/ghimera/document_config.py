@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghimera.document_media import DOCX_TYPE, DocumentMediaConfig
 from ghimera.document_models import PdfModels
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
@@ -29,7 +30,10 @@ class ParserArtifact(BaseModel):
 
 class DocumentExtractionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["chimera.document-extraction/1"] = Field(alias="schema")
+    schema_version: Literal["chimera.document-extraction/1", "chimera.document-extraction/2"] = (
+        Field(alias="schema")
+    )
+    media: DocumentMediaConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     worker_python: Path
     work_directory: Path
     max_input_bytes: Positive
@@ -61,6 +65,10 @@ class DocumentExtractionConfig(BaseModel):
 
     @model_validator(mode="after")
     def coherent(self) -> "DocumentExtractionConfig":
+        if (self.schema_version == "chimera.document-extraction/2") != (self.media is not None):
+            raise ValueError(
+                "document-extraction/2 requires its explicit media policy; /1 has none"
+            )
         if not self.worker_python.is_absolute() or not self.work_directory.is_absolute():
             raise ValueError(
                 "worker interpreter and scratch directory must be explicit absolute paths"
@@ -97,6 +105,12 @@ class DocumentExtractionConfig(BaseModel):
             if not expected <= {artifact.path for artifact in self.artifacts}:
                 raise ValueError("every selected PDF model/config file must be in the manifest")
         return self
+
+    @property
+    def supported_content_types(self) -> frozenset[str]:
+        return frozenset({"application/pdf", DOCX_TYPE}) | (
+            frozenset(self.media.pdf_download_types) if self.media is not None else frozenset()
+        )
 
     def content_digest(self) -> str:
         return hashlib.sha256(self.model_dump_json(by_alias=True).encode()).hexdigest()
