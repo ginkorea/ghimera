@@ -8,13 +8,30 @@ from shutil import copyfile
 def test_release_identity_license_and_readme_are_declared():
     root = Path(__file__).resolve().parents[1]
     project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
-    assert project["name"] == "go-spider"
-    assert project["version"] == "0.2.0"
+    assert project["name"] == "ghimera"
+    assert project["version"] == "0.3.0"
     assert project["readme"] == "README.md"
     assert project["license"] == "MIT"
     assert project["license-files"] == ["LICENSE"]
     assert "Permission is hereby granted" in (root / "LICENSE").read_text()
-    assert project["urls"]["Repository"] == "https://github.com/ginkorea/spider"
+    assert project["urls"]["Repository"] == "https://github.com/ginkorea/ghimera"
+    assert project["scripts"]["ghimera"] == "ghimera.command:main"
+
+
+def test_legacy_root_api_refers_to_the_same_implementation():
+    import chimera
+    import ghimera
+
+    assert chimera.Collector is ghimera.Collector
+    assert chimera.ChimeraConfig is ghimera.GhimeraConfig
+
+
+def test_renamed_package_reads_the_existing_config_schema():
+    from ghimera import GhimeraConfig
+
+    root = Path(__file__).resolve().parents[1]
+    config = GhimeraConfig.from_toml(root / "examples" / "chimera.toml")
+    assert config.model_dump(by_alias=True)["schema"] == "chimera.config/1"
 
 
 def test_readme_offline_example_runs_against_the_public_api(monkeypatch, capsys, tmp_path):

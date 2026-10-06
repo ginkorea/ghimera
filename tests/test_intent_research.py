@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from chimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
-from chimera.fetch import FetchLadder
-from chimera.loop import GoalLoop
-from chimera.models import ModelIdentity
-from chimera.research import ResearchLoop, citation_for
-from chimera.research_types import (
+from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
+from ghimera.fetch import FetchLadder
+from ghimera.loop import GoalLoop
+from ghimera.models import ModelIdentity
+from ghimera.research import ResearchLoop, citation_for
+from ghimera.research_types import (
     AnswerDraft,
     AnswerReview,
     Assessment,
@@ -27,7 +27,7 @@ from chimera.research_types import (
     SearchQuery,
     SearchResponse,
 )
-from chimera.search import GroundedSearch
+from ghimera.search import GroundedSearch
 from tests.test_c0 import config
 
 
@@ -260,7 +260,7 @@ def test_serialized_answer_revalidates_native_evidence_not_just_review_shape():
 
 
 def test_graph_has_intent_questions_queries_before_first_search_and_replays(tmp_path):
-    from chimera.graph import DirectoryGraphSink
+    from ghimera.graph import DirectoryGraphSink
     from tests.test_research_graph import policy as graph_policy
 
     gp = graph_policy(tmp_path).model_dump(mode="json", by_alias=True)
@@ -337,11 +337,11 @@ def test_research_wall_deadline_returns_partial_and_records_spent_model_call():
 
 
 def test_research_examples_are_valid_configuration_without_source_edits():
-    from chimera.config import ChimeraConfig
-    from chimera.graph_types import GraphConfig
-    from chimera.searxng import SearxConfig
+    from ghimera.config import GhimeraConfig
+    from ghimera.graph_types import GraphConfig
+    from ghimera.searxng import SearxConfig
 
-    cfg = ChimeraConfig.from_toml(Path("examples/intent-research.toml"))
+    cfg = GhimeraConfig.from_toml(Path("examples/intent-research.toml"))
     assert cfg.research.max_rounds == 8 and cfg.research.source_policy == "grounded_public"
     graph = GraphConfig.from_toml(Path("examples/research-graph.toml"))
     assert {"intent", "question", "query"} <= {role.name for role in graph.roles}

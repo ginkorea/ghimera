@@ -11,15 +11,15 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from chimera.doubles import FakeExtractor, FakeRoute, KeywordScorer
-from chimera.fetch import FetchLadder
-from chimera.loop import GoalLoop
-from chimera.model_client import SelfHostedModel
-from chimera.model_config import ModelServiceConfig
-from chimera.models import Document, Extracted, Goal, Verdict
-from chimera.refusals import ChimeraRefused
-from chimera.research import ResearchLoop
-from chimera.research_types import ResearchRequest
+from ghimera.doubles import FakeExtractor, FakeRoute, KeywordScorer
+from ghimera.fetch import FetchLadder
+from ghimera.loop import GoalLoop
+from ghimera.model_client import SelfHostedModel
+from ghimera.model_config import ModelServiceConfig
+from ghimera.models import Document, Extracted, Goal, Verdict
+from ghimera.refusals import GhimeraRefused
+from ghimera.research import ResearchLoop
+from ghimera.research_types import ResearchRequest
 from tests.test_c0 import config
 from tests.test_intent_research import SearchFixture, policy
 
@@ -83,11 +83,11 @@ def test_second_document_look_adds_native_context_without_rewriting_first_span(e
 
 
 def test_template_id_citations_resolve_to_exact_native_spans_and_refuse_invented_ids():
-    from chimera.evidence_context import ContextWindow
-    from chimera.model_client import model_schema
-    from chimera.model_http import ModelHttpResponse
-    from chimera.research import citation_for
-    from chimera.research_types import (
+    from ghimera.evidence_context import ContextWindow
+    from ghimera.model_client import model_schema
+    from ghimera.model_http import ModelHttpResponse
+    from ghimera.research import citation_for
+    from ghimera.research_types import (
         AnswerDraft,
         AnswerRequest,
         Assessment,
@@ -180,9 +180,9 @@ def test_template_id_citations_resolve_to_exact_native_spans_and_refuse_invented
     assert draft.claims[0].citations[0] == citation
     assert draft.model_call.outcome == "success"
     wire.invalid = True
-    with pytest.raises(ChimeraRefused, match="unsupported_answer"):
+    with pytest.raises(GhimeraRefused, match="unsupported_answer"):
         asyncio.run(client.assess(packet))
-    with pytest.raises(ChimeraRefused, match="unsupported_answer"):
+    with pytest.raises(GhimeraRefused, match="unsupported_answer"):
         asyncio.run(client.answer(AnswerRequest(**packet.model_dump(), assessment=assessment)))
 
 
@@ -334,7 +334,7 @@ def test_bad_model_responses_refuse_without_fallback_and_preserve_evidence(endpo
         endpoint[2]["failure"] = failure
     cfg = config(research=policy())
     model = SelfHostedModel(cfg, service(endpoint[0]))
-    with pytest.raises(ChimeraRefused, match="model_unavailable") as refused:
+    with pytest.raises(GhimeraRefused, match="model_unavailable") as refused:
         asyncio.run(
             model.document(
                 Goal(text="ports"),
@@ -404,7 +404,7 @@ def test_model_dns_must_match_every_approved_address_before_post(endpoint):
         endpoint[0], endpoint=f"http://model.fixture:{endpoint[0]}/v1/chat/completions"
     )
     model = SelfHostedModel(config(), configured, resolver=ReboundResolver())
-    with pytest.raises(ChimeraRefused, match="model_unavailable"):
+    with pytest.raises(GhimeraRefused, match="model_unavailable"):
         asyncio.run(
             model.document(
                 Goal(text="ports"),
@@ -418,7 +418,7 @@ def test_model_dns_must_match_every_approved_address_before_post(endpoint):
 def test_model_response_callback_is_bounded_and_failure_is_recorded(endpoint):
     endpoint[2]["failure"] = "oversized"
     model = SelfHostedModel(config(), service(endpoint[0], max_response_bytes=1000))
-    with pytest.raises(ChimeraRefused, match="model_unavailable") as refused:
+    with pytest.raises(GhimeraRefused, match="model_unavailable") as refused:
         asyncio.run(
             model.document(
                 Goal(text="ports"),
@@ -446,7 +446,7 @@ def test_model_bearer_is_sent_only_to_configured_service_not_call_evidence(endpo
 
 
 def test_required_citations_are_preserved_before_discretionary_context():
-    from chimera.evidence_context import ContextSelector, native_citation
+    from ghimera.evidence_context import ContextSelector, native_citation
 
     documents = []
     for index in range(3):
@@ -477,7 +477,7 @@ def test_required_citations_are_preserved_before_discretionary_context():
 
 def test_model_metadata_cannot_exceed_prompt_budget_before_wire(endpoint):
     model = SelfHostedModel(config(), service(endpoint[0], max_input_chars=50))
-    with pytest.raises(ChimeraRefused, match="budget_exhausted") as refused:
+    with pytest.raises(GhimeraRefused, match="budget_exhausted") as refused:
         asyncio.run(
             model.document(
                 Goal(text="ports"),
@@ -490,7 +490,7 @@ def test_model_metadata_cannot_exceed_prompt_budget_before_wire(endpoint):
 
 def test_model_prompt_limit_includes_system_schema_not_only_user_context(endpoint):
     model = SelfHostedModel(config(), service(endpoint[0], max_input_chars=900))
-    with pytest.raises(ChimeraRefused, match="budget_exhausted") as refused:
+    with pytest.raises(GhimeraRefused, match="budget_exhausted") as refused:
         asyncio.run(
             model.document(
                 Goal(text="ports"),
@@ -503,7 +503,7 @@ def test_model_prompt_limit_includes_system_schema_not_only_user_context(endpoin
 
 
 def test_typed_role_bindings_and_example_need_no_python_allocation_edits():
-    from chimera.model_client import SelfHostedModels
+    from ghimera.model_client import SelfHostedModels
 
     with Path("examples/model-service.toml").open("rb") as stream:
         example = ModelServiceConfig.model_validate(tomllib.load(stream))

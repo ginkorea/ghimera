@@ -63,6 +63,11 @@ and sink deadline policy are still part of the research-controller work.
 
 ## Not yet complete
 
+The [document-seeded organizational research acceptance case](ORGANIZATION_RESEARCH.md)
+records the additional semantic extraction, entity resolution and persistent
+graph-driven expansion needed to turn an organization PDF into a researched
+network. Current discovery/document trace is not that capability.
+
 The seeded collection loop and intent research use this graph; the intent loop
 now records question/query nodes and discovery relations before search. The
 configured Collector assembles that path without a custom sink. Gap/contradiction

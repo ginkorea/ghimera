@@ -1,0 +1,561 @@
+"""GoalSpider's priority frontier and self-grade, without its clients or hidden fallback."""
+
+import asyncio
+import hashlib
+import heapq
+import time
+from collections.abc import Callable
+from typing import Literal
+
+from ghimera.budget import RunBudget
+from ghimera.config import GhimeraConfig
+from ghimera.content_dedup import ContentIndex
+from ghimera.extraction_attempts import (
+    ExtractionCancelled,
+    ExtractionFailure,
+    HtmlExtractionAttempt,
+)
+from ghimera.fetch import FetchLadder
+from ghimera.graph import DirectoryGraphSink, GraphSink, ResearchGraph
+from ghimera.ledger import Ledger
+from ghimera.models import (
+    Document,
+    DuplicateOccurrence,
+    Goal,
+    Harvest,
+    LedgerRow,
+    LinkCandidate,
+    ModelIdentity,
+    Receipt,
+    Scope,
+    StopReason,
+)
+from ghimera.ports import Extractor, Judge
+from ghimera.reference_types import DocumentReference, SearchReference
+from ghimera.references import ReferenceBook
+from ghimera.refusals import GhimeraRefused, ModelFailure, RefusalCode
+from ghimera.scoring import Scorer
+
+CollectionStop = StopReason | Literal["round_limit"]
+
+
+class CollectionSession:
+    """One run's state, reused by research rounds without resetting its budget."""
+
+    def __init__(
+        self, goal: Goal, budget: RunBudget, ledger: Ledger, graph: ResearchGraph | None
+    ) -> None:
+        self.goal, self.budget, self.ledger, self.graph = goal, budget, ledger, graph
+        self._documents: dict[str, Document] = {}
+        self._frontier: list[tuple[float, str, int]] = []
+        self._visited: set[str] = set()
+        self._reference_book = ReferenceBook(budget.config)
+        self._reference_scopes: dict[str, Scope] = {}
+        self._reference_hops: dict[str, int] = {}
+        self._reference_origins: dict[str, str] = {}
+        self._window_start, self._window_new, self._last_grade = 0, 0, 0
+        self._closed = False
+        self._content = (
+            ContentIndex(budget.config.dedup) if budget.config.dedup is not None else None
+        )
+
+    @property
+    def documents(self) -> tuple[Document, ...]:
+        return tuple(self._documents.values())
+
+    @property
+    def evidence_documents(self) -> tuple[Document, ...]:
+        return tuple(item for doc in self.documents for item in doc.evidence_sources())
+
+    def reference_hops(self, url: str) -> int:
+        return self._reference_hops.get(url, 0)
+
+    @property
+    def reference_hosts(self) -> tuple[str, ...]:
+        return self._reference_book.extra_hosts
+
+    def reference_origin(self, url: str) -> str | None:
+        return self._reference_origins.get(url)
+
+    def claim_cited_by(self, document: Document) -> bool:
+        """Reserve a source-derived query once, before I/O, across research rounds."""
+        policy = self.budget.config.references
+        if (
+            policy is None
+            or not policy.discover_cited_by
+            or self.reference_hops(document.url) >= policy.max_hops
+        ):
+            return False
+        return self._reference_book.claim_query(document)
+
+
+class GoalLoop:
+    def __init__(
+        self,
+        *,
+        config: GhimeraConfig,
+        fetcher: FetchLadder,
+        extractor: Extractor,
+        scorer: Scorer,
+        judge: Judge,
+        graph_sink: GraphSink | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._config = config
+        self._fetcher = fetcher
+        self._extractor = extractor
+        extractor.validate_config(config)
+        self._scorer = scorer
+        scorer.validate_config(config)
+        self._judge = judge
+        self._graph_sink = graph_sink
+        if judge.model.location == "external":
+            raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
+        self._clock = clock
+
+    @property
+    def config(self) -> GhimeraConfig:
+        return self._config
+
+    @property
+    def judge_model(self) -> ModelIdentity:
+        return self._judge.model
+
+    async def open(self, goal: Goal, *, run_id: str | None = None) -> CollectionSession:
+        budget = RunBudget(self._config, self._clock)
+        if self._config.journal is not None:
+            if run_id is None:
+                raise GhimeraRefused(RefusalCode.LEDGER_SINK_FAILED)
+            # Load the storage adapter only when selected. Importing it in the
+            # package initializer also executes it before `python -m` inspection.
+            from ghimera.journal import DirectoryLedgerSink
+
+            ledger = Ledger(sink=DirectoryLedgerSink(self._config, run_id, goal, self._judge.model))
+        else:
+            ledger = Ledger()
+        graph = None
+        if self._config.graph is not None and self._config.graph.enabled:
+            if run_id is None:
+                raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
+            sink = (
+                self._graph_sink
+                if self._graph_sink is not None
+                else DirectoryGraphSink(self._config.graph, run_id)
+            )
+            graph = ResearchGraph(self._config.graph, run_id, sink)
+            await graph.start(goal.text)
+            for seed in goal.seeds:
+                await graph.discovered(seed, graph.intent_id)
+        return CollectionSession(goal, budget, ledger, graph)
+
+    async def run(self, goal: Goal, scope: Scope, *, run_id: str | None = None) -> Harvest:
+        session = await self.open(goal, run_id=run_id)
+        stop = await self.collect(session, scope, goal.seeds)
+        if stop == "round_limit":
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        return self.finish(session, stop)
+
+    async def collect(
+        self,
+        session: CollectionSession,
+        scope: Scope,
+        seeds: tuple[str, ...],
+        *,
+        fetch_limit: int | None = None,
+        allow_grade: bool = True,
+    ) -> CollectionStop:
+        if session._closed or session.budget.config != self._config:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        if fetch_limit is not None and fetch_limit <= 0:
+            raise ValueError("collection quantum must be positive")
+        goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
+        documents, frontier, visited = session._documents, session._frontier, session._visited
+        for seed in seeds:
+            if seed not in visited:
+                heapq.heappush(frontier, (-1.0, seed, 0))
+        starting_fetches = budget.fetches
+        stop: CollectionStop = "frontier_empty"
+        while frontier:
+            if fetch_limit is not None and budget.fetches - starting_fetches >= fetch_limit:
+                stop = "round_limit"
+                break
+            _, url, depth = heapq.heappop(frontier)
+            if url in visited:
+                continue
+            visited.add(url)
+            try:
+                budget.check_time()
+                active_scope = session._reference_scopes.get(url, scope)
+                parent_hops = session._reference_hops.get(url, 0)
+                if depth > active_scope.max_depth or not active_scope.permits(url):
+                    raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+                page = await self._fetcher.fetch(url, active_scope, budget, ledger)
+                if parent_hops:
+                    session._reference_hops[page.final_url] = parent_hops
+                    session._reference_origins[page.final_url] = session._reference_origins[url]
+                extraction_started = self._clock()
+                async with asyncio.timeout(budget.remaining_seconds):
+                    try:
+                        extracted = await self._extractor.extract(page)
+                    except ExtractionCancelled as exc:
+                        self._record_parse_attempts(ledger, exc.attempts)
+                        # Preserve asyncio.timeout's exact CancelledError contract.
+                        raise asyncio.CancelledError from None
+                if extracted.extraction is not None:
+                    self._record_parse_attempts(ledger, extracted.extraction.attempts)
+                if extracted.extraction is not None or extracted.document_parse is not None:
+                    ledger.append(
+                        LedgerRow(
+                            sequence=ledger.next_sequence,
+                            event="extraction",
+                            url=page.final_url,
+                            extraction=extracted.extraction,
+                            document_parse=extracted.document_parse,
+                            reason=self._extractor.revision,
+                            latency_seconds=max(0.0, self._clock() - extraction_started),
+                        )
+                    )
+                    if extracted.extraction is not None:
+                        health = extracted.extraction.locator_health
+                        if health is not None and health.generic_only:
+                            ledger.append(
+                                LedgerRow(
+                                    sequence=ledger.next_sequence,
+                                    event="policy",
+                                    url=page.final_url,
+                                    extraction=extracted.extraction,
+                                    reason="locator_drift: publisher uses generic extraction",
+                                )
+                            )
+                document_node_id = None
+                if graph is not None:
+                    document_node_id = await graph.document(
+                        page.final_url,
+                        page.body,
+                        extracted.text,
+                        self._extractor.revision,
+                        transport=page.transport,
+                    )
+                # Score native evidence before the judge. Similarity guides the frontier,
+                # but never replaces a document verdict or factual source evidence.
+                ranked = await self._scorer.score(goal, extracted, budget, ledger)
+                verdict = None
+                for second_look in (False, True):
+                    budget.reserve_judge()
+                    try:
+                        async with asyncio.timeout(budget.remaining_seconds):
+                            verdict = await self._judge.document(
+                                goal, extracted, second_look=second_look
+                            )
+                    except (GhimeraRefused, TimeoutError) as exc:
+                        code = (
+                            exc.code
+                            if isinstance(exc, GhimeraRefused)
+                            else RefusalCode.BUDGET_EXHAUSTED
+                        )
+                        ledger.append(
+                            LedgerRow(
+                                sequence=ledger.next_sequence,
+                                event="verdict",
+                                url=url,
+                                refusal=code,
+                                model=self._judge.model,
+                                model_call=exc.model_call
+                                if isinstance(exc, ModelFailure)
+                                else None,
+                                reason="served_judge_failed",
+                            )
+                        )
+                        raise GhimeraRefused(code) from None
+                    ledger.append(
+                        LedgerRow(
+                            sequence=ledger.next_sequence,
+                            event="verdict",
+                            model=self._judge.model,
+                            model_call=verdict.model_call,
+                            url=url,
+                            reason=f"{verdict.decision}: {verdict.reason}",
+                        )
+                    )
+                    if verdict.decision != "hold":
+                        break
+                if verdict is not None and verdict.decision == "accept":
+                    digest = hashlib.sha256(page.body).hexdigest()
+                    candidate = Document(
+                        url=page.final_url,
+                        sha256=digest,
+                        raw=page.body,
+                        extracted=extracted,
+                        verdict=verdict,
+                        transport=page.transport,
+                        rendered=page.rendered,
+                        source_session=page.source_session,
+                    )
+                    content = session._content
+                    matched = content.match(candidate) if content is not None else None
+                    drift = content.drift(candidate) if content is not None else None
+                    if drift is not None:
+                        ledger.append(
+                            LedgerRow(
+                                sequence=ledger.next_sequence,
+                                event="content_drift",
+                                url=page.final_url,
+                                reason=drift.reason,
+                                content_drift=drift,
+                            )
+                        )
+                    representative = (
+                        matched.representative_sha256 if matched is not None else digest
+                    )
+                    if representative in documents:
+                        original = documents[representative]
+                        occurrences = original.occurrences
+                        if (
+                            matched is not None
+                            and (candidate.url, digest) != (original.url, original.sha256)
+                            and not any(
+                                (item.url, item.sha256) == (candidate.url, digest)
+                                for item in occurrences
+                            )
+                        ):
+                            occurrence = DuplicateOccurrence.model_validate(
+                                dict(
+                                    candidate.model_dump(exclude={"duplicate_urls", "occurrences"}),
+                                    dedup=matched.model_dump(by_alias=True),
+                                )
+                            )
+                            occurrences += (occurrence,)
+                        urls = tuple(
+                            dict.fromkeys(
+                                original.duplicate_urls
+                                + ((page.final_url,) if page.final_url != original.url else ())
+                            )
+                        )
+                        documents[representative] = Document.model_validate(
+                            dict(
+                                original.model_dump(), duplicate_urls=urls, occurrences=occurrences
+                            )
+                        )
+                        ledger.append(
+                            LedgerRow(
+                                sequence=ledger.next_sequence,
+                                event="duplicate",
+                                url=url,
+                                reason=matched.reason if matched is not None else "content_sha256",
+                                dedup=matched,
+                            )
+                        )
+                    else:
+                        if content is not None:
+                            content.add(candidate)
+                        documents[digest] = candidate
+                        session._window_new += 1
+                    if content is not None:
+                        content.observe(candidate)
+                    reference_policy = self._config.references
+                    if reference_policy is not None and candidate in session.evidence_documents:
+                        by_target = {item.target_url: item for item in extracted.references}
+                        reference_links = tuple(link for link in ranked if link.url in by_target)
+                        for link in reference_links[: reference_policy.max_candidates_per_parent]:
+                            await self.queue_reference(
+                                session,
+                                candidate,
+                                by_target[link.url],
+                                link,
+                                active_scope,
+                                parent_hops,
+                                origin_url=session.reference_origin(url),
+                            )
+                reference_targets = {item.target_url for item in extracted.references}
+                for link in ranked[: self._config.max_links_per_page]:
+                    if link.url in reference_targets:
+                        continue
+                    if link.score >= self._config.min_link_score and link.url not in visited:
+                        if graph is not None and document_node_id is not None:
+                            await graph.discovered(link.url, document_node_id)
+                        heapq.heappush(frontier, (-link.score, link.url, depth + 1))
+                        if parent_hops:
+                            session._reference_scopes.setdefault(link.url, active_scope)
+                            session._reference_hops.setdefault(link.url, parent_hops)
+                            session._reference_origins.setdefault(
+                                link.url, session._reference_origins.get(url, url)
+                            )
+            except (GhimeraRefused, TimeoutError) as exc:
+                if isinstance(exc, ExtractionFailure):
+                    self._record_parse_attempts(ledger, exc.attempts)
+                code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+                if code in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}:
+                    raise
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="refusal",
+                        url=url,
+                        refusal=code,
+                        reason=code.value,
+                    )
+                )
+                if code == RefusalCode.BUDGET_EXHAUSTED:
+                    stop = "budget_exhausted"
+                    break
+                if code in {RefusalCode.ADAPTER_CONTRACT, RefusalCode.MODEL_UNAVAILABLE}:
+                    stop = "failed"
+                    break
+            if budget.fetches - session._window_start >= self._config.saturation_window:
+                if session._window_new < self._config.saturation_min_new:
+                    stop = "saturated"
+                    break
+                session._window_start, session._window_new = budget.fetches, 0
+            if allow_grade and budget.fetches - session._last_grade >= self._config.grade_interval:
+                try:
+                    budget.reserve_judge()
+                except GhimeraRefused:
+                    stop = "budget_exhausted"
+                    break
+                try:
+                    async with asyncio.timeout(budget.remaining_seconds):
+                        grade = await self._judge.grade(goal, tuple(documents.values()))
+                except (GhimeraRefused, TimeoutError) as exc:
+                    code = (
+                        exc.code
+                        if isinstance(exc, GhimeraRefused)
+                        else RefusalCode.BUDGET_EXHAUSTED
+                    )
+                    ledger.append(
+                        LedgerRow(
+                            sequence=ledger.next_sequence,
+                            event="grade",
+                            refusal=code,
+                            model=self._judge.model,
+                            model_call=exc.model_call if isinstance(exc, ModelFailure) else None,
+                            reason="served_grade_failed",
+                        )
+                    )
+                    stop = "budget_exhausted" if code == RefusalCode.BUDGET_EXHAUSTED else "failed"
+                    break
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="grade",
+                        model=self._judge.model,
+                        model_call=grade.model_call,
+                        reason=f"{grade.satisfied}: {grade.reason}",
+                    )
+                )
+                session._last_grade = budget.fetches
+                if grade.satisfied and grade.confidence >= self._config.grade_threshold:
+                    stop = "goal_satisfied"
+                    break
+        return stop
+
+    def _record_parse_attempts(
+        self, ledger: Ledger, attempts: tuple[HtmlExtractionAttempt, ...]
+    ) -> None:
+        for attempt in attempts:
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="extraction_attempt",
+                    url=attempt.source_url,
+                    refusal=attempt.refusal,
+                    latency_seconds=attempt.latency_seconds,
+                    extraction_attempt=attempt,
+                    reason=f"{attempt.phase}: {attempt.outcome}",
+                )
+            )
+
+    async def score_discovery(
+        self,
+        session: CollectionSession,
+        source: Document,
+        links: tuple[LinkCandidate, ...],
+    ) -> tuple[LinkCandidate, ...]:
+        """Use native source context with provider-observed candidates, not invented URLs."""
+        if (
+            session._closed
+            or session.budget.config != self._config
+            or (source not in session.evidence_documents)
+        ):
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        document = source.extracted.model_validate(
+            dict(
+                source.extracted.model_dump(),
+                links=links,
+                references=(),
+            )
+        )
+        return await self._scorer.score(session.goal, document, session.budget, session.ledger)
+
+    async def queue_reference(
+        self,
+        session: CollectionSession,
+        source: Document,
+        proof: DocumentReference | SearchReference,
+        link: LinkCandidate,
+        scope: Scope,
+        parent_hops: int,
+        *,
+        origin_url: str | None = None,
+    ) -> bool:
+        if session._closed or session.budget.config != self._config:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        if source not in session.evidence_documents or (link.url, link.anchor) != (
+            proof.target_url,
+            proof.anchor,
+        ):
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        selected = session._reference_book.consider(
+            source,
+            proof,
+            link,
+            scope,
+            parent_hops,
+            session._visited,
+            session.ledger,
+            origin_url,
+        )
+        if selected is None:
+            return False
+        session._reference_scopes[link.url] = selected
+        session._reference_hops[link.url] = parent_hops + 1
+        session._reference_origins[link.url] = link.url
+        heapq.heappush(session._frontier, (-link.score, link.url, 0))
+        if session.graph is not None:
+            graph = session.graph
+            parent = await graph.document(
+                source.url,
+                source.raw,
+                source.extracted.text,
+                self._extractor.revision,
+                transport=source.transport,
+            )
+            await graph.discovered(link.url, parent)
+        return True
+
+    def finish(self, session: CollectionSession, stop: StopReason) -> Harvest:
+        if session._closed or session.budget.config != self._config:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        session._closed = True
+        goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
+        ledger.append(LedgerRow(sequence=ledger.next_sequence, event="stop", reason=stop))
+        harvest = Harvest(
+            schema="chimera.harvest/1",
+            goal=goal,
+            documents=session.documents,
+            ledger=ledger.snapshot(),
+            receipt=Receipt(
+                fetches=budget.fetches,
+                bytes_read=budget.bytes_read,
+                judge_calls=budget.judge_calls,
+                encoding_calls=budget.encoding_calls,
+                encoding_chars=budget.encoding_chars,
+                accepted_documents=len(session.documents),
+                elapsed_seconds=budget.elapsed,
+                stop_reason=stop,
+                effective_config=self._config,
+                judge=self._judge.model,
+            ),
+            graph=graph.snapshot() if graph is not None else None,
+        )
+        ledger.finish(harvest)
+        return harvest

@@ -65,7 +65,7 @@ with reason `locator_drift`. Inspect every configured profile without changing
 its state using:
 
 ```bash
-python -m chimera.locator_health --config /path/to/extraction.toml
+python -m ghimera.locator_health --config /path/to/extraction.toml
 ```
 
 The doctor emits JSON and exits 1 for a drifted profile, 0 for healthy profiles.

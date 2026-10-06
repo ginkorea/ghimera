@@ -3,8 +3,8 @@ requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "go-spider"
-version = "0.2.0"
+name = "ghimera"
+version = "0.3.0"
 description = "Intent-driven web research with bounded collection and source-bound evidence"
 readme = "README.md"
 license = "MIT"
@@ -14,10 +14,13 @@ requires-python = ">=3.11"
 dependencies = ["pydantic==2.13.5", "curl_cffi==0.16.3", "protego==0.7.0"]
 
 [project.urls]
-Homepage = "https://github.com/ginkorea/spider"
-Repository = "https://github.com/ginkorea/spider"
-Issues = "https://github.com/ginkorea/spider/issues"
-Changelog = "https://github.com/ginkorea/spider/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/ginkorea/ghimera"
+Repository = "https://github.com/ginkorea/ghimera"
+Issues = "https://github.com/ginkorea/ghimera/issues"
+Changelog = "https://github.com/ginkorea/ghimera/blob/main/CHANGELOG.md"
+
+[project.scripts]
+ghimera = "ghimera.command:main"
 
 [project.optional-dependencies]
 browser = ["patchright==1.63.0"]
@@ -32,7 +35,7 @@ dev = ["pytest==9.1.1", "ruff==0.16.10", "mypy==2.4.0"]
 exclude = [".git", ".git/**", ".venv/**", "gate-work/**", "**/__pycache__/**", "**/*.pyc"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/chimera"]
+packages = ["src/ghimera", "src/chimera"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -47,5 +50,5 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src/chimera"]
+files = ["src/ghimera", "src/chimera"]
 mypy_path = ["typing"]

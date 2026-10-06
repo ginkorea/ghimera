@@ -9,12 +9,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chimera.browser import IsolatedBrowserRenderer
-from chimera.browser_config import BrowserConfig
-from chimera.browser_types import RenderResource
-from chimera.config import ChimeraConfig
-from chimera.models import Page, Scope
-from chimera.refusals import ChimeraRefused, RefusalCode
+from ghimera.browser import IsolatedBrowserRenderer
+from ghimera.browser_config import BrowserConfig
+from ghimera.browser_types import RenderResource
+from ghimera.config import GhimeraConfig
+from ghimera.models import Page, Scope
+from ghimera.refusals import GhimeraRefused, RefusalCode
 
 
 def browser_policy(tmp_path, **updates):
@@ -66,15 +66,15 @@ class Resources:
     async def fetch(self, url):
         self.calls.append(url)
         if url not in self.pages:
-            raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)
+            raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
         return self.pages[url]
 
 
 def render(tmp_path, html, resources=None, **updates):
     policy = browser_policy(tmp_path, **updates)
-    config = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    config = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     config["browser"] = policy.model_dump(by_alias=True)
-    renderer = IsolatedBrowserRenderer(ChimeraConfig.model_validate(config))
+    renderer = IsolatedBrowserRenderer(GhimeraConfig.model_validate(config))
     result = asyncio.run(
         renderer.render(
             source(html),
@@ -176,16 +176,16 @@ def test_post_and_websocket_are_never_sent_as_http_get(tmp_path):
 def test_missing_or_unpinned_executable_refuses_before_launch(tmp_path):
     data = browser_policy(tmp_path).model_dump(by_alias=True)
     data["executable_sha256"] = "0" * 64
-    cfg = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    cfg = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     cfg["browser"] = data
-    with pytest.raises(ChimeraRefused, match="adapter_contract"):
-        IsolatedBrowserRenderer(ChimeraConfig.model_validate(cfg))
+    with pytest.raises(GhimeraRefused, match="adapter_contract"):
+        IsolatedBrowserRenderer(GhimeraConfig.model_validate(cfg))
     assert not (tmp_path / "browser").exists()
 
 
 def test_render_timeout_cleans_its_own_process_tree_and_next_call_runs(tmp_path):
     started = time.monotonic()
-    with pytest.raises(ChimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
         render(tmp_path, "<article>Never ready</article>", timeout_seconds=0.8)
     assert time.monotonic() - started < 10
     assert not list((tmp_path / "browser").iterdir())
@@ -210,10 +210,10 @@ def test_ladder_renders_only_js_required_and_budgets_real_subresources(tmp_path)
     from test_http_fetch import ResolverFixture, state
     from test_http_fetch import site as fixture_site
 
-    from chimera.budget import RunBudget
-    from chimera.fetch import FetchLadder
-    from chimera.http import CurlRoute
-    from chimera.ledger import Ledger
+    from ghimera.budget import RunBudget
+    from ghimera.fetch import FetchLadder
+    from ghimera.http import CurlRoute
+    from ghimera.ledger import Ledger
 
     # Reuse the real C1 server and exact loopback-network exception, not a second
     # HTTP implementation or a browser profile that can reach localhost directly.
@@ -232,7 +232,7 @@ def test_ladder_renders_only_js_required_and_budgets_real_subresources(tmp_path)
             tmp_path,
             resource_content_types=["text/plain"],
         ).model_dump(by_alias=True)
-        config = ChimeraConfig.model_validate(cfg)
+        config = GhimeraConfig.model_validate(cfg)
         route = CurlRoute(config, resolver=ResolverFixture())
         ladder = FetchLadder((route,), renderer=IsolatedBrowserRenderer(config))
         budget, ledger = RunBudget(config, time.monotonic), Ledger()
@@ -256,10 +256,10 @@ def test_browser_open_web_and_onion_subresources_follow_tor_without_local_dns(tm
     from test_http_fetch import state
     from test_tor_transport import NoLocalDNS, onion, policy, socks_server
 
-    from chimera.budget import RunBudget
-    from chimera.fetch import FetchLadder
-    from chimera.http import CurlRoute
-    from chimera.ledger import Ledger
+    from ghimera.budget import RunBudget
+    from ghimera.fetch import FetchLadder
+    from ghimera.http import CurlRoute
+    from ghimera.ledger import Ledger
 
     fixture = fixture_site.__wrapped__()
     site = next(fixture)
@@ -281,7 +281,7 @@ def test_browser_open_web_and_onion_subresources_follow_tor_without_local_dns(tm
                 tmp_path,
                 resource_content_types=["text/plain"],
             ).model_dump(by_alias=True)
-            config = ChimeraConfig.model_validate(data)
+            config = GhimeraConfig.model_validate(data)
             host = onion() if dark else "fixture.example"
             scope = Scope(
                 allowed_hosts=(host,),
@@ -317,22 +317,22 @@ def test_browser_open_web_and_onion_subresources_follow_tor_without_local_dns(tm
 def test_rendered_html_extraction_and_harvest_bind_raw_dom_and_resources(tmp_path):
     from test_html_extraction import policy as extraction_policy
 
-    from chimera.doubles import FakeJudge, FakeRoute, KeywordScorer
-    from chimera.extraction import HtmlExtractor
-    from chimera.fetch import FetchLadder
-    from chimera.loop import GoalLoop
-    from chimera.models import Goal, Harvest
+    from ghimera.doubles import FakeJudge, FakeRoute, KeywordScorer
+    from ghimera.extraction import HtmlExtractor
+    from ghimera.fetch import FetchLadder
+    from ghimera.loop import GoalLoop
+    from ghimera.models import Goal, Harvest
 
     html = """<title>Maritime infrastructure report</title><article></article>
     <script>document.querySelector('article').innerHTML='<h1>Maritime infrastructure report</h1>'+
     '<p>The port authority published a report about infrastructure investment. The document '+
     'describes maritime transport and construction of a new terminal.</p>';
     document.querySelector('article').setAttribute('data-ready','yes');</script>"""
-    data = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    data = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     data["browser"] = browser_policy(tmp_path).model_dump(by_alias=True)
     data["extraction"] = extraction_policy(tmp_path / "parse").model_dump(by_alias=True)
     data.update(page_budget=1)
-    config = ChimeraConfig.model_validate(data)
+    config = GhimeraConfig.model_validate(data)
 
     class JsRequired(FakeRoute):
         async def attempt(self, request):
@@ -385,10 +385,10 @@ def test_source_csp_is_preserved(tmp_path):
         }
     )
     policy = browser_policy(tmp_path)
-    data = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    data = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     data["browser"] = policy.model_dump(by_alias=True)
     rendered = asyncio.run(
-        IsolatedBrowserRenderer(ChimeraConfig.model_validate(data)).render(
+        IsolatedBrowserRenderer(GhimeraConfig.model_validate(data)).render(
             original,
             Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",)),
             Resources(),
@@ -399,11 +399,11 @@ def test_source_csp_is_preserved(tmp_path):
 
 
 def test_js_created_login_wall_is_terminal_after_render(tmp_path):
-    from chimera.budget import RunBudget
-    from chimera.doubles import FakeRoute
-    from chimera.fetch import FetchLadder
-    from chimera.http import page_barrier
-    from chimera.ledger import Ledger
+    from ghimera.budget import RunBudget
+    from ghimera.doubles import FakeRoute
+    from ghimera.fetch import FetchLadder
+    from ghimera.http import page_barrier
+    from ghimera.ledger import Ledger
 
     html = """<article data-ready='yes'></article><noscript>enable javascript</noscript><script>
     const input=document.createElement('input');input.type='pass'+'word';
@@ -417,15 +417,15 @@ def test_js_created_login_wall_is_terminal_after_render(tmp_path):
         def escalation_reason(self, page):
             barrier = page_barrier(page)
             if barrier is not None:
-                raise ChimeraRefused(barrier)
+                raise GhimeraRefused(barrier)
             return "javascript_required"
 
-    data = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    data = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     data["browser"] = browser_policy(tmp_path).model_dump(by_alias=True)
-    config = ChimeraConfig.model_validate(data)
+    config = GhimeraConfig.model_validate(data)
     ladder = FetchLadder((DetectedSource(),), renderer=IsolatedBrowserRenderer(config))
     ledger = Ledger()
-    with pytest.raises(ChimeraRefused, match="login_wall"):
+    with pytest.raises(GhimeraRefused, match="login_wall"):
         asyncio.run(
             ladder.fetch(
                 "https://example.org/story",
@@ -447,7 +447,7 @@ def test_resource_limit_terminates_instead_of_reporting_partial_render_complete(
         body=b"{}",
     )
     resources = Resources((data,))
-    with pytest.raises(ChimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
         render(
             tmp_path,
             """<article data-ready='yes'>Report</article><script>
@@ -469,9 +469,9 @@ def test_cancel_reaps_browser_session_and_releases_capacity(tmp_path, monkeypatc
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", capture)
-    data = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    data = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     data["browser"] = browser_policy(tmp_path).model_dump(by_alias=True)
-    renderer = IsolatedBrowserRenderer(ChimeraConfig.model_validate(data))
+    renderer = IsolatedBrowserRenderer(GhimeraConfig.model_validate(data))
     scope = Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",))
 
     async def exercise():

@@ -10,15 +10,15 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chimera.budget import RunBudget
-from chimera.config import ChimeraConfig
-from chimera.fetch import FetchLadder
-from chimera.http import CurlRoute
-from chimera.ledger import Ledger
-from chimera.models import Scope
-from chimera.refusals import ChimeraRefused
-from chimera.transport import is_onion_v3
-from chimera.transport_types import TransportConfig
+from ghimera.budget import RunBudget
+from ghimera.config import GhimeraConfig
+from ghimera.fetch import FetchLadder
+from ghimera.http import CurlRoute
+from ghimera.ledger import Ledger
+from ghimera.models import Scope
+from ghimera.refusals import GhimeraRefused
+from ghimera.transport import is_onion_v3
+from ghimera.transport_types import TransportConfig
 from tests.test_http_fetch import site as site
 from tests.test_http_fetch import state
 
@@ -121,7 +121,7 @@ async def socks_server(http_port, seen, *, resolved="127.0.0.1", auth_method=2):
 
 def test_transport_config_and_onion_address_fail_closed():
     example = Path(__file__).parents[1] / "examples" / "chimera-tor.toml"
-    assert ChimeraConfig.from_toml(example).transport.default_route == "tor"
+    assert GhimeraConfig.from_toml(example).transport.default_route == "tor"
     assert is_onion_v3(onion()) and is_onion_v3("www." + onion())
     assert not is_onion_v3("oldaddress.onion")
     assert not is_onion_v3("b" + onion()[1:])
@@ -153,7 +153,7 @@ def test_curl_uses_proxy_for_robots_and_body_without_local_dns(site, monkeypatch
             tp = policy(port).model_dump(by_alias=True)
             tp["tor"]["allowed_ports"] = [site[0]]
             raw["transport"] = tp
-            cfg = ChimeraConfig.model_validate(raw)
+            cfg = GhimeraConfig.model_validate(raw)
             host = onion() if dark else "fixture.example"
             scope = Scope(
                 allowed_hosts=(host,),
@@ -192,9 +192,9 @@ def test_curl_uses_proxy_for_robots_and_body_without_local_dns(site, monkeypatch
 def test_direct_onion_refuses_before_local_dns(site):
     cfg = state(site)[2].config
     route = CurlRoute(cfg, resolver=NoLocalDNS())
-    from chimera.models import FetchRequest
+    from ghimera.models import FetchRequest
 
-    with pytest.raises(ChimeraRefused, match="tor_required"):
+    with pytest.raises(GhimeraRefused, match="tor_required"):
         asyncio.run(
             route.execute(
                 FetchRequest(url=f"http://{onion()}/x", max_bytes=1000, timeout_seconds=1.0)
@@ -211,11 +211,11 @@ def test_dead_proxy_and_remote_private_address_never_try_direct(site):
             tp = policy(server.sockets[0].getsockname()[1]).model_dump(by_alias=True)
             tp["tor"]["allowed_ports"] = [site[0]]
             raw["transport"] = tp
-            cfg = ChimeraConfig.model_validate(raw)
-            from chimera.models import FetchRequest
+            cfg = GhimeraConfig.model_validate(raw)
+            from ghimera.models import FetchRequest
 
             route = CurlRoute(cfg, resolver=NoLocalDNS())
-            with pytest.raises(ChimeraRefused, match="out_of_scope"):
+            with pytest.raises(GhimeraRefused, match="out_of_scope"):
                 await route.execute(
                     FetchRequest(
                         url=f"http://fixture.example:{site[0]}/plain",
@@ -225,7 +225,7 @@ def test_dead_proxy_and_remote_private_address_never_try_direct(site):
                 )
         assert not any(row[0] == 1 for row in seen)
         # Keep its now-closed exact port; a live proxy must not be substituted.
-        with pytest.raises(ChimeraRefused, match="tor_unavailable"):
+        with pytest.raises(GhimeraRefused, match="tor_unavailable"):
             await route.execute(
                 FetchRequest(
                     url=f"http://fixture.example:{site[0]}/plain",
@@ -240,12 +240,12 @@ def test_dead_proxy_and_remote_private_address_never_try_direct(site):
 
 
 def test_cross_network_or_route_redirect_requires_configuration():
-    from chimera.transport import validate_transition
+    from ghimera.transport import validate_transition
 
     cfg = policy(9050, default_route="direct", rules=[{"host": "example.org", "route": "tor"}])
-    with pytest.raises(ChimeraRefused, match="out_of_scope"):
+    with pytest.raises(GhimeraRefused, match="out_of_scope"):
         validate_transition("https://example.org/a", "http://" + onion() + "/x", cfg)
-    with pytest.raises(ChimeraRefused, match="out_of_scope"):
+    with pytest.raises(GhimeraRefused, match="out_of_scope"):
         validate_transition("https://example.org/a", "https://other.example/x", cfg)
 
 
@@ -259,12 +259,12 @@ def test_proxy_cannot_remove_stream_isolation(site, dark):
             tp = policy(server.sockets[0].getsockname()[1]).model_dump(by_alias=True)
             tp["tor"]["allowed_ports"] = [site[0]]
             raw["transport"] = tp
-            cfg = ChimeraConfig.model_validate(raw)
-            from chimera.models import FetchRequest
+            cfg = GhimeraConfig.model_validate(raw)
+            from ghimera.models import FetchRequest
 
             route = CurlRoute(cfg, resolver=NoLocalDNS())
             host = onion() if dark else "fixture.example"
-            with pytest.raises(ChimeraRefused, match="tor_unavailable"):
+            with pytest.raises(GhimeraRefused, match="tor_unavailable"):
                 await route.execute(
                     FetchRequest(
                         url=f"http://{host}:{site[0]}/plain",
@@ -288,13 +288,13 @@ def test_tor_request_closes_private_tunnel_and_accounts_partial_bytes(site):
             tp = policy(server.sockets[0].getsockname()[1]).model_dump(by_alias=True)
             tp["tor"]["allowed_ports"] = [site[0]]
             raw["transport"] = tp
-            cfg = ChimeraConfig.model_validate(raw)
-            from chimera.models import FetchRequest
-            from chimera.refusals import FetchFailure
+            cfg = GhimeraConfig.model_validate(raw)
+            from ghimera.models import FetchRequest
+            from ghimera.refusals import FetchFailure
 
             with tempfile.TemporaryDirectory(prefix="ct-") as root:
                 raw["transport"]["tor"]["bridge_directory"] = root
-                cfg = ChimeraConfig.model_validate(raw)
+                cfg = GhimeraConfig.model_validate(raw)
                 route = CurlRoute(cfg, resolver=NoLocalDNS())
                 with pytest.raises(FetchFailure, match="budget_exhausted") as failure:
                     await route.execute(
@@ -311,8 +311,8 @@ def test_tor_request_closes_private_tunnel_and_accounts_partial_bytes(site):
 
 
 def test_transport_is_preserved_in_graph_journal_without_changing_legacy_nodes(site, tmp_path):
-    from chimera.graph import DirectoryGraphSink, ResearchGraph
-    from chimera.models import FetchRequest
+    from ghimera.graph import DirectoryGraphSink, ResearchGraph
+    from ghimera.models import FetchRequest
     from tests.test_research_graph import policy as graph_policy
 
     async def scenario():
@@ -322,7 +322,7 @@ def test_transport_is_preserved_in_graph_journal_without_changing_legacy_nodes(s
             tp = policy(server.sockets[0].getsockname()[1]).model_dump(by_alias=True)
             tp["tor"]["allowed_ports"] = [site[0]]
             raw["transport"] = tp
-            route = CurlRoute(ChimeraConfig.model_validate(raw), resolver=NoLocalDNS())
+            route = CurlRoute(GhimeraConfig.model_validate(raw), resolver=NoLocalDNS())
             page = await route.execute(
                 FetchRequest(
                     url=f"http://fixture.example:{site[0]}/plain",
@@ -358,10 +358,10 @@ def test_failed_tor_attempt_keeps_selected_route_in_ledger(site):
             tp = policy(server.sockets[0].getsockname()[1]).model_dump(by_alias=True)
             tp["tor"]["allowed_ports"] = [site[0]]
             raw["transport"] = tp
-            cfg = ChimeraConfig.model_validate(raw)
+            cfg = GhimeraConfig.model_validate(raw)
             ledger = Ledger()
             ladder = FetchLadder((CurlRoute(cfg, resolver=NoLocalDNS()),))
-            with pytest.raises(ChimeraRefused):
+            with pytest.raises(GhimeraRefused):
                 await ladder.fetch(
                     f"http://fixture.example:{site[0]}/plain",
                     state(site)[1],

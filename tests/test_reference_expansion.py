@@ -6,11 +6,11 @@ import hashlib
 import pytest
 from pydantic import ValidationError
 
-from chimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
-from chimera.fetch import FetchLadder
-from chimera.loop import GoalLoop
-from chimera.models import Extracted, Goal, Harvest, LinkCandidate, Scope
-from chimera.reference_types import DocumentReference, ReferenceSpan
+from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
+from ghimera.fetch import FetchLadder
+from ghimera.loop import GoalLoop
+from ghimera.models import Extracted, Goal, Harvest, LinkCandidate, Scope
+from ghimera.reference_types import DocumentReference, ReferenceSpan
 from tests.test_c0 import config
 
 
@@ -206,7 +206,7 @@ def test_reference_policy_is_explicit_versioned_and_validates_query_templates():
 
 
 def test_real_docling_native_links_carry_replayable_text_locators(tmp_path):
-    from chimera.documents import DocumentExtractor
+    from ghimera.documents import DocumentExtractor
     from tests.test_document_extraction import config as document_config
     from tests.test_document_extraction import page
 

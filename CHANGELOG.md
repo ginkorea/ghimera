@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-10-06
+
+- Consolidated project naming as `ghimera`: distribution, Python package,
+  command and GitHub repository. The primary configuration class is
+  `GhimeraConfig`. A narrow legacy `chimera` root facade and module command
+  reuse the same implementation; nested imports migrate to `ghimera.*`.
+  Existing `chimera.*` data schemas, prompt revisions and saved-result
+  identities are unchanged. The old `go-spider` releases remain unchanged.
+
+- Concrete live intent research acceptance joined real discovery, laptop
+  HTTP/HTML extraction, a pinned semantic encoder, self-hosted model judgment,
+  answer/review, incremental graph and sealed archive readback. This English,
+  same-model-review diagnostic does not establish representative accuracy or
+  close the remaining browser/publisher/document/runtime acceptance gates.
 
 - Explicit SearXNG ordinary-HTML search beside unchanged JSON mode. Version-2
   search configuration selects the dialect; the Collector assembles the owning

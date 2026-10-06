@@ -5,17 +5,17 @@ from pathlib import Path
 
 import pytest
 
-from chimera.config import ChimeraConfig
-from chimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
-from chimera.fetch import FetchLadder
-from chimera.loop import GoalLoop
-from chimera.models import ModelIdentity
-from chimera.refusals import ChimeraRefused, RefusalCode
+from ghimera.config import GhimeraConfig
+from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
+from ghimera.fetch import FetchLadder
+from ghimera.loop import GoalLoop
+from ghimera.models import ModelIdentity
+from ghimera.refusals import GhimeraRefused, RefusalCode
 
 
 def test_production_import_graph_has_no_inference_or_platform_stack():
     banned = {"torch", "transformers", "vllm", "ollama", "openai", "redis", "celery", "taipan"}
-    for path in (Path(__file__).resolve().parents[1] / "src" / "chimera").glob("*.py"):
+    for path in (Path(__file__).resolve().parents[1] / "src" / "ghimera").glob("*.py"):
         source = path.read_text()
         tree = ast.parse(source)
         imports = set()
@@ -30,7 +30,7 @@ def test_production_import_graph_has_no_inference_or_platform_stack():
 
 
 def test_refusal_table_is_complete_and_immutable():
-    from chimera.refusals import REFUSALS
+    from ghimera.refusals import REFUSALS
 
     assert set(REFUSALS) == set(RefusalCode)
     assert all(sentence.strip() for sentence in REFUSALS.values())
@@ -44,9 +44,9 @@ def test_external_model_refuses_before_work():
         def model(self):
             return ModelIdentity(model_id="external-test", revision="1", location="external")
 
-    with pytest.raises(ChimeraRefused, match="model_unavailable"):
+    with pytest.raises(GhimeraRefused, match="model_unavailable"):
         GoalLoop(
-            config=ChimeraConfig.from_toml(Path("examples/chimera.toml")),
+            config=GhimeraConfig.from_toml(Path("examples/chimera.toml")),
             fetcher=FetchLadder((FakeRoute(),)),
             extractor=FakeExtractor(),
             scorer=KeywordScorer(),

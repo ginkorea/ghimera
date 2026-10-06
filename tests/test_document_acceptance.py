@@ -5,8 +5,8 @@ import hashlib
 
 import pytest
 
-from chimera.document_acceptance import PdfExpectations, accept_pdf
-from chimera.refusals import ChimeraRefused
+from ghimera.document_acceptance import PdfExpectations, accept_pdf
+from ghimera.refusals import GhimeraRefused
 from tests.test_document_extraction import config, native_pdf, page
 
 
@@ -47,5 +47,5 @@ def test_actual_pdf_acceptance_binds_bytes_expectations_and_real_parse(tmp_path)
 )
 def test_acceptance_refuses_actual_mismatches_instead_of_scoring_them_passed(tmp_path, updates):
     source = page(native_pdf(), "application/pdf")
-    with pytest.raises(ChimeraRefused):
+    with pytest.raises(GhimeraRefused):
         asyncio.run(accept_pdf(config(tmp_path), source, expectations(**updates)))

@@ -8,17 +8,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from chimera.budget import RunBudget
-from chimera.config import ChimeraConfig
-from chimera.doubles import FakeExtractor, FakeJudge, KeywordScorer
-from chimera.fetch import FetchLadder
-from chimera.http import CurlRoute
-from chimera.ledger import Ledger
-from chimera.loop import GoalLoop
-from chimera.models import Goal, Harvest, Scope
-from chimera.refusals import ChimeraRefused
-from chimera.source_session_types import SourceSessionPolicy
-from chimera.source_sessions import SourceCredentials, SourceSessions
+from ghimera.budget import RunBudget
+from ghimera.config import GhimeraConfig
+from ghimera.doubles import FakeExtractor, FakeJudge, KeywordScorer
+from ghimera.fetch import FetchLadder
+from ghimera.http import CurlRoute
+from ghimera.ledger import Ledger
+from ghimera.loop import GoalLoop
+from ghimera.models import Goal, Harvest, Scope
+from ghimera.refusals import GhimeraRefused
+from ghimera.source_session_types import SourceSessionPolicy
+from ghimera.source_sessions import SourceCredentials, SourceSessions
 from tests.test_http_fetch import ResolverFixture
 from tests.test_http_fetch import state as http_state
 
@@ -116,7 +116,7 @@ def setup(site, *, authorization=AUTH):
     _, _, budget, _, origin = http_state((port,))
     raw = budget.config.model_dump(by_alias=True)
     raw["source_sessions"] = (policy(origin, allow_http=True).model_dump(by_alias=True),)
-    cfg = ChimeraConfig.model_validate(raw)
+    cfg = GhimeraConfig.model_validate(raw)
     route = CurlRoute(
         cfg,
         resolver=ResolverFixture(),
@@ -158,7 +158,7 @@ def test_redirect_reselects_credentials_without_forwarding_them_outside_origin_o
 def test_expired_session_is_a_recorded_refusal_not_an_authentication_bypass(site):
     cfg, ladder, scope, origin = setup(site, authorization="Bearer expired-owned-fixture")
     ledger = Ledger()
-    with pytest.raises(ChimeraRefused, match="fetch_failed"):
+    with pytest.raises(GhimeraRefused, match="fetch_failed"):
         asyncio.run(
             ladder.fetch(origin + "/private/report", scope, RunBudget(cfg, time.monotonic), ledger)
         )
@@ -187,7 +187,7 @@ def test_exact_origin_and_normalized_path_prevent_credential_scope_expansion():
 def test_missing_and_extra_credentials_refuse_before_source_io(site):
     cfg, _, _, _ = setup(site)
     for supplied in (None, {}, {"unconfigured": credentials()}):
-        with pytest.raises(ChimeraRefused, match="source_session_unavailable"):
+        with pytest.raises(GhimeraRefused, match="source_session_unavailable"):
             CurlRoute(cfg, resolver=ResolverFixture(), source_credentials=supplied)
     assert not site[1]
 
@@ -226,13 +226,13 @@ def test_session_config_allows_distinct_path_credentials_but_not_overlaps():
 
 def test_credential_headers_must_match_policy_before_any_request():
     incomplete = SourceCredentials(headers=(("authorization", SecretStr(AUTH)),))
-    with pytest.raises(ChimeraRefused, match="source_session_unavailable"):
+    with pytest.raises(GhimeraRefused, match="source_session_unavailable"):
         SourceSessions((policy(),), {"publisher-session": incomplete})
 
 
 def test_source_credentials_do_not_bind_or_leak_to_discovery_service(site):
-    from chimera.research_types import SearchQuery, SearchRequest
-    from chimera.searxng import SearxConfig, SearxSearch
+    from ghimera.research_types import SearchQuery, SearchRequest
+    from ghimera.searxng import SearxConfig, SearxSearch
 
     cfg, _, _, origin = setup(site)
     provider = SearxConfig(
@@ -258,13 +258,13 @@ def test_source_credentials_do_not_bind_or_leak_to_discovery_service(site):
 
 
 def test_isolated_browser_resources_use_parent_owned_authorized_session(site, tmp_path):
-    from chimera.browser import IsolatedBrowserRenderer
+    from ghimera.browser import IsolatedBrowserRenderer
     from tests.test_browser_render import browser_policy
 
     cfg, _, scope, origin = setup(site)
     raw = cfg.model_dump(by_alias=True)
     raw["browser"] = browser_policy(tmp_path).model_dump(by_alias=True)
-    cfg = ChimeraConfig.model_validate(raw)
+    cfg = GhimeraConfig.model_validate(raw)
     route = CurlRoute(
         cfg,
         resolver=ResolverFixture(),

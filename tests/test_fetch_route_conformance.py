@@ -11,14 +11,14 @@ import pytest
 from test_http_fetch import site as site
 from test_http_fetch import state as http_state
 
-from chimera.budget import RunBudget
-from chimera.config import ChimeraConfig
-from chimera.doubles import FakeRoute
-from chimera.fetch import FetchLadder, FetchRoute
-from chimera.http import CurlRoute
-from chimera.ledger import Ledger
-from chimera.models import FetchRequest, Page, Scope
-from chimera.refusals import ChimeraRefused, RefusalCode
+from ghimera.budget import RunBudget
+from ghimera.config import GhimeraConfig
+from ghimera.doubles import FakeRoute
+from ghimera.fetch import FetchLadder, FetchRoute
+from ghimera.http import CurlRoute
+from ghimera.ledger import Ledger
+from ghimera.models import FetchRequest, Page, Scope
+from ghimera.refusals import GhimeraRefused, RefusalCode
 
 
 class BrowserFixture(FakeRoute):
@@ -31,7 +31,7 @@ ROUTES = (FakeRoute, BrowserFixture, CurlRoute)
 
 
 def state():
-    cfg = ChimeraConfig.from_toml(Path("examples/chimera.toml"))
+    cfg = GhimeraConfig.from_toml(Path("examples/chimera.toml"))
     return (
         Scope(allowed_hosts=("example.org",), max_depth=1, content_types=("text/html",)),
         RunBudget(cfg, lambda: 0.0),
@@ -68,7 +68,7 @@ def test_scope_refuses_before_fetch(route_type, site):
     else:
         scope, budget, ledger = state()
         ladder = FetchLadder((route_type(),))
-    with pytest.raises(ChimeraRefused, match="out_of_scope"):
+    with pytest.raises(GhimeraRefused, match="out_of_scope"):
         asyncio.run(ladder.fetch("https://other.example/a", scope, budget, ledger))
     assert ledger.snapshot() == ()
     assert not site[1]
@@ -88,7 +88,7 @@ def test_terminal_refusal_never_escalates(code):
     first = FakeRoute(refusal=code)
     second = BrowserFixture()
     scope, budget, ledger = state()
-    with pytest.raises(ChimeraRefused, match=code.value):
+    with pytest.raises(GhimeraRefused, match=code.value):
         asyncio.run(
             FetchLadder((second, first)).fetch("https://example.org/a", scope, budget, ledger)
         )
@@ -121,8 +121,8 @@ def test_adapter_overrun_is_accounted_and_refused():
     scope, budget, ledger = state()
     cfg = budget.config.model_dump()
     cfg["byte_budget"] = 3
-    budget = RunBudget(ChimeraConfig.model_validate(cfg), lambda: 0.0)
-    with pytest.raises(ChimeraRefused, match="adapter_contract"):
+    budget = RunBudget(GhimeraConfig.model_validate(cfg), lambda: 0.0)
+    with pytest.raises(GhimeraRefused, match="adapter_contract"):
         asyncio.run(
             FetchLadder((OversizedRoute(),)).fetch("https://example.org/a", scope, budget, ledger)
         )

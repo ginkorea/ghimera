@@ -1,5 +1,5 @@
-"""Standalone entry point; services and credentials are selected by the caller."""
+"""Legacy module command using the same explicit ghimera entry point."""
 
-from chimera.command import main
+from ghimera.command import main
 
 raise SystemExit(main())

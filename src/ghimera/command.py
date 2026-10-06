@@ -1,0 +1,198 @@
+"""Intent command: explicit recipe, secret bindings, and private complete-result output."""
+
+import argparse
+import asyncio
+import os
+import sys
+import tomllib
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Annotated, Literal, NoReturn
+
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+
+from ghimera.collector import Collector
+from ghimera.config import GhimeraConfig
+from ghimera.embedding_types import EmbeddingReferences
+from ghimera.refusals import GhimeraRefused
+from ghimera.research_types import ResearchRequest
+from ghimera.result_archive import ArchiveReceipt, ResearchResultArchive, bounded_file
+from ghimera.source_sessions import SourceCredentials
+from ghimera.transport import Resolver
+
+Positive = Annotated[int, Field(strict=True, gt=0)]
+EnvName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
+
+
+class CommandOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["chimera.collector-command/1"] = Field(alias="schema")
+    config_path: Path
+    request_path: Path
+    output_directory: Path
+    run_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+    max_input_bytes: Positive
+    max_result_bytes: Positive
+    bindings_path: Path | None = None
+    references_path: Path | None = None
+
+    @model_validator(mode="after")
+    def paths(self) -> "CommandOptions":
+        for path in (
+            self.config_path,
+            self.request_path,
+            self.output_directory,
+            self.bindings_path,
+            self.references_path,
+        ):
+            if path is not None and not path.is_absolute():
+                raise ValueError("command paths must be absolute")
+        return self
+
+
+class CompletionCredential(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    endpoint: Annotated[str, Field(min_length=1)]
+    environment_variable: EnvName
+
+
+class HeaderCredential(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    name: Annotated[str, Field(min_length=1)]
+    environment_variable: EnvName
+
+
+class SourceCredentialBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    session_id: Annotated[str, Field(min_length=1)]
+    headers: Annotated[tuple[HeaderCredential, ...], Field(min_length=1)]
+
+
+@dataclass(frozen=True)
+class ResolvedCredentials:
+    models: Mapping[str, SecretStr] = field(repr=False)
+    encoder: SecretStr | None = field(repr=False)
+    sources: Mapping[str, SourceCredentials] = field(repr=False)
+
+
+class CredentialBindings(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["chimera.command-credentials/1"] = Field(alias="schema")
+    completions: tuple[CompletionCredential, ...] = ()
+    encoder_environment_variable: EnvName | None = None
+    sources: tuple[SourceCredentialBinding, ...] = ()
+
+    @model_validator(mode="after")
+    def distinct(self) -> "CredentialBindings":
+        if len({entry.endpoint for entry in self.completions}) != len(self.completions) or len(
+            {entry.session_id for entry in self.sources}
+        ) != len(self.sources):
+            raise ValueError("credential bindings cannot duplicate endpoints or sessions")
+        return self
+
+    def resolve(self, environment: Mapping[str, str] | None = None) -> ResolvedCredentials:
+        values = os.environ if environment is None else environment
+
+        def secret(name: str) -> SecretStr:
+            value = values.get(name)
+            if not value or any(ord(char) < 32 or ord(char) > 126 for char in value):
+                raise ValueError("a declared credential is missing or invalid")
+            return SecretStr(value)
+
+        return ResolvedCredentials(
+            models={
+                entry.endpoint: secret(entry.environment_variable) for entry in self.completions
+            },
+            encoder=secret(self.encoder_environment_variable)
+            if self.encoder_environment_variable
+            else None,
+            sources={
+                entry.session_id: SourceCredentials(
+                    headers=tuple(
+                        (header.name, secret(header.environment_variable))
+                        for header in entry.headers
+                    )
+                )
+                for entry in self.sources
+            },
+        )
+
+
+async def execute(
+    options: CommandOptions, *, source_resolver: Resolver | None = None
+) -> ArchiveReceipt:
+    options = CommandOptions.model_validate(options.model_dump())
+    config = GhimeraConfig.model_validate(
+        tomllib.loads(bounded_file(options.config_path, options.max_input_bytes).decode())
+    )
+    request = ResearchRequest.model_validate_json(
+        bounded_file(options.request_path, options.max_input_bytes)
+    )
+    bindings = (
+        CredentialBindings.model_validate_json(
+            bounded_file(options.bindings_path, options.max_input_bytes)
+        )
+        if options.bindings_path is not None
+        else CredentialBindings(schema="chimera.command-credentials/1")
+    ).resolve()
+    references = (
+        EmbeddingReferences.model_validate_json(
+            bounded_file(options.references_path, options.max_input_bytes)
+        )
+        if options.references_path is not None
+        else None
+    )
+    collector = Collector(
+        config,
+        references=references,
+        model_credentials=bindings.models,
+        encoder_credential=bindings.encoder,
+        source_credentials=bindings.sources,
+        source_resolver=source_resolver,
+    )
+    request = collector.validate_request(request)
+    # Reserve output before any paid/discovery work; an existing result is not reusable.
+    archive = ResearchResultArchive.create(options.output_directory, run_id=options.run_id)
+    try:
+        result = await collector.run(request, run_id=options.run_id)
+        return archive.write(result, max_bytes=options.max_result_bytes)
+    finally:
+        archive.close()
+
+
+class _CommandParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        # argparse normally echoes unknown arguments and invalid values verbatim.
+        self.exit(2, "command_arguments_invalid\n")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _CommandParser(
+        description="Run configured intent research and retain its full evidence."
+    )
+    parser.add_argument("--job", required=True, type=Path, help="versioned collector-command TOML")
+    parser.add_argument(
+        "--max-job-bytes", required=True, type=int, help="explicit bound before parsing the job"
+    )
+    args = parser.parse_args(argv)
+    try:
+        options = CommandOptions.model_validate(
+            tomllib.loads(bounded_file(args.job, args.max_job_bytes).decode())
+        )
+        receipt = asyncio.run(execute(options))
+    except GhimeraRefused as exc:
+        sys.stderr.write("command_refused:" + exc.code.value + "\n")
+        return 2
+    except ValueError:
+        # Exception messages can contain untrusted input or credentials. Never echo them.
+        sys.stderr.write("command_input_invalid\n")
+        return 2
+    except OSError:
+        sys.stderr.write("command_io_failed\n")
+        return 2
+    except KeyboardInterrupt:
+        sys.stderr.write("command_interrupted\n")
+        return 130
+    sys.stdout.write(receipt.model_dump_json() + "\n")
+    return 0 if receipt.status == "answered" else 1

@@ -1,6 +1,6 @@
 # Durable run observations
 
-Status: local source candidate, not published or deployed. This implements the
+Status: included in the ghimera 0.3.0 release line; production deployment is separate. This implements the
 general per-run JSONL ledger and completion summary, independently of the graph
 journal. It is not automatic checkpoint/resume or distributed storage.
 
@@ -55,13 +55,13 @@ remain untouched. A torn, shortened or mismatched sealed journal refuses. This
 is observation replay, not permission to resume/refetch or reset budgets.
 
 ```python
-from chimera.journal import read_journal
+from ghimera.journal import read_journal
 
 report = read_journal(config.journal, "your-run-id")
 ```
 
 ```bash
-python -m chimera.journal --config /path/to/collector.toml --run-id your-run-id
+python -m ghimera.journal --config /path/to/collector.toml --run-id your-run-id
 ```
 
 The CLI prints only run state, row count, incomplete-tail flag and stop reason;

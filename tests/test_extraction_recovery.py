@@ -8,14 +8,14 @@ import pytest
 from pydantic import ValidationError
 from test_html_extraction import ARTICLE, extractor, page
 
-from chimera.config import ChimeraConfig
-from chimera.doubles import FakeJudge, FakeRoute, KeywordScorer
-from chimera.extraction import ExtractionRequest
-from chimera.extraction_attempts import ExtractionCancelled, ExtractionFailure
-from chimera.fetch import FetchLadder
-from chimera.loop import GoalLoop
-from chimera.models import Goal, Harvest, Scope
-from chimera.refusals import ChimeraRefused, RefusalCode
+from ghimera.config import GhimeraConfig
+from ghimera.doubles import FakeJudge, FakeRoute, KeywordScorer
+from ghimera.extraction import ExtractionRequest
+from ghimera.extraction_attempts import ExtractionCancelled, ExtractionFailure
+from ghimera.fetch import FetchLadder
+from ghimera.loop import GoalLoop
+from ghimera.models import Goal, Harvest, Scope
+from ghimera.refusals import GhimeraRefused, RefusalCode
 
 REDESIGNED = ARTICLE.replace('<article id="story">', '<div id="teaser"></div><article id="story">')
 
@@ -129,7 +129,7 @@ def test_deadline_and_state_contract_failure_do_not_retry(tmp_path, monkeypatch)
     parser = client(tmp_path / "another")
 
     async def bad_state(raw):
-        raise ChimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
 
     monkeypatch.setattr(parser._worker, "run", bad_state)
     with pytest.raises(ExtractionFailure) as caught:
@@ -168,11 +168,11 @@ def test_collection_records_failed_and_successful_parsing_and_replay_refuses_omi
             return page(REDESIGNED)
 
     parser = client(tmp_path)
-    settings = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    settings = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     settings.update(page_budget=1, extraction=parser.config.model_dump(by_alias=True))
     harvest = asyncio.run(
         GoalLoop(
-            config=ChimeraConfig.model_validate(settings),
+            config=GhimeraConfig.model_validate(settings),
             fetcher=FetchLadder((HtmlRoute(),)),
             extractor=parser,
             scorer=KeywordScorer(),
@@ -207,11 +207,11 @@ def test_terminal_failure_is_a_collection_ledger_chain_not_an_unhandled_error(tm
             return page("<html><body><main></main></body></html>")
 
     parser = client(tmp_path)
-    settings = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    settings = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     settings.update(page_budget=1, extraction=parser.config.model_dump(by_alias=True))
     harvest = asyncio.run(
         GoalLoop(
-            config=ChimeraConfig.model_validate(settings),
+            config=GhimeraConfig.model_validate(settings),
             fetcher=FetchLadder((HtmlRoute(),)),
             extractor=parser,
             scorer=KeywordScorer(),
@@ -245,13 +245,13 @@ def test_collection_budget_timeout_keeps_asyncio_semantics_and_attempt_evidence(
         return b"not reached"
 
     monkeypatch.setattr(parser._worker, "run", slow)
-    settings = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    settings = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     settings.update(
         page_budget=1, wall_seconds=0.03, extraction=parser.config.model_dump(by_alias=True)
     )
     harvest = asyncio.run(
         GoalLoop(
-            config=ChimeraConfig.model_validate(settings),
+            config=GhimeraConfig.model_validate(settings),
             fetcher=FetchLadder((HtmlRoute(),)),
             extractor=parser,
             scorer=KeywordScorer(),
@@ -273,6 +273,6 @@ def test_input_limits_do_not_launch_a_retry_worker(tmp_path, monkeypatch):
         pytest.fail("input refusal must occur before any parser attempt")
 
     monkeypatch.setattr(parser._worker, "run", forbidden)
-    with pytest.raises(ChimeraRefused) as caught:
+    with pytest.raises(GhimeraRefused) as caught:
         asyncio.run(parser.extract(page()))
     assert caught.value.code == RefusalCode.EXTRACTION_FAILED

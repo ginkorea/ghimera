@@ -87,7 +87,7 @@ reconstructs that raster-only scan without fetching anything; Pillow must be
 installed. Fixture dates are fixed and the output must not already exist.
 
 ```bash
-python -m chimera.document_acceptance \
+python -m ghimera.document_acceptance \
   --config /path/to/collector.toml --pdf /path/to/report.pdf \
   --source-url https://publisher.example.invalid/report.pdf \
   --expectations /path/to/expectations.json \

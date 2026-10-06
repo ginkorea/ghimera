@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chimera.command import CommandOptions, CredentialBindings, execute, main
-from chimera.result_archive import ResearchResultArchive
+from ghimera.command import CommandOptions, CredentialBindings, execute, main
+from ghimera.result_archive import ResearchResultArchive
 from tests.test_collector import (
     assembled,
     encoder_endpoint,
@@ -87,9 +87,9 @@ def test_command_preflight_bounds_credentials_and_request_before_outbound(
     with pytest.raises(ValidationError):
         asyncio.run(execute(opts, source_resolver=ResolverFixture()))
     opts.request_path.write_text(json.dumps({"intent": "ports" * 100}))
-    from chimera.refusals import ChimeraRefused
+    from ghimera.refusals import GhimeraRefused
 
-    with pytest.raises(ChimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
         asyncio.run(execute(opts, source_resolver=ResolverFixture()))
     opts.request_path.write_text(json.dumps({"intent": "find ports"}))
     small = opts.model_copy(update={"max_input_bytes": 1})
@@ -206,7 +206,7 @@ def test_cli_help_and_safe_invalid_input_do_not_echo_values(tmp_path, capsys):
     assert "command_input_invalid" in output.err and "SECRET" not in output.err
     assert output.out == ""
     completed = subprocess.run(
-        [sys.executable, "-m", "chimera", "--help"],
+        [sys.executable, "-m", "ghimera", "--help"],
         check=True,
         capture_output=True,
         text=True,
@@ -277,8 +277,8 @@ def test_command_template_is_versioned_and_credentials_template_contains_only_na
 
 
 def test_main_writes_only_receipt_and_preserves_failure_exit_status(tmp_path, monkeypatch, capsys):
-    import chimera.command as command
-    from chimera.result_archive import ArchiveReceipt
+    import ghimera.command as command
+    from ghimera.result_archive import ArchiveReceipt
     from tests.test_c0 import config
 
     cfg = config()

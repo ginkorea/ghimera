@@ -8,15 +8,15 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from chimera import Collector
-from chimera.config import ChimeraConfig
-from chimera.graph import DirectoryGraphSink
-from chimera.journal import read_journal
-from chimera.models import Goal, Harvest, Scope
-from chimera.refusals import ChimeraRefused
-from chimera.research_types import ResearchRequest, ResearchResult
-from chimera.search_config import SearxConfig
-from chimera.searxng import SearxSearch
+from ghimera import Collector
+from ghimera.config import GhimeraConfig
+from ghimera.graph import DirectoryGraphSink
+from ghimera.journal import read_journal
+from ghimera.models import Goal, Harvest, Scope
+from ghimera.refusals import GhimeraRefused
+from ghimera.research_types import ResearchRequest, ResearchResult
+from ghimera.search_config import SearxConfig
+from ghimera.searxng import SearxSearch
 from tests.test_embedding_scoring import endpoint as encoder_endpoint
 from tests.test_embedding_scoring import intent_policy
 from tests.test_embedding_scoring import service as encoder_service
@@ -70,7 +70,7 @@ def assembled(tmp_path, source_site, search_endpoint, model_endpoint, encoder_en
         scoring=intent_policy(encoder_service(encoder_endpoint[0]), max_windows=1),
     )
     raw.update(updates)
-    return ChimeraConfig.model_validate(raw), source_url
+    return GhimeraConfig.model_validate(raw), source_url
 
 
 def test_configured_collector_completes_real_adapter_chain_and_keeps_native_evidence(
@@ -144,7 +144,7 @@ def test_configured_html_search_runs_the_full_concrete_collector_chain(
     cfg, url = assembled(tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint)
     values = cfg.model_dump(by_alias=True)
     values["search"].update(schema="chimera.searxng/2", response_format="html")
-    cfg = ChimeraConfig.model_validate(values)
+    cfg = GhimeraConfig.model_validate(values)
     search_endpoint[2].update(
         content_type="text/html",
         body=(
@@ -219,11 +219,11 @@ def test_missing_recipes_or_mime_adapter_refuse_before_any_outbound_work(
         raw = cfg.model_dump()
         raw[section] = None
         with pytest.raises(ValueError, match="requires http"):
-            Collector(ChimeraConfig.model_validate(raw), source_resolver=ResolverFixture())
+            Collector(GhimeraConfig.model_validate(raw), source_resolver=ResolverFixture())
     raw = cfg.model_dump()
     raw["research"]["content_types"] = ("application/pdf",)
     with pytest.raises(ValueError, match="extraction adapters"):
-        Collector(ChimeraConfig.model_validate(raw), source_resolver=ResolverFixture())
+        Collector(GhimeraConfig.model_validate(raw), source_resolver=ResolverFixture())
     collector = Collector(cfg, source_resolver=ResolverFixture())
     with pytest.raises(ValueError, match="extraction adapters"):
         asyncio.run(
@@ -251,7 +251,7 @@ def test_oversized_intent_and_poisoned_request_refuse_before_plan_or_storage(
 ):
     cfg, _ = assembled(tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint)
     collector = Collector(cfg, source_resolver=ResolverFixture())
-    with pytest.raises(ChimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
         asyncio.run(collector.run("ports" * 100))
     with pytest.raises(ValidationError):
         asyncio.run(
@@ -278,8 +278,8 @@ def test_search_recipe_cannot_be_rebound_and_old_configuration_shape_is_unchange
         SearxSearch(
             cfg, cfg.search.model_copy(update={"language": "another"}), resolver=ResolverFixture()
         )
-    assert "search" not in ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump()
-    assert ChimeraConfig.model_validate_json(cfg.model_dump_json()) == cfg
+    assert "search" not in GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump()
+    assert GhimeraConfig.model_validate_json(cfg.model_dump_json()) == cfg
     assert not search_endpoint[1]
 
 
@@ -310,7 +310,7 @@ def test_unbound_model_and_encoder_credentials_refuse_before_source_requests(
 
 def test_complete_nonactive_toml_template_and_explicit_parse_bounds(tmp_path):
     path = Path("examples/collector.toml")
-    cfg = ChimeraConfig.from_toml(path, max_bytes=100000)
+    cfg = GhimeraConfig.from_toml(path, max_bytes=100000)
     assert cfg.search and cfg.models and cfg.extraction and cfg.scoring.reference_source == "intent"
     assert cfg.research.content_types == ("text/html", "application/xhtml+xml")
     collector = Collector.from_toml(path, max_config_bytes=100000)

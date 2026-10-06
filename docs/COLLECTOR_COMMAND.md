@@ -1,6 +1,6 @@
 # Intent command and complete-result archive
 
-Status: unreleased source. The command uses the concrete configured `Collector`,
+Status: included in the ghimera 0.3.0 release line. The command uses the concrete configured `Collector`,
 not the demo doubles. It does not start services, acquire GPUs, download models,
 discover platform credentials or bypass a source's access controls.
 
@@ -15,7 +15,7 @@ and output allowances. The output's parent must already exist on your chosen
 storage volume. Do not put secret values in any of these files.
 
 ```bash
-python -m chimera --job /absolute/path/collector-command.toml --max-job-bytes 100000
+python -m ghimera --job /absolute/path/collector-command.toml --max-job-bytes 100000
 ```
 
 `chimera.collector-command/1` is a typed, frozen contract. Unknown fields/newer
@@ -76,7 +76,7 @@ entire research result. Failed and partial outcomes are retained honestly.
 
 ```python
 from pathlib import Path
-from chimera.result_archive import ResearchResultArchive
+from ghimera.result_archive import ResearchResultArchive
 
 result = ResearchResultArchive.read(
     Path("/absolute/path/results/research-001"), max_bytes=50_000_000

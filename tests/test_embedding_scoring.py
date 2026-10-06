@@ -10,20 +10,20 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from chimera.budget import RunBudget
-from chimera.config import ChimeraConfig
-from chimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
-from chimera.embedding import SelfHostedEncoder
-from chimera.embedding_types import EmbeddingReferences, unit_vector
-from chimera.fetch import FetchLadder
-from chimera.ledger import Ledger
-from chimera.loop import GoalLoop
-from chimera.model_config import EmbeddingServiceConfig
-from chimera.model_http import ModelHttpResponse
-from chimera.models import Extracted, Goal, Harvest, LinkCandidate, Scope
-from chimera.refusals import ChimeraRefused, EncodingCancelled, EncodingFailure
-from chimera.scoring_config import ScoringConfig
-from chimera.semantic_scoring import EmbeddingScorer
+from ghimera.budget import RunBudget
+from ghimera.config import GhimeraConfig
+from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
+from ghimera.embedding import SelfHostedEncoder
+from ghimera.embedding_types import EmbeddingReferences, unit_vector
+from ghimera.fetch import FetchLadder
+from ghimera.ledger import Ledger
+from ghimera.loop import GoalLoop
+from ghimera.model_config import EmbeddingServiceConfig
+from ghimera.model_http import ModelHttpResponse
+from ghimera.models import Extracted, Goal, Harvest, LinkCandidate, Scope
+from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused
+from ghimera.scoring_config import ScoringConfig
+from ghimera.semantic_scoring import EmbeddingScorer
 
 
 def service(port, **changes):
@@ -86,8 +86,8 @@ def policy(cfg, refs, **changes):
 
 
 def run_config(scoring):
-    return ChimeraConfig.model_validate(
-        dict(ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(), scoring=scoring)
+    return GhimeraConfig.model_validate(
+        dict(GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(), scoring=scoring)
     )
 
 
@@ -305,7 +305,7 @@ def test_semantic_call_budget_reserves_before_spend_and_keeps_partial_ledger(end
         language="en",
         links=(LinkCandidate(url="https://example.org/ports"),),
     )
-    with pytest.raises(ChimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
         asyncio.run(
             EmbeddingScorer(scoring, SelfHostedEncoder(cfg), refs).score(
                 Goal(text="ports"), document, budget, ledger
@@ -416,7 +416,7 @@ def test_encoding_cancellation_preserves_reserved_spend_and_partial_evidence():
         config = cfg
 
         async def post(self, body):
-            from chimera.model_http import ModelWireCancelled
+            from ghimera.model_http import ModelWireCancelled
 
             raise ModelWireCancelled(ModelHttpResponse(200, b"partial-vector", "application/json"))
 
@@ -445,7 +445,7 @@ def test_injected_encoder_cannot_bypass_batch_validation(endpoint):
             return result.model_copy(update={"vectors": ((0.0, 0.0),)})
 
     budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
-    with pytest.raises(ChimeraRefused, match="adapter_contract"):
+    with pytest.raises(GhimeraRefused, match="adapter_contract"):
         asyncio.run(
             EmbeddingScorer(scoring, PoisonedEncoder(cfg), refs).score(
                 Goal(text="ports"),
@@ -554,7 +554,7 @@ def test_concurrent_scores_share_preparation_but_runs_never_share_intents(endpoi
     assert second[1].snapshot()[-1].similarity.document_cosine == -1.0
     assert len(endpoint[1]) == 5
     for goal, ledger in ((Goal(text="changed intent"), first[1]), (Goal(text="ports"), Ledger())):
-        with pytest.raises(ChimeraRefused, match="adapter_contract"):
+        with pytest.raises(GhimeraRefused, match="adapter_contract"):
             asyncio.run(scorer.score(goal, document, first[0], ledger))
     assert len(endpoint[1]) == 5
 
@@ -649,7 +649,7 @@ def test_intent_preparation_obeys_shared_budget_without_partial_truncation(endpo
         goal = "ports" * 100
     scoring = intent_policy(cfg, **changes)
     budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
-    with pytest.raises(ChimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
         asyncio.run(
             EmbeddingScorer(scoring, SelfHostedEncoder(cfg)).score(
                 Goal(text=goal),
@@ -667,10 +667,10 @@ def test_intent_preparation_obeys_shared_budget_without_partial_truncation(endpo
 
 
 def test_intent_research_and_durable_inspection_share_the_prepared_reference(endpoint, tmp_path):
-    from chimera.journal import read_journal
-    from chimera.journal_types import JournalReport
-    from chimera.research import ResearchLoop
-    from chimera.research_types import ResearchRequest, ResearchResult
+    from ghimera.journal import read_journal
+    from ghimera.journal_types import JournalReport
+    from ghimera.research import ResearchLoop
+    from ghimera.research_types import ResearchRequest, ResearchResult
     from tests.test_intent_research import (
         AnalystFixture,
         PlannerFixture,
@@ -684,7 +684,7 @@ def test_intent_research_and_durable_inspection_share_the_prepared_reference(end
 
     cfg = service(endpoint[0])
     scoring = intent_policy(cfg, max_windows=1)
-    config = ChimeraConfig.model_validate(
+    config = GhimeraConfig.model_validate(
         dict(
             run_config(scoring).model_dump(),
             research=research_policy(),
@@ -730,7 +730,7 @@ def test_cancelled_intent_encoding_never_becomes_a_prepared_reference():
         config = cfg
 
         async def post(self, body):
-            from chimera.model_http import ModelWireCancelled
+            from ghimera.model_http import ModelWireCancelled
 
             raise ModelWireCancelled(ModelHttpResponse(200, b"partial-vector", "application/json"))
 

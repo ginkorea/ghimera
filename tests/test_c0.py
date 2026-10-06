@@ -8,19 +8,19 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chimera.config import ChimeraConfig
-from chimera.doubles import FakeEncoder, FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
-from chimera.fetch import FetchLadder, FetchRoute
-from chimera.loop import GoalLoop
-from chimera.models import Goal, Grade, LinkCandidate, Scope, Verdict
-from chimera.refusals import ChimeraRefused, RefusalCode
-from chimera.scoring import Scorer
+from ghimera.config import GhimeraConfig
+from ghimera.doubles import FakeEncoder, FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
+from ghimera.fetch import FetchLadder, FetchRoute
+from ghimera.loop import GoalLoop
+from ghimera.models import Goal, Grade, LinkCandidate, Scope, Verdict
+from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.scoring import Scorer
 
 
-def config(**updates: object) -> ChimeraConfig:
-    raw = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+def config(**updates: object) -> GhimeraConfig:
+    raw = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     raw.update(updates)
-    return ChimeraConfig.model_validate(raw)
+    return GhimeraConfig.model_validate(raw)
 
 
 def scope(**updates: object) -> Scope:
@@ -34,7 +34,7 @@ def scope(**updates: object) -> Scope:
 
 
 def run(
-    cfg: ChimeraConfig,
+    cfg: GhimeraConfig,
     *,
     judge: FakeJudge | None = None,
     route: FakeRoute | None = None,
@@ -178,7 +178,7 @@ def test_extension_declarations_fail_on_creation_and_templates_are_final(base):
 
 def test_fake_encoder_has_the_port_shape_and_no_inference_stack():
     assert asyncio.run(FakeEncoder().encode(("ports", "other"))) == ((1.0, 0.0), (0.0, 1.0))
-    importlib.import_module("chimera")
+    importlib.import_module("ghimera")
     modules = {name.split(".")[0] for name in sys.modules}
     assert not {"torch", "transformers", "openai", "ollama", "redis"} & modules
 
@@ -193,6 +193,6 @@ def test_model_boundaries_reject_nonfinite_scores_and_blank_evidence():
 
 
 def test_named_refusal_teaches_the_operator():
-    exc = ChimeraRefused(RefusalCode.NO_CRAWL_EGRESS)
+    exc = GhimeraRefused(RefusalCode.NO_CRAWL_EGRESS)
     assert "crawl_egress" in str(exc)
     assert exc.code == RefusalCode.NO_CRAWL_EGRESS

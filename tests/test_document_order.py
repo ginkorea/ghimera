@@ -2,7 +2,7 @@
 
 import pytest
 
-from chimera.document_order import LayoutBlock, ReadingOrderPolicy, column_order
+from ghimera.document_order import LayoutBlock, ReadingOrderPolicy, column_order
 
 
 def policy(**updates):

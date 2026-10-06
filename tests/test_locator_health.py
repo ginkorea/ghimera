@@ -8,11 +8,11 @@ import pytest
 from pydantic import ValidationError
 from test_html_extraction import ARTICLE, extractor, page, policy
 
-from chimera.extraction_config import LocatorProfile
-from chimera.extraction_types import LocatorEvent
-from chimera.locator_health import LocatorHealthStore
-from chimera.locator_types import LocatorDriftPolicy
-from chimera.refusals import ChimeraRefused, RefusalCode
+from ghimera.extraction_config import LocatorProfile
+from ghimera.extraction_types import LocatorEvent
+from ghimera.locator_health import LocatorHealthStore
+from ghimera.locator_types import LocatorDriftPolicy
+from ghimera.refusals import GhimeraRefused, RefusalCode
 
 
 def drift(**updates):
@@ -96,20 +96,20 @@ def test_simultaneous_completions_are_not_lost(tmp_path):
 
 def test_invalid_state_or_foreign_locator_observations_fail_closed(tmp_path):
     store = LocatorHealthStore(tmp_path, LocatorDriftPolicy.model_validate(drift()))
-    with pytest.raises(ChimeraRefused):
+    with pytest.raises(GhimeraRefused):
         store.observe(
             profile(), "a" * 64, (LocatorEvent(field="title", selector="h1", status="missing"),)
         )
     store.observe(profile(), "a" * 64, observed())
     path = tmp_path / "locator-health-v1.sqlite"
     path.chmod(0o644)
-    with pytest.raises(ChimeraRefused) as exc:
+    with pytest.raises(GhimeraRefused) as exc:
         store.read(profile())
     assert exc.value.code == RefusalCode.ADAPTER_CONTRACT
     path.chmod(0o600)
     with path.open("wb") as stream:
         stream.write(b"not a database")
-    with pytest.raises(ChimeraRefused):
+    with pytest.raises(GhimeraRefused):
         store.read(profile())
 
 
@@ -145,7 +145,7 @@ def test_real_failed_extractions_still_record_css_misses(tmp_path):
 
     async def exercise():
         for _ in range(3):
-            with pytest.raises(ChimeraRefused):
+            with pytest.raises(GhimeraRefused):
                 await client.extract(page("<html><body><main></main></body></html>"))
 
     asyncio.run(exercise())
@@ -167,11 +167,11 @@ def test_no_policy_keeps_existing_config_identity_and_invalid_policy_refuses(tmp
 def test_drift_is_a_harvest_ledger_finding_and_rejects_foreign_health(tmp_path):
     from pathlib import Path
 
-    from chimera.config import ChimeraConfig
-    from chimera.doubles import FakeJudge, FakeRoute, KeywordScorer
-    from chimera.fetch import FetchLadder
-    from chimera.loop import GoalLoop
-    from chimera.models import Goal, Harvest, Scope
+    from ghimera.config import GhimeraConfig
+    from ghimera.doubles import FakeJudge, FakeRoute, KeywordScorer
+    from ghimera.fetch import FetchLadder
+    from ghimera.loop import GoalLoop
+    from ghimera.models import Goal, Harvest, Scope
 
     class HtmlRoute(FakeRoute):
         async def attempt(self, request):
@@ -182,14 +182,14 @@ def test_drift_is_a_harvest_ledger_finding_and_rejects_foreign_health(tmp_path):
         profiles=[dict(host="example.org", profile_id="missing", body="#absent")],
         locator_drift=drift(),
     )
-    data = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    data = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     data.update(page_budget=1, extraction=client.config.model_dump(by_alias=True))
 
     async def exercise():
         await client.extract(page())
         await client.extract(page())
         return await GoalLoop(
-            config=ChimeraConfig.model_validate(data),
+            config=GhimeraConfig.model_validate(data),
             fetcher=FetchLadder((HtmlRoute(),)),
             extractor=client,
             scorer=KeywordScorer(),

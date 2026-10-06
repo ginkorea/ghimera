@@ -12,14 +12,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chimera.budget import RunBudget
-from chimera.config import ChimeraConfig, NetworkPolicy
-from chimera.fetch import FetchLadder
-from chimera.http import CurlRoute, NetworkGuard
-from chimera.ledger import Ledger
-from chimera.models import Scope
-from chimera.politeness import Politeness
-from chimera.refusals import ChimeraRefused
+from ghimera.budget import RunBudget
+from ghimera.config import GhimeraConfig, NetworkPolicy
+from ghimera.fetch import FetchLadder
+from ghimera.http import CurlRoute, NetworkGuard
+from ghimera.ledger import Ledger
+from ghimera.models import Scope
+from ghimera.politeness import Politeness
+from ghimera.refusals import GhimeraRefused
 
 
 class ResolverFixture:
@@ -117,7 +117,7 @@ def site():
 
 def state(site, **updates):
     port = site[0]
-    raw = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    raw = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     raw.update(
         page_budget=40,
         per_host_delay_seconds=0.01,
@@ -143,7 +143,7 @@ def state(site, **updates):
         },
     )
     raw.update(updates)
-    cfg = ChimeraConfig.model_validate(raw)
+    cfg = GhimeraConfig.model_validate(raw)
     assert cfg.http is not None
     scope = Scope(
         allowed_hosts=("fixture.example",),
@@ -178,7 +178,7 @@ def test_real_http_robots_and_every_request_counted(site):
 
 
 def test_robots_disallow_prevents_target_request(site):
-    with pytest.raises(ChimeraRefused, match="robots_disallowed"):
+    with pytest.raises(GhimeraRefused, match="robots_disallowed"):
         fetch(site, "/blocked")
     assert site[1]["/blocked"] == 0
     assert site[1]["/robots.txt"] == 1
@@ -189,13 +189,13 @@ def test_redirects_checked_before_network_io_and_accounted(site):
     assert page.final_url.endswith("/plain")
     assert budget.fetches == 3
     assert any(row.event == "fallback" and row.reason == "redirect" for row in ledger.snapshot())
-    with pytest.raises(ChimeraRefused, match="out_of_scope"):
+    with pytest.raises(GhimeraRefused, match="out_of_scope"):
         fetch(site, "/offscope")
     assert site[1]["/offscope"] == 1
 
 
 def test_redirect_loop_is_bounded(site):
-    with pytest.raises(ChimeraRefused, match="fetch_failed"):
+    with pytest.raises(GhimeraRefused, match="fetch_failed"):
         fetch(site, "/loop")
     assert site[1]["/loop"] <= 4
 
@@ -204,7 +204,7 @@ def test_only_transient_errors_retry_and_all_attempts_count(site):
     _, budget, _ = fetch(site, "/flaky")
     assert budget.fetches == 3
     assert site[1]["/flaky"] == 2
-    with pytest.raises(ChimeraRefused, match="fetch_failed"):
+    with pytest.raises(GhimeraRefused, match="fetch_failed"):
         fetch(site, "/forbidden")
     assert site[1]["/forbidden"] == 1
 
@@ -218,14 +218,14 @@ def test_only_transient_errors_retry_and_all_attempts_count(site):
     ],
 )
 def test_interstitials_refuse_without_retry_or_escalation(site, path, code):
-    with pytest.raises(ChimeraRefused, match=code):
+    with pytest.raises(GhimeraRefused, match=code):
         fetch(site, path)
     assert site[1][path] == 1
 
 
 def test_decoded_stream_is_bounded_not_just_compressed_body(site):
     ladder, scope, budget, ledger, origin = state(site, byte_budget=4000)
-    with pytest.raises(ChimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
         asyncio.run(ladder.fetch(origin + "/oversized", scope, budget, ledger))
     assert budget.bytes_read <= 4000
     assert sum(row.bytes_read for row in ledger.snapshot()) == budget.bytes_read
@@ -280,7 +280,7 @@ def test_global_and_host_limits_allow_parallel_work_with_delay(site, monkeypatch
 
 
 def test_page_budget_includes_robots_and_stops_before_target(site):
-    with pytest.raises(ChimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
         fetch(site, "/plain", page_budget=1)
     assert site[1]["/plain"] == 0
 
@@ -289,7 +289,7 @@ def test_public_network_refuses_private_and_mixed_dns_answers_before_io():
     policy = NetworkPolicy(schema="chimera.network/1", mode="public")
     for addresses in (("127.0.0.1",), ("169.254.169.254",), ("8.8.8.8", "10.0.0.1")):
         guard = NetworkGuard(policy, ResolverFixture(addresses))
-        with pytest.raises(ChimeraRefused, match="out_of_scope"):
+        with pytest.raises(GhimeraRefused, match="out_of_scope"):
             asyncio.run(guard.destination("https://fixture.example/a"))
     with pytest.raises(ValidationError):
         NetworkPolicy(schema="chimera.network/1", mode="public", fixture_addresses=("127.0.0.1",))
@@ -319,7 +319,7 @@ def test_robots_toggle_requires_decision_and_records_scoped_override(site):
             "allowed_hosts": ["fixture.example"],
         },
     }
-    cfg = ChimeraConfig.model_validate(raw)
+    cfg = GhimeraConfig.model_validate(raw)
     ladder = FetchLadder((CurlRoute(cfg, resolver=ResolverFixture()),))
     budget = RunBudget(cfg, time.monotonic)
     page = asyncio.run(ladder.fetch(origin + "/blocked", scope, budget, ledger))
@@ -331,13 +331,13 @@ def test_robots_toggle_requires_decision_and_records_scoped_override(site):
     )
     raw["http"]["robots"].pop("decision")
     with pytest.raises(ValidationError):
-        ChimeraConfig.model_validate(raw)
+        GhimeraConfig.model_validate(raw)
 
 
 def test_robots_wildcards_and_more_specific_allow_are_obeyed(site):
     site[4]["/robots.txt"] = b"User-agent: *\nDisallow: /private/*\nAllow: /private/public$\n"
     _, _, _ = fetch(site, "/private/public")
-    with pytest.raises(ChimeraRefused, match="robots_disallowed"):
+    with pytest.raises(GhimeraRefused, match="robots_disallowed"):
         fetch(site, "/private/secret")
     assert site[1]["/private/secret"] == 0
 
@@ -357,13 +357,13 @@ def test_robots_override_never_leaks_to_other_hosts_or_changed_config(site):
             "allowed_hosts": ["other.example"],
         },
     }
-    cfg = ChimeraConfig.model_validate(changed)
-    with pytest.raises(ChimeraRefused, match="adapter_contract"):
+    cfg = GhimeraConfig.model_validate(changed)
+    with pytest.raises(GhimeraRefused, match="adapter_contract"):
         asyncio.run(
             ladder.fetch(origin + "/blocked", scope, RunBudget(cfg, time.monotonic), ledger)
         )
     new_ladder = FetchLadder((CurlRoute(cfg, resolver=ResolverFixture()),))
-    with pytest.raises(ChimeraRefused, match="robots_disallowed"):
+    with pytest.raises(GhimeraRefused, match="robots_disallowed"):
         asyncio.run(
             new_ladder.fetch(origin + "/blocked", scope, RunBudget(cfg, time.monotonic), Ledger())
         )
@@ -374,12 +374,12 @@ def test_route_cannot_use_fixture_network_under_a_public_run_config(site):
     ladder, scope, budget, ledger, origin = state(site)
     raw = budget.config.model_dump(by_alias=True)
     raw["http"]["network"] = {"schema": "chimera.network/1", "mode": "public"}
-    with pytest.raises(ChimeraRefused, match="adapter_contract"):
+    with pytest.raises(GhimeraRefused, match="adapter_contract"):
         asyncio.run(
             ladder.fetch(
                 origin + "/plain",
                 scope,
-                RunBudget(ChimeraConfig.model_validate(raw), time.monotonic),
+                RunBudget(GhimeraConfig.model_validate(raw), time.monotonic),
                 ledger,
             )
         )
@@ -417,7 +417,7 @@ def test_partial_transfer_timeout_keeps_byte_spend_and_attempt_rows(site):
     ladder, scope, budget, ledger, origin = state(
         site, request_timeout_seconds=0.09, retry_budget=0
     )
-    with pytest.raises((ChimeraRefused, TimeoutError)):
+    with pytest.raises((GhimeraRefused, TimeoutError)):
         asyncio.run(ladder.fetch(origin + "/partial", scope, budget, ledger))
     assert site[1]["/partial"] == 1
     assert budget.fetches == sum(row.event == "fetch" for row in ledger.snapshot())

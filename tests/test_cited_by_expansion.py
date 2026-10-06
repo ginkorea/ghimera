@@ -6,14 +6,14 @@ import hashlib
 import pytest
 from pydantic import ValidationError
 
-from chimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
-from chimera.fetch import FetchLadder
-from chimera.loop import GoalLoop
-from chimera.models import Extracted, LinkCandidate
-from chimera.refusals import ChimeraRefused, RefusalCode
-from chimera.research import ResearchLoop
-from chimera.research_types import ResearchRequest, ResearchResult, SearchHit, SearchResponse
-from chimera.search import GroundedSearch
+from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
+from ghimera.fetch import FetchLadder
+from ghimera.loop import GoalLoop
+from ghimera.models import Extracted, LinkCandidate
+from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.research import ResearchLoop
+from ghimera.research_types import ResearchRequest, ResearchResult, SearchHit, SearchResponse
+from ghimera.search import GroundedSearch
 from tests.test_c0 import config
 from tests.test_intent_research import (
     AnalystFixture,
@@ -135,7 +135,7 @@ def test_failed_cited_by_search_is_accounted_without_inventing_candidates():
         async def request(self, request):
             response = await super().request(request)
             if "cited by" in request.query.text:
-                raise ChimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
+                raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
             return response
 
     result, route, search = run(search=UnavailableCitations())

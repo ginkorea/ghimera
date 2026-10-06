@@ -11,10 +11,10 @@ import pytest
 from test_browser_render import browser_policy
 from test_http_fetch import ResolverFixture, state
 
-from chimera.browser import IsolatedBrowserRenderer
-from chimera.config import ChimeraConfig
-from chimera.fetch import FetchLadder
-from chimera.http import CurlRoute
+from ghimera.browser import IsolatedBrowserRenderer
+from ghimera.config import GhimeraConfig
+from ghimera.fetch import FetchLadder
+from ghimera.http import CurlRoute
 
 
 @contextmanager
@@ -76,7 +76,7 @@ def setup(site, tmp_path, *, ready=True, max_redirects=3):
     data["browser"] = browser_policy(
         tmp_path, ready_selector="article[data-ready]" if ready else None, settle_seconds=0.2
     ).model_dump(by_alias=True)
-    config = ChimeraConfig.model_validate(data)
+    config = GhimeraConfig.model_validate(data)
     budget = type(budget)(config, budget.clock)
     ladder = FetchLadder(
         (CurlRoute(config, resolver=ResolverFixture()),), renderer=IsolatedBrowserRenderer(config)
@@ -228,7 +228,7 @@ def test_all_browser_redirect_hops_use_tor_without_local_dns(tmp_path, dark):
                 transport = policy(server.sockets[0].getsockname()[1]).model_dump(by_alias=True)
                 transport["tor"]["allowed_ports"] = [site[0]]
                 data["transport"] = transport
-                config = ChimeraConfig.model_validate(data)
+                config = GhimeraConfig.model_validate(data)
                 host = onion() if dark else "fixture.example"
                 scope = scope.model_copy(update={"allowed_hosts": (host,)})
                 origin = f"http://{host}:{site[0]}"
@@ -272,8 +272,8 @@ def test_real_http_preserves_csp_before_browser_script_execution(tmp_path):
 
 
 def test_retained_headers_preserve_repeated_csp_and_drop_credentials():
-    from chimera.browser_worker import response_headers
-    from chimera.http import BoundedHeaders
+    from ghimera.browser_worker import response_headers
+    from ghimera.http import BoundedHeaders
 
     headers = BoundedHeaders(1000)
     for line in (

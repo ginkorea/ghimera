@@ -81,10 +81,10 @@ import pytest
         (
             "fetch",
             "if not scope.permits(url):\n"
-            "            raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)\n"
+            "            raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)\n"
             "        for route in self._routes:",
             "if False:\n"
-            "            raise ChimeraRefused(RefusalCode.OUT_OF_SCOPE)\n"
+            "            raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)\n"
             "        for route in self._routes:",
             "test_fetch_route_conformance.py::test_scope_refuses_before_fetch",
         ),
@@ -124,7 +124,7 @@ def test_contract_mutation(tmp_path, module, old, new, witness):
     project = Path(__file__).resolve().parents[1]
     copied = tmp_path / "src"
     shutil.copytree(project / "src", copied, ignore=shutil.ignore_patterns("__pycache__"))
-    file = copied / "chimera" / f"{module}.py"
+    file = copied / "ghimera" / f"{module}.py"
     original = file.read_text()
     assert original.count(old) == 1, "mutation anchor changed: revise the witness, do not skip it"
     file.write_text(original.replace(old, new))

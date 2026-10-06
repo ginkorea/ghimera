@@ -12,12 +12,12 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from chimera.budget import RunBudget
-from chimera.config import ChimeraConfig
-from chimera.ledger import Ledger
-from chimera.refusals import ChimeraRefused, RefusalCode
-from chimera.research_types import SearchQuery, SearchResponse
-from chimera.searxng import SearxConfig, SearxSearch
+from ghimera.budget import RunBudget
+from ghimera.config import GhimeraConfig
+from ghimera.ledger import Ledger
+from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.research_types import SearchQuery, SearchResponse
+from ghimera.searxng import SearxConfig, SearxSearch
 from tests.test_http_fetch import ResolverFixture
 from tests.test_intent_research import SearchFixture, policy
 from tests.test_tor_transport import NoLocalDNS, socks_server
@@ -74,7 +74,7 @@ def provider(endpoint, *, transport=None, resolver=None):
         "fixture_ports": [port],
     }
     raw["transport"] = transport
-    cfg = ChimeraConfig.model_validate(raw)
+    cfg = GhimeraConfig.model_validate(raw)
     service = SearxConfig(
         schema="chimera.searxng/1",
         endpoint=f"http://fixture.example:{port}/search",
@@ -107,7 +107,7 @@ def test_search_conformance(kind, endpoint):
 
 
 def test_search_cannot_override_template_or_spend_without_reservation():
-    from chimera.search import GroundedSearch
+    from ghimera.search import GroundedSearch
     from tests.test_c0 import config
 
     with pytest.raises(TypeError):
@@ -121,7 +121,7 @@ def test_search_cannot_override_template_or_spend_without_reservation():
     cfg = config(research=policy(), page_budget=1)
     budget, ledger, adapter = RunBudget(cfg, lambda: 0.0), Ledger(), SearchFixture()
     budget.fetches = 1
-    with pytest.raises(ChimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
         asyncio.run(
             adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), budget, ledger)
         )
@@ -137,7 +137,7 @@ def test_search_response_limit_is_a_contract_not_a_suggestion():
 
     cfg = config(research=policy(), byte_budget=20)
     budget, ledger = RunBudget(cfg, lambda: 0.0), Ledger()
-    with pytest.raises(ChimeraRefused, match="adapter_contract"):
+    with pytest.raises(GhimeraRefused, match="adapter_contract"):
         asyncio.run(
             Oversized().discover(SearchQuery(text="ports", question_ids=("q1",)), budget, ledger)
         )
@@ -155,7 +155,7 @@ def test_http_search_refusal_retains_bytes_without_following_or_inventing(endpoi
         endpoint[2]["body"] = b'{"wrong":"wire"}'
     adapter, cfg = provider(endpoint)
     budget, ledger = RunBudget(cfg, lambda: 0.0), Ledger()
-    with pytest.raises(ChimeraRefused, match="search_unavailable"):
+    with pytest.raises(GhimeraRefused, match="search_unavailable"):
         asyncio.run(
             adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), budget, ledger)
         )

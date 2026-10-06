@@ -84,8 +84,8 @@ digest or injected reference bundle; the two modes cannot be silently mixed.
 Construct explicitly after parsing the main config and admitted references:
 
 ```python
-from chimera.embedding import SelfHostedEncoder
-from chimera.semantic_scoring import EmbeddingScorer
+from ghimera.embedding import SelfHostedEncoder
+from ghimera.semantic_scoring import EmbeddingScorer
 
 if config.scoring is None:
     raise ValueError("this deployment requires semantic scoring configuration")

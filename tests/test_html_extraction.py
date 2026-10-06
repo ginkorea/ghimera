@@ -9,11 +9,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chimera.config import ChimeraConfig
-from chimera.extraction import HtmlExtractor
-from chimera.extraction_config import ExtractionConfig
-from chimera.models import Page
-from chimera.refusals import ChimeraRefused, RefusalCode
+from ghimera.config import GhimeraConfig
+from ghimera.extraction import HtmlExtractor
+from ghimera.extraction_config import ExtractionConfig
+from ghimera.models import Page
+from ghimera.refusals import GhimeraRefused, RefusalCode
 
 ARTICLE = """<!doctype html><html lang="en"><head>
 <title>Port infrastructure report</title><meta name="author" content="Research Office">
@@ -41,9 +41,9 @@ def policy(tmp_path: Path, **updates: object) -> ExtractionConfig:
 
 
 def extractor(tmp_path: Path, **updates: object) -> HtmlExtractor:
-    data = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    data = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     data["extraction"] = policy(tmp_path, **updates).model_dump(by_alias=True)
-    return HtmlExtractor(ChimeraConfig.model_validate(data))
+    return HtmlExtractor(GhimeraConfig.model_validate(data))
 
 
 def page(html: str = ARTICLE, **updates: object) -> Page:
@@ -123,7 +123,7 @@ def test_invalid_config_and_mismatched_content_refuse_before_worker(tmp_path):
     with pytest.raises(ValidationError):
         policy(tmp_path, languages=["bogus"])
     client = extractor(tmp_path)
-    with pytest.raises(ChimeraRefused) as exc:
+    with pytest.raises(GhimeraRefused) as exc:
         asyncio.run(client.extract(page(content_type="application/pdf")))
     assert exc.value.code == RefusalCode.CONTENT_TYPE_UNWANTED
     assert not (tmp_path / "worker").exists()
@@ -135,33 +135,33 @@ def test_limits_do_not_turn_truncated_or_empty_extraction_into_evidence(tmp_path
         ({"max_text_chars": 10}, ARTICLE),
         ({}, "<html><title>Empty</title><body><script>only script</script></body></html>"),
     ]:
-        with pytest.raises(ChimeraRefused):
+        with pytest.raises(GhimeraRefused):
             asyncio.run(extractor(tmp_path, **updates).extract(page(html)))
 
 
 def test_worker_timeout_is_terminal_and_releases_its_capacity(tmp_path):
     client = extractor(tmp_path, timeout_seconds=0.001)
-    with pytest.raises(ChimeraRefused) as exc:
+    with pytest.raises(GhimeraRefused) as exc:
         asyncio.run(client.extract(page()))
     assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED
 
 
 def test_real_extraction_links_work_in_collection_and_roundtrip(tmp_path):
-    from chimera.doubles import FakeJudge, FakeRoute, KeywordScorer
-    from chimera.fetch import FetchLadder
-    from chimera.loop import GoalLoop
-    from chimera.models import Goal, Harvest, Scope
+    from ghimera.doubles import FakeJudge, FakeRoute, KeywordScorer
+    from ghimera.fetch import FetchLadder
+    from ghimera.loop import GoalLoop
+    from ghimera.models import Goal, Harvest, Scope
 
     class HtmlRoute(FakeRoute):
         async def attempt(self, request):
             return page()
 
     client = extractor(tmp_path)
-    data = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    data = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     data.update(page_budget=1, extraction=client.config.model_dump(by_alias=True))
     result = asyncio.run(
         GoalLoop(
-            config=ChimeraConfig.model_validate(data),
+            config=GhimeraConfig.model_validate(data),
             fetcher=FetchLadder((HtmlRoute(),)),
             extractor=client,
             scorer=KeywordScorer(),
@@ -208,7 +208,7 @@ def test_worker_cancellation_reaps_child_and_next_call_can_run(tmp_path, monkeyp
 
 
 def test_passive_worker_refuses_network_and_subprocess_attempts():
-    from chimera.html_worker import no_network
+    from ghimera.html_worker import no_network
 
     for event in (
         "socket.connect",
@@ -225,27 +225,27 @@ def test_passive_worker_refuses_network_and_subprocess_attempts():
 
 def test_extractor_binding_refuses_before_collection(tmp_path):
     client = extractor(tmp_path)
-    with pytest.raises(ChimeraRefused) as exc:
-        client.validate_config(ChimeraConfig.from_toml(Path("examples/chimera.toml")))
+    with pytest.raises(GhimeraRefused) as exc:
+        client.validate_config(GhimeraConfig.from_toml(Path("examples/chimera.toml")))
     assert exc.value.code == RefusalCode.ADAPTER_CONTRACT
 
 
 def test_shared_state_directory_is_not_reused(tmp_path):
     shared = tmp_path / "worker"
     shared.mkdir(mode=0o755)
-    with pytest.raises(ChimeraRefused) as exc:
+    with pytest.raises(GhimeraRefused) as exc:
         asyncio.run(extractor(tmp_path).extract(page()))
     assert exc.value.code == RefusalCode.ADAPTER_CONTRACT
 
 
 def test_bounded_worker_reader_does_not_buffer_excess_output():
-    from chimera.extraction import read_bounded
+    from ghimera.extraction import read_bounded
 
     async def exercise():
         stream = asyncio.StreamReader()
         stream.feed_data(b"x" * 11)
         stream.feed_eof()
-        with pytest.raises(ChimeraRefused):
+        with pytest.raises(GhimeraRefused):
             await read_bounded(stream, 10)
 
     asyncio.run(exercise())

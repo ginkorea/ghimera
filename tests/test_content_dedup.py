@@ -7,13 +7,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chimera.config import ChimeraConfig
-from chimera.content_dedup import ContentIndex, canonical_url, fingerprint
-from chimera.dedup_config import DedupConfig
-from chimera.doubles import FakeJudge, FakeRoute, KeywordScorer
-from chimera.fetch import FetchLadder
-from chimera.loop import GoalLoop
-from chimera.models import Document, Extracted, Goal, Harvest, Page, Scope, Verdict
+from ghimera.config import GhimeraConfig
+from ghimera.content_dedup import ContentIndex, canonical_url, fingerprint
+from ghimera.dedup_config import DedupConfig
+from ghimera.doubles import FakeJudge, FakeRoute, KeywordScorer
+from ghimera.fetch import FetchLadder
+from ghimera.loop import GoalLoop
+from ghimera.models import Document, Extracted, Goal, Harvest, Page, Scope, Verdict
 
 
 def policy(**updates):
@@ -132,11 +132,11 @@ def test_policy_refuses_unbounded_or_ambiguous_settings():
 
 
 def test_index_limit_refuses_without_silently_eviction():
-    from chimera.refusals import ChimeraRefused, RefusalCode
+    from ghimera.refusals import GhimeraRefused, RefusalCode
 
     index = ContentIndex(policy(max_index_documents=1))
     index.add(document(TEXT))
-    with pytest.raises(ChimeraRefused) as exc:
+    with pytest.raises(GhimeraRefused) as exc:
         index.add(document("Different source", url="https://example.org/other"))
     assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED
     assert index.match(document(TEXT)).reason == "content_sha256"
@@ -161,9 +161,9 @@ def test_canonical_hint_cannot_alias_to_a_different_host():
 
 
 def test_identical_byte_aliases_do_not_shadow_each_others_citations():
-    from chimera.evidence_context import ContextSelector
-    from chimera.model_config import EvidenceContextConfig
-    from chimera.research import CitationValidator, citation_for
+    from ghimera.evidence_context import ContextSelector
+    from ghimera.model_config import EvidenceContextConfig
+    from ghimera.research import CitationValidator, citation_for
 
     first = document(TEXT)
     mirror = document(TEXT, url="https://example.org/mirror")
@@ -197,9 +197,9 @@ def test_drift_is_bound_to_effective_policy_and_both_retained_revisions():
 
 
 def test_fingerprint_limit_refuses_rather_than_merging_truncated_text():
-    from chimera.refusals import ChimeraRefused, RefusalCode
+    from ghimera.refusals import GhimeraRefused, RefusalCode
 
-    with pytest.raises(ChimeraRefused) as exc:
+    with pytest.raises(GhimeraRefused) as exc:
         fingerprint(document(TEXT), policy(max_text_chars=10))
     assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED
 
@@ -212,7 +212,7 @@ def test_fingerprint_limit_refuses_rather_than_merging_truncated_text():
     ],
 )
 def test_loop_retains_duplicate_raw_extraction_verdict_and_bound_evidence(urls):
-    cfg = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    cfg = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     cfg.update(dedup=policy().model_dump(by_alias=True), grade_interval=100, saturation_window=100)
 
     class Route(FakeRoute):
@@ -237,7 +237,7 @@ def test_loop_retains_duplicate_raw_extraction_verdict_and_bound_evidence(urls):
 
     result = asyncio.run(
         GoalLoop(
-            config=ChimeraConfig.model_validate(cfg),
+            config=GhimeraConfig.model_validate(cfg),
             fetcher=FetchLadder((Route(),)),
             extractor=Extractor(),
             scorer=KeywordScorer(),
@@ -256,7 +256,7 @@ def test_loop_retains_duplicate_raw_extraction_verdict_and_bound_evidence(urls):
     assert occurrence.dedup.config_digest == policy().content_digest()
     assert Harvest.model_validate_json(result.model_dump_json()) == result
     assert result.source_documents[1].sha256 == occurrence.sha256
-    from chimera.research import citation_for
+    from ghimera.research import citation_for
 
     citation = citation_for(result.source_documents[1], 0, 40)
     assert citation.matches(result.source_documents[1])

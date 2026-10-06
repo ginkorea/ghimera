@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from chimera.budget import RunBudget
-from chimera.config import ChimeraConfig
-from chimera.doubles import KeywordScorer
-from chimera.embedding import SelfHostedEncoder
-from chimera.models import Extracted, Goal, LinkCandidate
-from chimera.refusals import ChimeraRefused
-from chimera.semantic_scoring import EmbeddingScorer
+from ghimera.budget import RunBudget
+from ghimera.config import GhimeraConfig
+from ghimera.doubles import KeywordScorer
+from ghimera.embedding import SelfHostedEncoder
+from ghimera.models import Extracted, Goal, LinkCandidate
+from ghimera.refusals import GhimeraRefused
+from ghimera.semantic_scoring import EmbeddingScorer
 from tests.test_embedding_scoring import endpoint as endpoint
 from tests.test_embedding_scoring import policy, references, run_config, service
 
@@ -26,7 +26,7 @@ class ReverseFixture(KeywordScorer):
 
 @pytest.mark.parametrize("scorer_type", (KeywordScorer, ReverseFixture, EmbeddingScorer))
 def test_scorer_conformance(scorer_type, endpoint):
-    config = ChimeraConfig.from_toml(Path("examples/chimera.toml"))
+    config = GhimeraConfig.from_toml(Path("examples/chimera.toml"))
     if scorer_type is EmbeddingScorer:
         cfg = service(endpoint[0])
         refs = references(cfg)
@@ -57,8 +57,8 @@ def test_a_scorer_cannot_invent_candidates_or_override_template():
         async def rank(self, goal, document, budget, ledger):
             return (LinkCandidate(url="https://invented.example", score=1.0),)
 
-    config = ChimeraConfig.from_toml(Path("examples/chimera.toml"))
-    with pytest.raises(ChimeraRefused, match="adapter_contract"):
+    config = GhimeraConfig.from_toml(Path("examples/chimera.toml"))
+    with pytest.raises(GhimeraRefused, match="adapter_contract"):
         asyncio.run(
             Inventing().score(
                 Goal(text="ports", seeds=("https://example.org",)),

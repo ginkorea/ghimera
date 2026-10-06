@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chimera.document_config import DocumentExtractionConfig
-from chimera.document_models import PdfModels
-from chimera.documents import check_artifacts
-from chimera.refusals import ChimeraRefused
+from ghimera.document_config import DocumentExtractionConfig
+from ghimera.document_models import PdfModels
+from ghimera.documents import check_artifacts
+from ghimera.refusals import GhimeraRefused
 from tests.test_document_extraction import config
 
 
@@ -93,7 +93,7 @@ def test_standard_pdf_requires_explicit_models_and_all_referenced_artifacts(tmp_
                 dict(cfg.document_extraction.model_dump(by_alias=True), **updates)
             )
     (root / entries[0]["path"]).write_bytes(b"changed")
-    with pytest.raises(ChimeraRefused):
+    with pytest.raises(GhimeraRefused):
         check_artifacts(cfg.document_extraction)
 
 

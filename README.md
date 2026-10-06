@@ -1,16 +1,16 @@
-# go-spider
+# ghimera
 
 Intent-driven web research: discover sources, collect native-language documents,
 follow evidence gaps, and return a source-cited answer—or an explicit partial
 result when the evidence or budget is insufficient.
 
-**v0.2.0 is a standalone Python library release.** The distribution stays
-`go-spider`; its redesigned implementation is imported as `chimera`. It is not
+**v0.3.0 consolidates the repository, distribution and import as `ghimera`.**
+It succeeds the `go-spider` distribution and `chimera` implementation. It is not
 backward-compatible with v0.1.0's `spider_core` API or `spider` CLI. Python
 **3.11+** is required. Some planned browser/document adapters and public-corpus
 acceptance are still in progress; see the limitations below.
 
-go-spider is an independent library. Supply your own search provider,
+ghimera is an independent library. Supply your own search provider,
 self-hosted model services, extraction policies and graph profile.
 
 ## What is implemented
@@ -50,22 +50,23 @@ second model pass. An intent is marked answered only after the coverage,
 citations, review and configured confidence checks pass; budget exhaustion is
 not silently presented as success.
 
-### Unreleased source additions
+### Additions since go-spider 0.2.0
 
 The current working branch also has explicit authorized source sessions,
 configurable references/citing-source discovery, persistent publisher-locator
 drift detection with generic recovery and a doctor, and offline model-based PDF
 layout, tables, OCR and column-aware reading order, durable run journals, and
 intent-based semantic scoring without a prebuilt reference-vector file, and a
-configuration-driven `Collector` facade using actual adapters. These are **not included
-in the published 0.2.0 wheel**. See [source sessions](docs/SOURCE_SESSIONS.md),
+configuration-driven `Collector` facade using actual adapters. These were not included
+in the old `go-spider==0.2.0` wheel and are included in `ghimera==0.3.0`.
+See [source sessions](docs/SOURCE_SESSIONS.md),
 [references](docs/C3_REFERENCES.md), [locator health](docs/C2_HTML.md), and
 [PDF configuration/acceptance](docs/C2_DOCUMENTS.md),
 [run journals](docs/RUN_JOURNAL.md) and
 [intent scoring](docs/C3_EMBEDDING_SCORING.md#intent-references-unreleased-source).
 For the assembled intent-only API and full non-active template, see
 [configured collector](docs/COLLECTOR.md) and `examples/collector.toml`.
-Unreleased source also supports explicitly configured ordinary HTML search
+The package also supports explicitly configured ordinary HTML search
 alongside JSON, and complete research archives retain successful discovery
 responses with query/fetch bindings. See [HTML search](docs/C3_SEARCH_HTML.md)
 and [search evidence](docs/C3_SEARCH_EVIDENCE.md). Neither mode solves access
@@ -80,13 +81,13 @@ Use a dedicated virtual environment:
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'go-spider==0.2.0'
+python -m pip install 'ghimera==0.3.0'
 ```
 
 Install the adapters you intend to configure:
 
 ```bash
-python -m pip install 'go-spider[html,documents,browser]==0.2.0'
+python -m pip install 'ghimera[html,documents,browser]==0.3.0'
 ```
 
 The base package contains the typed core, HTTP/Tor transport, research/search
@@ -101,9 +102,9 @@ other operating systems have not been accepted for that adapter.
 Operational choices are typed, versioned configuration—not Python constants:
 scope, budgets, endpoints, model identities/revisions, thresholds, private
 worker directories, browser provenance and direct/Tor policy. Parse once with
-`ChimeraConfig.from_toml(Path(...))`; inject the matching collaborators.
+`GhimeraConfig.from_toml(Path(...))`; inject the matching collaborators.
 
-The [examples](https://github.com/ginkorea/spider/tree/v0.2.0/examples) are non-active templates. Replace invalid endpoints,
+The [examples](https://github.com/ginkorea/ghimera/tree/v0.3.0/examples) are non-active templates. Replace invalid endpoints,
 contact information, private paths and model identifiers; reference-vector
 fixtures are **not** production relevance data. Adapter blocks belong in the
 main configuration under their named keys, not as unrelated root settings.
@@ -114,7 +115,7 @@ Download the starter configuration, or copy it from the repository:
 
 ```bash
 curl --fail --proto '=https' --tlsv1.2 \
-  https://raw.githubusercontent.com/ginkorea/spider/v0.2.0/examples/chimera.toml \
+  https://raw.githubusercontent.com/ginkorea/ghimera/v0.3.0/examples/chimera.toml \
   --output chimera.toml
 ```
 
@@ -124,13 +125,13 @@ An entirely offline smoke example, using explicitly named test doubles:
 import asyncio
 from pathlib import Path
 
-from chimera import ChimeraConfig, Goal, GoalLoop, Harvest, Scope
-from chimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
-from chimera.fetch import FetchLadder
+from ghimera import GhimeraConfig, Goal, GoalLoop, Harvest, Scope
+from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
+from ghimera.fetch import FetchLadder
 
 
 async def main() -> None:
-    config = ChimeraConfig.from_toml(Path("chimera.toml"))
+    config = GhimeraConfig.from_toml(Path("chimera.toml"))
     collector = GoalLoop(
         config=config,
         fetcher=FetchLadder((FakeRoute(),)),
@@ -158,9 +159,9 @@ research, inject those into `ResearchLoop` alongside `GroundedSearch`,
 `run(ResearchRequest(intent="your research question"))`. `SearxSearch` is the
 implemented search adapter.
 
-### Unreleased configured API
+### Configured intent API
 
-The unreleased source assembles real adapters, so applications need not manually
+The configured collector assembles real adapters, so applications need not manually
 wire every port. Unlike the offline smoke above, this needs your configured
 services and the adapted `examples/collector.toml` template:
 
@@ -168,7 +169,7 @@ services and the adapted `examples/collector.toml` template:
 import asyncio
 from pathlib import Path
 
-from chimera import Collector
+from ghimera import Collector
 
 
 async def main() -> None:
@@ -182,14 +183,14 @@ asyncio.run(main())
 
 Use the [collector guide](docs/COLLECTOR.md) to configure actual private models,
 source routing, extraction, optional graph/journal and separately supplied
-credentials. This API is not in the published `go-spider==0.2.0` wheel. The
+credentials. This API is included in `ghimera==0.3.0`, not the old `go-spider==0.2.0` wheel. The
 lower-level APIs remain supported for custom providers and composition.
 
-The unreleased source also supplies a configured intent command that retains the
+The package also supplies a configured intent command that retains the
 full result, original documents and citations in a private, checksum-sealed archive:
 
 ```bash
-python -m chimera --job /absolute/path/collector-command.toml --max-job-bytes 100000
+python -m ghimera --job /absolute/path/collector-command.toml --max-job-bytes 100000
 ```
 
 See the [command guide](docs/COLLECTOR_COMMAND.md) and
@@ -200,16 +201,16 @@ The following guides cover the existing lower-level wiring:
 
 | Area | Guide |
 |---|---|
-| Intent, discovery, coverage and answer review | [Intent research](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C3_RESEARCH.md) |
-| Model roles, credentials and native evidence context | [Self-hosted models](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C3_MODELS.md) |
-| Reference vectors, encoding and frontier ranking | [Embedding scoring](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C3_EMBEDDING_SCORING.md) |
-| Open web and native onion routing | [Tor policy](https://github.com/ginkorea/spider/blob/v0.2.0/docs/TOR.md) |
-| Browser isolation, resources and redirects | [Browser rendering](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C1_BROWSER.md) |
-| HTML extraction and adaptive locators | [HTML extraction](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C2_HTML.md) |
-| DOCX/native PDF and offline artifacts | [Document extraction](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C2_DOCUMENTS.md) |
-| Canonical and near-duplicate source evidence | [Deduplication](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C2_DEDUP.md) |
-| Configurable research graphs | [Research graph](https://github.com/ginkorea/spider/blob/v0.2.0/docs/RESEARCH_GRAPH.md) |
-| Architecture, contracts and completion tracker | [Specification](https://github.com/ginkorea/spider/blob/v0.2.0/docs/C0.md) |
+| Intent, discovery, coverage and answer review | [Intent research](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C3_RESEARCH.md) |
+| Model roles, credentials and native evidence context | [Self-hosted models](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C3_MODELS.md) |
+| Reference vectors, encoding and frontier ranking | [Embedding scoring](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C3_EMBEDDING_SCORING.md) |
+| Open web and native onion routing | [Tor policy](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/TOR.md) |
+| Browser isolation, resources and redirects | [Browser rendering](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C1_BROWSER.md) |
+| HTML extraction and adaptive locators | [HTML extraction](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C2_HTML.md) |
+| DOCX/native PDF and offline artifacts | [Document extraction](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C2_DOCUMENTS.md) |
+| Canonical and near-duplicate source evidence | [Deduplication](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C2_DEDUP.md) |
+| Configurable research graphs | [Research graph](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/RESEARCH_GRAPH.md) |
+| Architecture, contracts and completion tracker | [Specification](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C0.md) |
 
 ## Scope and limitations
 
@@ -250,8 +251,8 @@ does not erase them or describe fixture results as real-world model accuracy.
 ## Development
 
 ```bash
-git clone https://github.com/ginkorea/spider.git
-cd spider
+git clone https://github.com/ginkorea/ghimera.git
+cd ghimera
 uv sync --locked --extra html --extra documents --extra browser --python 3.11
 # Explicit browser/isolation paths are required for the complete gate.
 export CHIMERA_TEST_BROWSER=/absolute/path/to/compatible/chrome
@@ -265,14 +266,22 @@ and the entire test suite. Browser tests refuse absent acceptance prerequisites
 rather than pretending they ran. Evidence records distinguish protocol fixtures,
 installed-artifact checks, public-corpus acceptance and production activation.
 
-## v0.1.0 migration
+## Migration from go-spider
 
-`pip install --upgrade go-spider` now installs the rewritten library. Existing
-`spider_core` imports and the old `spider` command are not supplied by v0.2.0;
-migrate to `chimera` and explicit collaborators/configuration, or pin
-`go-spider==0.1.0` while migrating. The old cloud-client, VPN-manager and implicit
-fallback design is not retained. Prototype source remains in Git history.
+Install `ghimera==0.3.0` explicitly; this is a new distribution, not an in-place
+rename of old PyPI releases. Use `from ghimera import Collector, GhimeraConfig`,
+`ghimera.*` for submodules, and `ghimera` or `python -m ghimera` for the command.
+The legacy root `from chimera import Collector, ChimeraConfig` and
+`python -m chimera` forward to the same implementation. Old nested
+`chimera.*` imports must migrate; there is no second implementation or import hook.
+Existing versioned `chimera.*` configuration, graph, harvest, journal and result
+schemas are retained so existing saved evidence does not change identity.
 
-See [CHANGELOG.md](https://github.com/ginkorea/spider/blob/v0.2.0/CHANGELOG.md) for release changes. Josh Gompert maintains
-the project at [ginkorea/spider](https://github.com/ginkorea/spider).
-Licensed under [MIT](https://github.com/ginkorea/spider/blob/v0.2.0/LICENSE), matching the existing PyPI licence declaration.
+The v0.1.0 `spider_core` API and old `spider` command are not supplied; keep
+`go-spider==0.1.0` while migrating those applications. The old cloud-client,
+VPN-manager and implicit fallback design is not retained. Prototype source
+remains in Git history.
+
+See [CHANGELOG.md](https://github.com/ginkorea/ghimera/blob/v0.3.0/CHANGELOG.md) for release changes. Josh Gompert maintains
+the project at [ginkorea/ghimera](https://github.com/ginkorea/ghimera).
+Licensed under [MIT](https://github.com/ginkorea/ghimera/blob/v0.3.0/LICENSE), matching the existing PyPI licence declaration.

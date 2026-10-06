@@ -19,8 +19,8 @@ Your application supplies `SourceCredentials` separately to `CurlRoute`:
 
 ```python
 from pydantic import SecretStr
-from chimera.http import CurlRoute
-from chimera.source_sessions import SourceCredentials
+from ghimera.http import CurlRoute
+from ghimera.source_sessions import SourceCredentials
 
 # config contains the validated publisher-subscription session policy.
 # session_cookie comes from your application's own authorized secret store.

@@ -9,11 +9,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chimera.config import ChimeraConfig
-from chimera.document_config import DocumentExtractionConfig
-from chimera.documents import DocumentExtractor
-from chimera.models import Extracted, Page
-from chimera.refusals import ChimeraRefused, RefusalCode
+from ghimera.config import GhimeraConfig
+from ghimera.document_config import DocumentExtractionConfig
+from ghimera.documents import DocumentExtractor
+from ghimera.models import Extracted, Page
+from ghimera.refusals import GhimeraRefused, RefusalCode
 
 
 def config(tmp_path, **updates):
@@ -47,9 +47,9 @@ def config(tmp_path, **updates):
     )
     data.update(updates)
     policy = DocumentExtractionConfig.model_validate(data)
-    raw = ChimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
+    raw = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     raw["document_extraction"] = policy.model_dump(by_alias=True)
-    return ChimeraConfig.model_validate(raw)
+    return GhimeraConfig.model_validate(raw)
 
 
 def docx(text=None):
@@ -136,16 +136,16 @@ def test_standard_pdf_requires_pinned_offline_artifacts_not_a_native_fallback(tm
         pdf_models=models.model_dump(by_alias=True),
     )
     (root / entries[0]["path"]).unlink()
-    with pytest.raises(ChimeraRefused) as exc:
+    with pytest.raises(GhimeraRefused) as exc:
         DocumentExtractor(cfg)
     assert exc.value.code == RefusalCode.ADAPTER_CONTRACT
 
 
 def test_bad_type_or_oversized_source_refuses_before_worker_state(tmp_path):
     client = DocumentExtractor(config(tmp_path, max_input_bytes=10))
-    with pytest.raises(ChimeraRefused):
+    with pytest.raises(GhimeraRefused):
         asyncio.run(client.extract(page()))
-    with pytest.raises(ChimeraRefused) as exc:
+    with pytest.raises(GhimeraRefused) as exc:
         asyncio.run(client.extract(page(b"<html></html>", "text/html")))
     assert exc.value.code == RefusalCode.CONTENT_TYPE_UNWANTED
     assert not (tmp_path / "worker").exists()
@@ -157,19 +157,19 @@ def test_corrupt_archive_and_expansion_limits_refuse(tmp_path):
         (docx(), {"max_archive_entries": 1}),
         (docx(), {"max_expanded_bytes": 100}),
     ]:
-        with pytest.raises(ChimeraRefused):
+        with pytest.raises(GhimeraRefused):
             asyncio.run(DocumentExtractor(config(tmp_path, **changes)).extract(page(source)))
 
 
 def test_mismatched_run_binding_is_refused(tmp_path):
     client = DocumentExtractor(config(tmp_path))
-    with pytest.raises(ChimeraRefused):
+    with pytest.raises(GhimeraRefused):
         client.validate_config(config(tmp_path, max_pages=3))
 
 
 def test_timeout_releases_worker_slot(tmp_path):
     client = DocumentExtractor(config(tmp_path, timeout_seconds=0.001, max_workers=1))
-    with pytest.raises(ChimeraRefused) as exc:
+    with pytest.raises(GhimeraRefused) as exc:
         asyncio.run(client.extract(page()))
     assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED
 
@@ -214,10 +214,10 @@ def test_real_native_pdf_explicitly_reports_no_layout_model_tables(tmp_path):
 
 
 def test_document_conversion_is_in_collection_ledger_and_reader(tmp_path):
-    from chimera.doubles import FakeJudge, FakeRoute, KeywordScorer
-    from chimera.fetch import FetchLadder
-    from chimera.loop import GoalLoop
-    from chimera.models import Goal, Harvest, Scope
+    from ghimera.doubles import FakeJudge, FakeRoute, KeywordScorer
+    from ghimera.fetch import FetchLadder
+    from ghimera.loop import GoalLoop
+    from ghimera.models import Goal, Harvest, Scope
 
     source = page()
 

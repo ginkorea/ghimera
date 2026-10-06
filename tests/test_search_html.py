@@ -6,13 +6,13 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from pydantic import ValidationError
 
-from chimera.budget import RunBudget
-from chimera.config import ChimeraConfig
-from chimera.ledger import Ledger
-from chimera.refusals import ChimeraRefused
-from chimera.research_types import SearchQuery
-from chimera.search_config import SearxConfig
-from chimera.search_history import SearchHistory
+from ghimera.budget import RunBudget
+from ghimera.config import GhimeraConfig
+from ghimera.ledger import Ledger
+from ghimera.refusals import GhimeraRefused
+from ghimera.research_types import SearchQuery
+from ghimera.search_config import SearxConfig
+from ghimera.search_history import SearchHistory
 from tests.test_html_extraction import policy as extraction_policy
 from tests.test_http_fetch import ResolverFixture
 from tests.test_search_conformance import endpoint, provider
@@ -33,7 +33,7 @@ HTML = """<!doctype html><html><body>
 
 
 def html_provider(tmp_path, endpoint, **updates):
-    from chimera.searxng import SearxHtmlSearch
+    from ghimera.searxng import SearxHtmlSearch
 
     _, cfg = provider(endpoint)
     raw = cfg.model_dump(by_alias=True)
@@ -47,7 +47,7 @@ def html_provider(tmp_path, endpoint, **updates):
     }
     raw["extraction"] = extraction_policy(tmp_path)
     raw.update(updates)
-    cfg = ChimeraConfig.model_validate(raw)
+    cfg = GhimeraConfig.model_validate(raw)
     return SearxHtmlSearch(cfg, cfg.search, resolver=ResolverFixture()), cfg
 
 
@@ -117,7 +117,7 @@ def test_html_search_does_not_turn_failed_layout_or_access_into_results(
     endpoint[2].update(body=body, content_type="text/html")
     adapter, cfg = html_provider(tmp_path, endpoint)
     budget, ledger = RunBudget(cfg, lambda: 0.0), Ledger()
-    with pytest.raises(ChimeraRefused):
+    with pytest.raises(GhimeraRefused):
         asyncio.run(
             adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), budget, ledger)
         )
@@ -145,7 +145,7 @@ def test_html_empty_results_are_success_only_in_the_observed_results_envelope(tm
 def test_json_mode_does_not_silently_retry_html(tmp_path, endpoint):
     endpoint[2].update(body=HTML, content_type="text/html")
     adapter, cfg = provider(endpoint)
-    with pytest.raises(ChimeraRefused, match="search_unavailable"):
+    with pytest.raises(GhimeraRefused, match="search_unavailable"):
         asyncio.run(
             adapter.discover(
                 SearchQuery(text="ports", question_ids=("q1",)),
@@ -157,7 +157,7 @@ def test_json_mode_does_not_silently_retry_html(tmp_path, endpoint):
 
 
 def test_html_provider_requires_its_explicit_format_and_parser_recipe(tmp_path, endpoint):
-    from chimera.searxng import SearxHtmlSearch, SearxSearch
+    from ghimera.searxng import SearxHtmlSearch, SearxSearch
 
     adapter, cfg = html_provider(tmp_path, endpoint)
     assert adapter.revision == "search-html/1"
@@ -167,7 +167,7 @@ def test_html_provider_requires_its_explicit_format_and_parser_recipe(tmp_path, 
     values.pop("extraction")
     with pytest.raises(ValueError, match="extraction"):
         SearxHtmlSearch(
-            ChimeraConfig.model_validate(values), cfg.search, resolver=ResolverFixture()
+            GhimeraConfig.model_validate(values), cfg.search, resolver=ResolverFixture()
         )
     assert not endpoint[1]
 
@@ -189,7 +189,7 @@ def test_html_response_limit_and_parser_input_budget_are_real(tmp_path, endpoint
         extraction=extraction_policy(tmp_path / "limited", max_input_bytes=len(HTML) - 1),
     )
     budget, ledger = RunBudget(cfg, lambda: 0.0), Ledger()
-    with pytest.raises(ChimeraRefused, match="search_unavailable"):
+    with pytest.raises(GhimeraRefused, match="search_unavailable"):
         asyncio.run(
             adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), budget, ledger)
         )
@@ -215,7 +215,7 @@ def test_parser_cancel_keeps_bytes_already_fetched(tmp_path, endpoint, monkeypat
 
 
 def test_html_search_uses_configured_tor_and_never_source_dns(tmp_path, endpoint):
-    from chimera.searxng import SearxHtmlSearch
+    from ghimera.searxng import SearxHtmlSearch
     from tests.test_tor_transport import NoLocalDNS, policy, socks_server
 
     endpoint[2].update(body=HTML, content_type="text/html")
@@ -240,8 +240,8 @@ def test_html_search_uses_configured_tor_and_never_source_dns(tmp_path, endpoint
 
 
 def test_reporting_about_a_security_check_is_not_an_interstitial():
-    from chimera.http import page_barrier
-    from chimera.models import Page
+    from ghimera.http import page_barrier
+    from ghimera.models import Page
 
     body = (
         b"<html><title>Security research report</title><article>"

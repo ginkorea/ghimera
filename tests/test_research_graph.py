@@ -6,14 +6,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from chimera.config import ChimeraConfig
-from chimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
-from chimera.fetch import FetchLadder
-from chimera.graph import DirectoryGraphSink, MemoryGraphSink, ResearchGraph
-from chimera.graph_types import GraphConfig, GraphEvidence
-from chimera.loop import GoalLoop
-from chimera.models import Goal, Scope
-from chimera.refusals import ChimeraRefused
+from ghimera.config import GhimeraConfig
+from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
+from ghimera.fetch import FetchLadder
+from ghimera.graph import DirectoryGraphSink, MemoryGraphSink, ResearchGraph
+from ghimera.graph_types import GraphConfig, GraphEvidence
+from ghimera.loop import GoalLoop
+from ghimera.models import Goal, Scope
+from ghimera.refusals import GhimeraRefused
 
 
 def policy(path: Path, **updates: object) -> GraphConfig:
@@ -149,7 +149,7 @@ def test_configuration_and_citation_refuse_before_write(tmp_path):
                 confidence=0.9,
             ),
         ):
-            with pytest.raises(ChimeraRefused, match="graph_contract"):
+            with pytest.raises(GhimeraRefused, match="graph_contract"):
                 await graph.append(edges=(bad,))
             assert graph.snapshot() == after
 
@@ -166,13 +166,13 @@ def test_corrupt_disk_or_different_profile_never_looks_complete(tmp_path):
 
     asyncio.run(scenario())
     changed = cfg.model_copy(update={"profile_version": "2"})
-    with pytest.raises(ChimeraRefused, match="graph_contract"):
+    with pytest.raises(GhimeraRefused, match="graph_contract"):
         asyncio.run(
             ResearchGraph(changed, "run-1", DirectoryGraphSink(changed, "run-1")).start("ports")
         )
     record = next((tmp_path / "g" / "run-1").glob("*.json"))
     record.write_text("truncated", encoding="utf-8")
-    with pytest.raises(ChimeraRefused, match="graph_sink_failed"):
+    with pytest.raises(GhimeraRefused, match="graph_sink_failed"):
         asyncio.run(ResearchGraph(cfg, "run-1", DirectoryGraphSink(cfg, "run-1")).start("ports"))
 
 
@@ -185,7 +185,7 @@ def test_goal_loop_graph_before_fetch_and_disabled_no_writes(tmp_path):
             assert records, "intent graph must be durable before network"
             return await super().attempt(request)
 
-    cfg = ChimeraConfig.from_toml(Path("examples/chimera.toml"))
+    cfg = GhimeraConfig.from_toml(Path("examples/chimera.toml"))
     cfg = cfg.model_copy(update={"graph": policy(tmp_path / "g"), "page_budget": 1})
     goal = Goal(text="ports", seeds=("https://example.org/start",))
     scope = Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",))
@@ -219,7 +219,7 @@ def test_sink_failure_and_bad_ack_never_advance_checkpoint(tmp_path):
 
     async def scenario():
         graph = ResearchGraph(policy(tmp_path / "g"), "run-1", BadSink())
-        with pytest.raises(ChimeraRefused, match="graph_sink_failed"):
+        with pytest.raises(GhimeraRefused, match="graph_sink_failed"):
             await graph.start("ports")
         assert graph.snapshot().nodes == () and graph.snapshot().checkpoint is None
 
@@ -256,7 +256,7 @@ def test_concurrent_observations_checkpoint_order_and_resource_bound(tmp_path):
         )
         before = graph.snapshot()
         assert len(before.nodes) == 4 and len(before.edges) == 3
-        with pytest.raises(ChimeraRefused, match="graph_contract"):
+        with pytest.raises(GhimeraRefused, match="graph_contract"):
             await graph.discovered("https://example.org/extra", graph.intent_id)
         assert graph.snapshot() == before
         restored = ResearchGraph(cfg, "run-1", DirectoryGraphSink(cfg, "run-1"))

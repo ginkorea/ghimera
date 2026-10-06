@@ -6,13 +6,13 @@ import hashlib
 import pytest
 from pydantic import ValidationError
 
-from chimera.budget import RunBudget
-from chimera.ledger import Ledger
-from chimera.models import ModelIdentity
-from chimera.refusals import ChimeraRefused, RefusalCode
-from chimera.research_types import ResearchPlan, ResearchResult, SearchQuery
-from chimera.result_archive import ResearchResultArchive
-from chimera.search_history import SearchHistory
+from ghimera.budget import RunBudget
+from ghimera.ledger import Ledger
+from ghimera.models import ModelIdentity
+from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.research_types import ResearchPlan, ResearchResult, SearchQuery
+from ghimera.result_archive import ResearchResultArchive
+from ghimera.search_history import SearchHistory
 from tests.test_c0 import config
 from tests.test_intent_research import PlannerFixture, SearchFixture, policy, run
 
@@ -104,7 +104,7 @@ def test_delayed_completion_failure_and_concurrent_runs_keep_owned_history():
             if request.query.text == "first":
                 await asyncio.sleep(0.01)
             if request.query.text == "failed":
-                raise ChimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
+                raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
             return await super().request(request)
 
     async def scenario():
@@ -122,7 +122,7 @@ def test_delayed_completion_failure_and_concurrent_runs_keep_owned_history():
             ),
             return_exceptions=True,
         )
-        assert isinstance(values[2], ChimeraRefused)
+        assert isinstance(values[2], GhimeraRefused)
         assert [o.query.text for o in first.observations] == ["second", "first"]
         assert [o.query.text for o in second.observations] == ["separate"]
         assert len(first_ledger.snapshot()) == 3

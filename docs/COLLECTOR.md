@@ -1,7 +1,8 @@
 # Configured collector
 
-Status: unreleased source. `Collector` assembles the existing concrete adapters
-from one validated `ChimeraConfig`. It does not supply a model server, download
+Status: included in the ghimera 0.3.0 release line; deployment/quality acceptance
+is separate. `Collector` assembles the existing concrete adapters
+from one validated `GhimeraConfig`. It does not supply a model server, download
 weights, discover credentials or require an external registry or scheduler.
 
 ## Intent to evidence
@@ -19,8 +20,8 @@ Different declarations alone do not prove independent weights or model quality.
 import asyncio
 from pathlib import Path
 
-from chimera import Collector
-from chimera.research_types import ResearchResult
+from ghimera import Collector
+from ghimera.research_types import ResearchResult
 
 
 async def main() -> None:
@@ -61,7 +62,7 @@ Required sections are `[http]`, `[research]`, `[search]`, `[models]`, `[scoring]
 and `[extraction]`, alongside the core budget/politeness settings. The SearXNG
 recipe is now retained under `[search]` in every run's effective non-secret
 configuration. A supplied search adapter cannot claim a different recipe.
-Existing low-level `SearxConfig` imports from `chimera.searxng` remain supported;
+Existing low-level `SearxConfig` imports from `ghimera.searxng` remain supported;
 omitted search sections preserve the old serialized config shape.
 
 Search response dialect is a configuration choice. Legacy `chimera.searxng/1`

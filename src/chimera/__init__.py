@@ -1,8 +1,11 @@
-"""Chimera core: no network, model, registry, or service is constructed on import."""
+"""Legacy root facade; all objects belong to the single ghimera implementation.
 
-from chimera.collector import Collector
-from chimera.config import ChimeraConfig
-from chimera.loop import GoalLoop
-from chimera.models import Goal, Harvest, Scope
+Nested imports must migrate to ghimera. This facade does not load duplicate
+submodules, install import hooks, or change saved configuration/result schemas.
+"""
+
+from ghimera import Collector, GhimeraConfig, Goal, GoalLoop, Harvest, Scope
+
+ChimeraConfig = GhimeraConfig
 
 __all__ = ["ChimeraConfig", "Collector", "Goal", "GoalLoop", "Harvest", "Scope"]
