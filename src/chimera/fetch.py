@@ -21,6 +21,7 @@ from chimera.refusals import (
     RefusalCode,
 )
 from chimera.response import REDIRECT_STATUSES
+from chimera.source_session_types import SourceSessionUse
 from chimera.transport_types import TransportEvidence
 
 
@@ -58,6 +59,9 @@ class FetchRoute(ABC):
         return None
 
     def transport_selection(self, url: str) -> TransportEvidence | None:
+        return None
+
+    def source_session_selection(self, url: str) -> SourceSessionUse | None:
         return None
 
     @abstractmethod
@@ -300,6 +304,7 @@ class FetchLadder:
                         route=route.name,
                         refusal=RefusalCode.FETCH_FAILED,
                         reason="request_cancelled",
+                        source_session=route.source_session_selection(url),
                         bytes_read=bytes_read,
                         latency_seconds=max(0.0, budget.clock() - started),
                         transport=route.transport_selection(url),
@@ -318,6 +323,9 @@ class FetchLadder:
                     bytes_read=bytes_read,
                     refusal=code,
                     reason=code.value if code else "route_result",
+                    source_session=page.source_session
+                    if page
+                    else route.source_session_selection(url),
                     transport=page.transport if page else route.transport_selection(url),
                     latency_seconds=max(0.0, budget.clock() - started),
                 )

@@ -4,9 +4,11 @@ curl_cffi's setopt callback/options boundary is dynamic in the vendor API. Value
 are built from validated contracts here; getinfo unions are narrowed explicitly.
 There is no session cookie jar, netrc, inherited proxy, implicit redirect or TLS
 verification override. Scheduling, robots and accounting belong to FetchLadder.
+Source credentials are explicit in-memory bindings selected by exact origin/path.
 """
 
 import asyncio
+from collections.abc import Mapping
 from typing import Protocol
 
 from curl_cffi import AsyncCurl, Curl, CurlError, CurlInfo, CurlOpt
@@ -17,6 +19,8 @@ from chimera.fetch import FetchRoute
 from chimera.models import FetchRequest, Page
 from chimera.refusals import ChimeraRefused, FetchCancelled, FetchFailure, RefusalCode
 from chimera.response import RETAINED_HEADERS
+from chimera.source_session_types import SourceSessionUse
+from chimera.source_sessions import SourceCredentials, SourceSessions
 from chimera.transport import NetworkGuard as NetworkGuard
 from chimera.transport import Resolver, RoutingConnector, SystemResolver, validate_transition
 from chimera.transport_types import TransportEvidence
@@ -105,11 +109,18 @@ class CurlRoute(FetchRoute):
     cost = 0
     uses_http = True
 
-    def __init__(self, config: ChimeraConfig, *, resolver: Resolver | None = None) -> None:
+    def __init__(
+        self,
+        config: ChimeraConfig,
+        *,
+        resolver: Resolver | None = None,
+        source_credentials: Mapping[str, SourceCredentials] | None = None,
+    ) -> None:
         if config.http is None:
             raise ValueError("real HTTP routes require the versioned HTTP/network policy")
         self._config = config
         self._http = config.http
+        self._sessions = SourceSessions(config.source_sessions, source_credentials)
         self._connector = RoutingConnector(
             config.http.network, config.transport, resolver or SystemResolver()
         )
@@ -124,7 +135,12 @@ class CurlRoute(FetchRoute):
     def transport_selection(self, url: str) -> TransportEvidence:
         return self._connector.selection(url)
 
+    def source_session_selection(self, url: str) -> SourceSessionUse | None:
+        selected = self._sessions.select(url)
+        return selected.evidence if selected is not None else None
+
     async def attempt(self, request: FetchRequest) -> Page:
+        source_session = self._sessions.select(request.url)
         started = asyncio.get_running_loop().time()
         connection = await self._connector.prepare(request.url, request.timeout_seconds)
         remaining = request.timeout_seconds - (asyncio.get_running_loop().time() - started)
@@ -156,6 +172,10 @@ class CurlRoute(FetchRoute):
                 [
                     f"User-Agent: {self._config.user_agent}".encode(),
                     *(f"{key}: {value}".encode() for key, value in request.headers),
+                    *(
+                        f"{key}: {secret.get_secret_value()}".encode("ascii")
+                        for key, secret in (source_session.headers if source_session else ())
+                    ),
                 ],
             )
             curl.setopt(CurlOpt.WRITEFUNCTION, body.write)
@@ -183,6 +203,7 @@ class CurlRoute(FetchRoute):
                 body=bytes(body.data),
                 headers=tuple(headers.entries),
                 transport=connection.evidence,
+                source_session=source_session.evidence if source_session else None,
             )
         except CurlError as exc:
             code = (

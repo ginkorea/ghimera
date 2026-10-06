@@ -18,6 +18,7 @@ from chimera.model_types import ModelCallEvidence
 from chimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
 from chimera.refusals import RefusalCode
 from chimera.scoring_types import SimilarityEvidence
+from chimera.source_session_types import SourceSessionUse
 from chimera.transport_types import TransportEvidence
 
 NonEmpty = Annotated[str, Field(min_length=1)]
@@ -118,9 +119,12 @@ class Page(Record):
     revalidated: bool = False
     transport: TransportEvidence | None = None
     rendered: RenderResult | None = None
+    source_session: SourceSessionUse | None = None
 
     @model_validator(mode="after")
     def rendering_binding(self) -> "Page":
+        if self.source_session is not None and self.source_session.request_url != self.final_url:
+            raise ValueError("source session selection must bind this response URL")
         if self.rendered is not None and (
             self.rendered.source_sha256 != hashlib.sha256(self.body).hexdigest()
             or self.rendered.source_url != self.final_url
@@ -209,14 +213,20 @@ class DocumentSource(Record):
     verdict: Verdict
     transport: TransportEvidence | None = None
     rendered: RenderResult | None = None
+    source_session: SourceSessionUse | None = None
 
     def validate_policy(self, config: ChimeraConfig) -> None:
+        if self.source_session is not None:
+            self.source_session.validate_policy(config.source_sessions, self.url)
         if self.rendered is not None:
             if config.browser is None or len(self.raw) > config.browser.max_input_bytes:
                 raise ValueError("browser rendering requires its input policy and limits")
             self.rendered.validate_policy(
                 config.browser, max_redirects=config.http.max_redirects if config.http else 0
             )
+            for resource in self.rendered.resources:
+                if resource.source_session is not None:
+                    resource.source_session.validate_policy(config.source_sessions, resource.url)
         evidence = self.extracted.extraction
         if evidence is not None and (
             config.extraction is None
@@ -232,6 +242,8 @@ class DocumentSource(Record):
 
     @model_validator(mode="after")
     def source_binding(self) -> "DocumentSource":
+        if self.source_session is not None and self.source_session.request_url != self.url:
+            raise ValueError("source session selection must bind this source occurrence")
         digest = hashlib.sha256(self.raw).hexdigest()
         if self.sha256 != digest:
             raise ValueError("document digest must bind retained source bytes")
@@ -337,6 +349,7 @@ class LedgerRow(Record):
     similarity: SimilarityEvidence | None = None
     reference: ReferenceDecision | None = None
     reference_query: ReferenceQuery | None = None
+    source_session: SourceSessionUse | None = None
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
@@ -407,6 +420,19 @@ class Harvest(Record):
         from chimera.references import validate_reference_ledger
 
         validate_reference_ledger(self)
+        for row in self.ledger:
+            if row.source_session is not None:
+                if row.event != "fetch" or row.url is None:
+                    raise ValueError("source session metadata belongs to a source fetch")
+                row.source_session.validate_policy(
+                    self.receipt.effective_config.source_sessions, row.url
+                )
+            if row.rendered is not None:
+                for resource in row.rendered.resources:
+                    if resource.source_session is not None:
+                        resource.source_session.validate_policy(
+                            self.receipt.effective_config.source_sessions, resource.url
+                        )
         if tuple(row.sequence for row in self.ledger) != tuple(range(len(self.ledger))):
             raise ValueError("ledger sequence must be contiguous")
         if self.receipt.fetches != sum(row.event == "fetch" for row in self.ledger):

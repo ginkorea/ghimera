@@ -70,7 +70,12 @@ class SearxSearch(GroundedSearch):
         *,
         resolver: Resolver | None = None,
     ) -> None:
-        self._route, self._provider = CurlRoute(config, resolver=resolver), provider
+        # Discovery is not a collected source. Source cookies must neither be
+        # required here nor borrowed for its separate service endpoint.
+        search_config = ChimeraConfig.model_validate(
+            dict(config.model_dump(by_alias=True), source_sessions=())
+        )
+        self._route, self._provider = CurlRoute(search_config, resolver=resolver), provider
 
     def transport_selection(self) -> TransportEvidence:
         return self._route.transport_selection(self._provider.endpoint)

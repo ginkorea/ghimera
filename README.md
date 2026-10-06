@@ -156,6 +156,11 @@ or challenge refusal. There is no challenge solver or authenticated-site bypass.
 Tor routing is a transport capability, not a guarantee of anonymity or authority
 to access a source.
 
+Collection is not limited to anonymous access. Supply your own authorized
+cookies or headers through explicitly configured source sessions, with exact
+origin/path scope and no credential values in receipts. Browser resources use
+the same parent-owned session boundary. See [authorized sessions](docs/SOURCE_SESSIONS.md).
+
 Source/search requests run on the host executing the crawler. Model control is
 a separate private-service boundary. Your application owns authorization,
 deployment and storage; no external scheduler or registry is required to import

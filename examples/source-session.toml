@@ -1,0 +1,8 @@
+# Policy only. Credentials are supplied separately in memory by your application.
+# This origin is deliberately non-routable. Configuration is not authorization.
+schema = "chimera.source-session/1"
+session_id = "publisher-subscription"
+origin = "https://publisher.example.invalid"
+path_prefixes = ["/reports/"]
+header_names = ["cookie"]
+allow_http = false

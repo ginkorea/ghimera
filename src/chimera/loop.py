@@ -256,6 +256,7 @@ class GoalLoop:
                         verdict=verdict,
                         transport=page.transport,
                         rendered=page.rendered,
+                        source_session=page.source_session,
                     )
                     content = session._content
                     matched = content.match(candidate) if content is not None else None

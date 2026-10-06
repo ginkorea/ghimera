@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from chimera.browser_config import BrowserConfig
 from chimera.refusals import RefusalCode
 from chimera.response import REDIRECT_STATUSES, redirect_target
+from chimera.source_session_types import SourceSessionUse
 from chimera.transport_types import TransportEvidence
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -46,9 +47,12 @@ class RenderResource(BrowserRecord):
     headers: tuple[tuple[str, str], ...] = ()
     refusal: RefusalCode | None = None
     redirected_from: Annotated[int, Field(strict=True, ge=0)] | None = None
+    source_session: SourceSessionUse | None = None
 
     @model_validator(mode="after")
     def bound(self) -> "RenderResource":
+        if self.source_session is not None and self.source_session.request_url != self.final_url:
+            raise ValueError("source session selection must bind this resource URL")
         if self.refusal is not None:
             if (
                 any(
@@ -59,6 +63,7 @@ class RenderResource(BrowserRecord):
                         self.content_type,
                         self.final_url,
                         self.transport,
+                        self.source_session,
                     )
                 )
                 or self.body

@@ -197,6 +197,7 @@ class IsolatedBrowserRenderer:
                 body=page.body,
                 source_sha256=hashlib.sha256(page.body).hexdigest(),
                 transport=page.transport,
+                source_session=page.source_session,
                 headers=page.headers,
                 redirected_from=request.redirected_from,
             )

@@ -30,14 +30,17 @@ class RefusalCode(StrEnum):
     RESEARCH_CONTRACT = "research_contract"
     UNSUPPORTED_ANSWER = "unsupported_answer"
     SEARCH_UNAVAILABLE = "search_unavailable"
+    SOURCE_SESSION_UNAVAILABLE = "source_session_unavailable"
 
 
 REFUSALS = MappingProxyType(
     {
         RefusalCode.ROBOTS_DISALLOWED: "Robots denies this URL; use another seed or shelf ruling.",
         RefusalCode.CHALLENGE_NOT_SOLVED: "Site challenge encountered; never solve or bypass it.",
-        RefusalCode.LOGIN_WALL: "Login required; collect a public alternative.",
-        RefusalCode.PAYWALL: "Paywall encountered; collect a public alternative.",
+        RefusalCode.LOGIN_WALL: (
+            "Login required; supply an authorized source session or another source."
+        ),
+        RefusalCode.PAYWALL: "Subscription required; supply an entitled session or another source.",
         RefusalCode.OUT_OF_SCOPE: "URL exceeds the exact-host scope or depth limit.",
         RefusalCode.BUDGET_EXHAUSTED: "A declared page, byte, time, or judge budget is exhausted.",
         RefusalCode.CONTENT_TYPE_UNWANTED: "Content type is outside the shelf's allowed types.",
@@ -70,6 +73,9 @@ REFUSALS = MappingProxyType(
         ),
         RefusalCode.SEARCH_UNAVAILABLE: (
             "Grounded search failed; never invent replacement source URLs."
+        ),
+        RefusalCode.SOURCE_SESSION_UNAVAILABLE: (
+            "Bind the configured source-session credentials before collection; never discover them."
         ),
     }
 )

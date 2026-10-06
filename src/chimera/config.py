@@ -16,6 +16,7 @@ from chimera.model_config import ModelBindingsConfig
 from chimera.reference_config import ReferenceConfig
 from chimera.research_config import ResearchConfig
 from chimera.scoring_config import ScoringConfig
+from chimera.source_session_types import SourceSessionPolicy, validate_sessions
 from chimera.transport_types import TransportConfig
 
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
@@ -124,9 +125,13 @@ class ChimeraConfig(BaseModel):
     browser: BrowserConfig | None = None
     scoring: ScoringConfig | None = None
     references: ReferenceConfig | None = None
+    source_sessions: tuple[SourceSessionPolicy, ...] = ()
 
     @model_validator(mode="after")
     def consistent(self) -> "ChimeraConfig":
+        validate_sessions(self.source_sessions)
+        if self.source_sessions and self.http is None:
+            raise ValueError("source sessions require an HTTP policy")
         if (
             self.references is not None
             and self.references.discover_cited_by

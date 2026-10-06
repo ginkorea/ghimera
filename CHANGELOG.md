@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Authorized source sessions with caller-supplied cookies/headers, exact origin
+  and path scope, protected browser resource support, non-secret audit metadata,
+  and separation from discovery/model-control credentials.
 - Configurable document-reference depth and citing-source discovery through the
   injected search provider, using native parent context and the existing scorer.
 - Source-bound reference decisions and native Docling URL/hyperlink locators;
