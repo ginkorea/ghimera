@@ -39,6 +39,7 @@ from ghimera.references import ReferenceBook
 from ghimera.refusals import GhimeraRefused, ModelFailure, RefusalCode
 from ghimera.scoring import Scorer
 from ghimera.semantic_graph import SemanticExtractor, SemanticStage
+from ghimera.session_state import SessionState
 
 CollectionStop = StopReason | Literal["round_limit"]
 
@@ -92,6 +93,49 @@ class CollectionSession:
         ):
             return False
         return self._reference_book.claim_query(document)
+
+    def checkpoint_state(self) -> SessionState:
+        if self._closed or not self.budget.quiescent:
+            raise ValueError("checkpoint requires a quiescent live collection session")
+        return SessionState(
+            frontier=tuple(self._frontier),
+            visited=tuple(sorted(self._visited)),
+            reference_hosts=self.reference_hosts,
+            reference_scopes=self._reference_scopes,
+            reference_hops=self._reference_hops,
+            reference_origins=self._reference_origins,
+            window_start=self._window_start,
+            window_new=self._window_new,
+            last_grade=self._last_grade,
+            semantic_sources=tuple(sorted(self._semantic_sources)),
+            content_revisions=self._content.revisions if self._content is not None else (),
+        )
+
+    def restore_state(self, state: SessionState, harvest: Harvest) -> None:
+        self._documents = {doc.sha256: doc for doc in harvest.documents}
+        self._frontier = list(state.frontier)
+        heapq.heapify(self._frontier)
+        self._visited = set(state.visited)
+        self._reference_book.restore(harvest.ledger, state.reference_hosts)
+        self._reference_scopes = dict(state.reference_scopes)
+        self._reference_hops = dict(state.reference_hops)
+        self._reference_origins = dict(state.reference_origins)
+        self._window_start, self._window_new = state.window_start, state.window_new
+        self._last_grade = state.last_grade
+        observed = {
+            row.semantic_window.graph_document_id
+            for row in harvest.ledger
+            if row.semantic_window is not None
+        }
+        if set(state.semantic_sources) != observed:
+            raise ValueError("restored semantic work requires acknowledged observations")
+        self._semantic_sources = set(state.semantic_sources)
+        if self._content is not None:
+            for doc in harvest.documents:
+                self._content.add(doc)
+            self._content.restore_revisions(state.content_revisions, harvest.source_documents)
+        elif state.content_revisions:
+            raise ValueError("restored content index requires its original recipe")
 
 
 class GoalLoop:
@@ -158,6 +202,44 @@ class GoalLoop:
             for seed in goal.seeds:
                 await graph.discovered(seed, graph.intent_id)
         return CollectionSession(goal, budget, ledger, graph)
+
+    async def restore(
+        self,
+        run_id: str,
+        harvest: Harvest,
+        state: SessionState,
+        *,
+        search_calls: int,
+        downtime_seconds: float,
+    ) -> CollectionSession:
+        """Resume the exact durable run; no new identity, calls or budget reset."""
+        from ghimera.journal import DirectoryLedgerSink
+
+        if (
+            harvest.receipt.effective_config != self._config
+            or harvest.receipt.judge != self._judge.model
+        ):
+            raise ValueError("continuation requires the original collection recipe and judge")
+        sink = DirectoryLedgerSink(
+            self._config, run_id, harvest.goal, self._judge.model, resume_rows=harvest.ledger
+        )
+        ledger = Ledger(sink=sink, restored_rows=harvest.ledger)
+        try:
+            budget = RunBudget(self._config, self._clock)
+            budget.restore(harvest.receipt, harvest.ledger, search_calls, downtime_seconds)
+            graph = None
+            if self._config.graph is not None and self._config.graph.enabled:
+                graph_sink = self._graph_sink or DirectoryGraphSink(self._config.graph, run_id)
+                graph = ResearchGraph(self._config.graph, run_id, graph_sink)
+                await graph.start(harvest.goal.text, expected=harvest.graph)
+                if graph.snapshot() != harvest.graph:
+                    raise ValueError("graph changed after the research checkpoint; reconcile first")
+            session = CollectionSession(harvest.goal, budget, ledger, graph)
+            session.restore_state(state, harvest)
+            return session
+        except BaseException:
+            ledger.close()
+            raise
 
     async def run(self, goal: Goal, scope: Scope, *, run_id: str | None = None) -> Harvest:
         session = await self.open(goal, run_id=run_id)
@@ -664,9 +746,16 @@ class GoalLoop:
         if session._closed or session.budget.config != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         session._closed = True
-        goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
+        ledger = session.ledger
         ledger.append(LedgerRow(sequence=ledger.next_sequence, event="stop", reason=stop))
-        harvest = Harvest(
+        harvest = self.snapshot(session, stop)
+        ledger.finish(harvest)
+        return harvest
+
+    def snapshot(self, session: CollectionSession, stop: StopReason = "frontier_empty") -> Harvest:
+        """Validated partial evidence; does not append stop or seal the journal."""
+        goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
+        return Harvest(
             schema="chimera.harvest/1",
             goal=goal,
             documents=session.documents,
@@ -685,5 +774,3 @@ class GoalLoop:
             ),
             graph=graph.snapshot() if graph is not None else None,
         )
-        ledger.finish(harvest)
-        return harvest

@@ -105,7 +105,10 @@ that an entire organization has been exhaustively mapped.
    proving that findings change its next research frontier: within-run source
    implementation and controlled composed-loop checks exist; real subtree/model
    acceptance remains open.
-5. Restart-safe graph/frontier continuation and idempotent output projection.
+5. Restart-safe graph/frontier continuation and idempotent output projection:
+   completed-round suspend/resume is implemented in unreleased source, with a
+   fresh-process fixture and unchanged cumulative observations/budgets. In-flight
+   external-call reconciliation and platform output projection remain open.
 6. Independent source-entailment checks and a final coverage/gaps report.
 
 The organizational workflow may not be closed by the earlier English graphlib
@@ -118,3 +121,5 @@ Semantic-stage configuration, evidence and remaining quality boundaries are in
 [SEMANTIC_EXTRACTION.md](SEMANTIC_EXTRACTION.md).
 Graph-aware planning configuration and replay are in
 [GRAPH_PLANNING.md](GRAPH_PLANNING.md).
+Restart-safe round boundaries, API and unresolved-call limitations are in
+[CONTINUATION.md](CONTINUATION.md).

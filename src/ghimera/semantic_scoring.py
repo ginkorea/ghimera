@@ -140,6 +140,26 @@ class EmbeddingScorer(Scorer):
         async with session.lock:
             if session.references is not None:
                 return session.references
+            # A resumed budget has a new object identity, but its original intent
+            # vectors remain acknowledged native observations, not another call.
+            retained = tuple(
+                row.intent_reference
+                for row in ledger.snapshot()
+                if row.intent_reference is not None
+            )
+            if retained:
+                if len(retained) != 1 or retained[0].goal_sha256 != goal_hash:
+                    raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                prepared = IntentReferenceEvidence.model_validate(retained[0].model_dump())
+                observed = ledger.snapshot()
+                if prepared.encoding_sequence >= len(observed):
+                    raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                retained_call = observed[prepared.encoding_sequence].encoding_call
+                if retained_call is None:
+                    raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                prepared.validate_binding(goal.text, self._policy.encoder, retained_call)
+                session.references = prepared.references
+                return session.references
             vectors = await self._encode((goal.text,), budget, ledger, None)
             service = self._policy.encoder
             references = EmbeddingReferences(

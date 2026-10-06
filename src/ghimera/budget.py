@@ -3,6 +3,7 @@
 from collections.abc import Callable
 
 from ghimera.config import GhimeraConfig
+from ghimera.models import LedgerRow, Receipt
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
 
@@ -34,6 +35,37 @@ class RunBudget:
     @property
     def remaining_bytes(self) -> int:
         return max(0, self.config.byte_budget - self.bytes_read)
+
+    @property
+    def quiescent(self) -> bool:
+        return self._bytes_reserved == 0
+
+    def restore(
+        self,
+        receipt: Receipt,
+        rows: tuple[LedgerRow, ...],
+        search_calls: int,
+        downtime_seconds: float,
+    ) -> None:
+        if receipt.effective_config != self.config or downtime_seconds < 0:
+            raise ValueError(
+                "restored budget requires its original recipe and nonnegative downtime"
+            )
+        self.started -= receipt.elapsed_seconds + downtime_seconds
+        self.fetches, self.bytes_read = receipt.fetches, receipt.bytes_read
+        self.judge_calls = receipt.judge_calls
+        self.encoding_calls, self.encoding_chars = receipt.encoding_calls, receipt.encoding_chars
+        self.search_calls = search_calls
+        self.challenge_attempts = sum(row.event == "challenge" for row in rows)
+        self.local_inputs = sum(row.event == "local_input" for row in rows)
+        self.local_input_bytes = sum(row.bytes_read for row in rows if row.event == "local_input")
+        self.semantic_calls = sum(row.event == "semantic" for row in rows)
+        if (
+            self.fetches > self.config.page_budget
+            or self.bytes_read > self.config.byte_budget
+            or self.judge_calls > self.config.judge_budget
+        ):
+            raise ValueError("restored spend exceeds the original run budget")
 
     def check_time(self) -> None:
         if self.remaining_seconds <= 0:

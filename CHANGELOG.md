@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Durable completed-round research checkpoints and explicit Collector
+  suspend/resume. Native documents, acknowledged graph, priority frontier,
+  discovery/assessment history and prior spend survive process restart without
+  repeating completed work. Private bounded files, a journal writer lock and
+  exact recipe/model/graph/prefix checks refuse ambiguous replay; downtime and
+  cumulative limits remain charged. Fine-grained interrupted-call reconciliation
+  and changed-recipe continuation remain open.
+
 - Configured graph-aware intent planning over acknowledged native semantic
   observations, with closed endpoints, exact omissions, retained query references
   and ledger/archive replay; no extra model phase or automatic identity merging.
@@ -10,7 +18,7 @@
   self-hosted completion client and graph owner. Exact source-local mentions,
   model-asserted edges, held low-confidence relations, sequential window/tail
   coverage and shared model-budget accounting survive validated archive replay.
-  Alias resolution, graph-driven expansion and real-model organization quality
+  Alias resolution and real-model organization quality
   acceptance remain open; fixture checks are not accuracy results.
 - Explicit owned local PDF/DOCX seeds for the configured intent API and command,
   admitted before planning under a versioned root/file/byte policy and pinned

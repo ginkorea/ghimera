@@ -6,6 +6,7 @@ repairs files. Existing run identities cannot be overwritten or reused.
 """
 
 import argparse
+import fcntl
 import hashlib
 import os
 import re
@@ -113,7 +114,13 @@ def _immutable_file(path: Path, data: bytes, limit: int) -> None:
 
 class DirectoryLedgerSink:
     def __init__(
-        self, config: GhimeraConfig, run_id: str, goal: Goal, judge: ModelIdentity
+        self,
+        config: GhimeraConfig,
+        run_id: str,
+        goal: Goal,
+        judge: ModelIdentity,
+        *,
+        resume_rows: tuple[LedgerRow, ...] | None = None,
     ) -> None:
         if config.journal is None:
             raise _refuse()
@@ -132,28 +139,60 @@ class DirectoryLedgerSink:
         self._closed = False
         self._failed = False
         self._lock = threading.Lock()
+        self._lease_fd = -1
         try:
             # Validate the first serialized record before creating any run.
             header = canonical(self._header)
             if len(header) > self._policy.max_record_bytes:
                 raise _refuse()
+            if resume_rows is not None:
+                _private_directory(self._policy.directory)
+                _private_directory(self._path)
+                self._lease_fd = _checked_file(
+                    self._path / "ledger.jsonl",
+                    os.O_WRONLY | os.O_APPEND,
+                    self._policy.max_journal_bytes,
+                )
+                fcntl.flock(self._lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                report = read_journal(self._policy, run_id)
+                if (
+                    report.state != "unsealed"
+                    or report.incomplete_tail
+                    or report.header != self._header
+                    or report.rows != resume_rows
+                ):
+                    raise _refuse()
+                self._rows = list(resume_rows)
+                for row in resume_rows:
+                    entry = JournalEntry(
+                        schema="chimera.run-journal-entry/1",
+                        previous_sha256=self._previous,
+                        row=row,
+                    )
+                    self._previous = digest(entry)
+                self._size = os.fstat(self._lease_fd).st_size
+                return
             self._policy.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
             _private_directory(self._policy.directory)
             self._path.mkdir(mode=0o700, exist_ok=False)
             _directory_sync(self._policy.directory)
             _immutable_file(self._path / "header.json", header, self._policy.max_record_bytes)
-            fd = os.open(
+            self._lease_fd = os.open(
                 self._path / "ledger.jsonl",
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                 0o600,
             )
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+            fcntl.flock(self._lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.fsync(self._lease_fd)
             _directory_sync(self._path)
-        except OSError:
+        except (OSError, GhimeraRefused):
+            self._release()
             raise _refuse() from None
+
+    def _release(self) -> None:
+        if self._lease_fd >= 0:
+            os.close(self._lease_fd)
+            self._lease_fd = -1
 
     def _active(self) -> None:
         if self._closed or self._failed:
@@ -162,6 +201,10 @@ class DirectoryLedgerSink:
             raise _refuse()
         _private_directory(self._policy.directory)
         _private_directory(self._path)
+        held = os.fstat(self._lease_fd)
+        named = (self._path / "ledger.jsonl").lstat()
+        if (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino):
+            raise _refuse()
 
     def append(self, row: LedgerRow) -> None:
         with self._lock:
@@ -238,6 +281,7 @@ class DirectoryLedgerSink:
                     self._path / "summary.json", canonical(summary), self._policy.max_summary_bytes
                 )
                 self._closed = True
+                self._release()
             except (OSError, GhimeraRefused):
                 self._failed = True
                 raise _refuse() from None
@@ -245,6 +289,7 @@ class DirectoryLedgerSink:
     def close(self) -> None:
         with self._lock:
             self._closed = True
+            self._release()
 
 
 def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:

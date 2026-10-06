@@ -531,6 +531,29 @@ def test_intent_is_encoded_once_with_original_unicode_and_prefix(endpoint):
     assert ledger.snapshot()[-1].reason == "intent_cosine_not_probability"
 
 
+def test_restored_intent_vectors_do_not_trigger_another_preparation_call(endpoint):
+    cfg = service(endpoint[0])
+    scoring = intent_policy(cfg, max_windows=1)
+    original_config = run_config(scoring)
+    budget, ledger = RunBudget(original_config, lambda: 0.0), Ledger()
+    goal = Goal(text="港口 ports")
+    doc = Extracted(title="native", text="港口 evidence", language="zh")
+    first = EmbeddingScorer(scoring, SelfHostedEncoder(cfg))
+    asyncio.run(first.score(goal, doc, budget, ledger))
+    before = ledger.snapshot()
+    restored = Ledger(restored_rows=before)
+    resumed_budget = RunBudget(original_config, lambda: 0.0)
+    resumed_budget.encoding_calls = budget.encoding_calls
+    resumed_budget.encoding_chars = budget.encoding_chars
+    second = EmbeddingScorer(scoring, SelfHostedEncoder(cfg))
+    asyncio.run(second.score(goal, doc, resumed_budget, restored))
+    assert len(endpoint[1]) == 3  # original intent, original document, new document
+    assert endpoint[1][-1][1]["input"] == ["港口 evidence"]
+    assert sum(row.intent_reference is not None for row in restored.snapshot()) == 1
+    assert restored.snapshot()[: len(before)] == before
+    assert resumed_budget.encoding_calls == 3
+
+
 def test_concurrent_scores_share_preparation_but_runs_never_share_intents(endpoint):
     cfg = service(endpoint[0])
     scoring = intent_policy(cfg, max_windows=1)

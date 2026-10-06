@@ -14,8 +14,12 @@ class LedgerSink(Protocol):
 
 
 class Ledger:
-    def __init__(self, *, sink: LedgerSink | None = None) -> None:
-        self._rows: list[LedgerRow] = []
+    def __init__(
+        self, *, sink: LedgerSink | None = None, restored_rows: tuple[LedgerRow, ...] = ()
+    ) -> None:
+        if tuple(row.sequence for row in restored_rows) != tuple(range(len(restored_rows))):
+            raise ValueError("restored ledger must be contiguous")
+        self._rows: list[LedgerRow] = list(restored_rows)
         self._sink = sink
 
     def append(self, row: LedgerRow) -> None:

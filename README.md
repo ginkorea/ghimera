@@ -237,8 +237,11 @@ universal CAPTCHA solving or provide an authenticated-site bypass.
 The unreleased semantic extraction stage can also feed a configured, bounded
 graph view into follow-up research planning. Queries retain references to the
 observed entities/relations and omissions remain explicit; see
-[graph-aware planning](docs/GRAPH_PLANNING.md). This does not yet provide alias
-resolution or restart-safe organizational network expansion.
+[graph-aware planning](docs/GRAPH_PLANNING.md). Explicit completed-round
+[suspend/resume](docs/CONTINUATION.md) preserves evidence, acknowledged graph,
+pending frontier and cumulative budgets across processes. Alias resolution,
+fine-grained interrupted-call reconciliation and real organizational-network
+quality acceptance remain open.
 Tor routing is a transport capability, not a guarantee of anonymity or authority
 to access a source.
 

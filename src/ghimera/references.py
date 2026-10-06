@@ -31,6 +31,31 @@ class ReferenceBook:
         """Read-only observations for the research discovery scope owner."""
         return tuple(sorted(self._hosts))
 
+    def restore(self, rows: tuple[LedgerRow, ...], hosts: tuple[str, ...]) -> None:
+        """Reconstruct reserved reference work from validated observations, not fresh limits."""
+        policy = self._config.references
+        if hosts and (policy is None or len(set(hosts)) > policy.max_extra_hosts):
+            raise ValueError("restored reference hosts exceed the original policy")
+        observed_hosts: set[str] = set()
+        for row in rows:
+            if row.reference_query is not None:
+                source = row.reference_query.source
+                key = (source.url, source.sha256)
+                self._queries.add(key)
+                self._parents.add(key)
+            if row.reference is not None and row.reference.outcome == "queued":
+                decision = row.reference
+                key = (decision.source.url, decision.source.sha256)
+                self._parents.add(key)
+                self._queued.add(decision.reference.target_url)
+                self._queued_by_parent[key] = self._queued_by_parent.get(key, 0) + 1
+                host = urlsplit(decision.reference.target_url).hostname
+                if host is not None:
+                    observed_hosts.add(host)
+        if not set(hosts) <= observed_hosts:
+            raise ValueError("restored reference hosts require admitted reference observations")
+        self._hosts = set(hosts)
+
     def claim_query(self, source: Document) -> bool:
         """Share the parent cap with document links and reserve before query I/O."""
         policy = self._config.references

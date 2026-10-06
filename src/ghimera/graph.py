@@ -233,7 +233,7 @@ class ResearchGraph:
         )
         return skeleton.model_copy(update={"id": "edge:" + skeleton.content_digest()})
 
-    async def start(self, intent: str) -> None:
+    async def start(self, intent: str, *, expected: GraphSnapshot | None = None) -> None:
         async with self._lock:
             if self._started:
                 raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
@@ -242,7 +242,13 @@ class ResearchGraph:
                 self._apply(batch)
             self._started = True
         initial = self.node("intent", self._run_id, intent, self._config.profile_version)
-        await self.append(nodes=(initial,))
+        if expected is not None:
+            # Restore is a verification-only step. Missing/changed graph state
+            # cannot be repaired by adding a fresh intent before comparison.
+            if self.snapshot() != expected or self._nodes.get(initial.id) != initial:
+                raise ValueError("graph changed after the checkpoint; reconcile first")
+        else:
+            await self.append(nodes=(initial,))
         self._intent_id = initial.id
 
     def _validate_batch(self, batch: GraphBatch) -> None:

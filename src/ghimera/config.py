@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.browser_config import BrowserConfig
 from ghimera.challenge_config import ChallengeConfig
+from ghimera.continuation_config import ContinuationConfig
 from ghimera.dedup_config import DedupConfig
 from ghimera.document_config import DocumentExtractionConfig
 from ghimera.extraction_config import ExtractionConfig
@@ -139,10 +140,13 @@ class GhimeraConfig(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     semantics: SemanticConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    continuation: ContinuationConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
         validate_sessions(self.source_sessions)
+        if self.continuation is not None and (self.journal is None or self.research is None):
+            raise ValueError("continuation requires the existing journal and research policy")
         if self.research is not None and self.research.graph_context is not None:
             planning, semantic, graph = self.research.graph_context, self.semantics, self.graph
             if (

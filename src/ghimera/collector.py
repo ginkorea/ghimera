@@ -135,9 +135,26 @@ class Collector:
                 raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
 
     async def run(
-        self, request: str | ResearchRequest, *, run_id: str | None = None
+        self,
+        request: str | ResearchRequest,
+        *,
+        run_id: str | None = None,
+        suspend_after_rounds: int | None = None,
     ) -> ResearchResult:
-        return await self._research.run(self.validate_request(request), run_id=run_id)
+        return await self._research.run(
+            self.validate_request(request), run_id=run_id, suspend_after_rounds=suspend_after_rounds
+        )
+
+    async def resume(
+        self,
+        run_id: str,
+        *,
+        checkpoint_sha256: str,
+        suspend_after_rounds: int | None = None,
+    ) -> ResearchResult:
+        return await self._research.resume(
+            run_id, checkpoint_sha256=checkpoint_sha256, suspend_after_rounds=suspend_after_rounds
+        )
 
     def validate_request(self, request: str | ResearchRequest) -> ResearchRequest:
         """Validate an intent before a caller reserves output or launches work."""

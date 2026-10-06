@@ -205,3 +205,17 @@ class ContentIndex:
         """Track source revisions without adding another cluster representative."""
         item = fingerprint(document, self.policy)
         self._urls[item.canonical_url] = item
+
+    @property
+    def revisions(self) -> tuple[ContentFingerprint, ...]:
+        return tuple(self._urls.values())
+
+    def restore_revisions(
+        self, revisions: tuple[ContentFingerprint, ...], sources: tuple[DocumentSource, ...]
+    ) -> None:
+        expected = {fingerprint(source, self.policy) for source in sources}
+        if len({item.canonical_url for item in revisions}) != len(revisions) or any(
+            item not in expected for item in revisions
+        ):
+            raise ValueError("restored content revisions require retained native sources")
+        self._urls = {item.canonical_url: item for item in revisions}

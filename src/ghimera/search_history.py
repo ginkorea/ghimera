@@ -7,9 +7,16 @@ from ghimera.search import GroundedSearch
 
 
 class SearchHistory:
-    def __init__(self, provider: GroundedSearch, budget: RunBudget, ledger: Ledger) -> None:
+    def __init__(
+        self,
+        provider: GroundedSearch,
+        budget: RunBudget,
+        ledger: Ledger,
+        *,
+        restored: tuple[SearchObservation, ...] = (),
+    ) -> None:
         self._provider, self._budget, self._ledger = provider, budget, ledger
-        self._observations: list[SearchObservation] = []
+        self._observations: list[SearchObservation] = list(restored)
 
     @property
     def observations(self) -> tuple[SearchObservation, ...]:

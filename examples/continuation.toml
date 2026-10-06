@@ -1,0 +1,7 @@
+# Append to an intent-research recipe that already declares [journal].
+# Checkpoint storage uses that journal's private run directory, not a new root.
+# No configured section means no automatic checkpoints or suspension.
+[continuation]
+schema = "ghimera.continuation/1"
+max_checkpoint_bytes = 67108864
+clock_policy = "include_downtime"

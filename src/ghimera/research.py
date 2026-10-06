@@ -7,6 +7,7 @@ Neither a grade nor the synthesizer's confidence is a completion decision.
 
 import asyncio
 import hashlib
+import time
 from collections.abc import Awaitable, Callable
 from typing import Literal, Protocol, TypeVar
 from urllib.parse import urlsplit
@@ -14,6 +15,7 @@ from urllib.parse import urlsplit
 from pydantic import ValidationError
 
 from ghimera.config import GhimeraConfig
+from ghimera.continuation import CheckpointStore, ResearchCheckpoint, ResearchSuspended
 from ghimera.graph_planning import build_context
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.loop import CollectionSession, GoalLoop
@@ -55,6 +57,14 @@ from ghimera.search_history import SearchHistory
 T = TypeVar("T", bound=ResearchModelResult)
 R = TypeVar("R", bound=ResearchRecord)
 ModelEvent = Literal["plan", "assessment", "answer", "review"]
+
+
+class UnsupportedReview(GhimeraRefused):
+    """Preserve the actual rejected review while withholding the proposed answer."""
+
+    def __init__(self, review: AnswerReview) -> None:
+        self.review = review
+        super().__init__(RefusalCode.UNSUPPORTED_ANSWER)
 
 
 class IntentPlanner(Protocol):
@@ -154,6 +164,33 @@ class ResearchScopeCompiler:
             content_types=self._policy.content_types,
             allowed_ports=self._policy.allowed_ports,
         )
+
+    @property
+    def hosts(self) -> tuple[str, ...]:
+        return tuple(sorted(self._hosts))
+
+    def restore_hosts(self, checkpoint: ResearchCheckpoint) -> None:
+        observed = {
+            urlsplit(row.url).hostname
+            for row in checkpoint.progress.harvest.ledger
+            if row.event == "discovery" and row.url is not None
+        } | {urlsplit(seed).hostname for seed in checkpoint.request.seeds}
+        allowed = (
+            set(self._policy.allowed_hosts) | observed | set(checkpoint.session.reference_hosts)
+        )
+        hosts = set(checkpoint.admitted_hosts)
+        if (
+            len(hosts) != len(checkpoint.admitted_hosts)
+            or len(hosts) > self._policy.max_source_hosts
+            or not hosts <= allowed
+            or hosts & set(self._policy.denied_hosts)
+            or (
+                self._policy.source_policy == "configured_only"
+                and not hosts <= set(self._policy.allowed_hosts)
+            )
+        ):
+            raise ValueError("restored discovery scope requires original admitted hosts")
+        self._hosts = hosts
 
 
 class ModelCalls:
@@ -416,28 +453,227 @@ class ResearchLoop:
                     self._refuse(session, RefusalCode.OUT_OF_SCOPE, url=url)
         return tuple(accepted)
 
-    async def run(self, request: ResearchRequest, *, run_id: str | None = None) -> ResearchResult:
+    def _validate_suspend(self, suspend_after_rounds: int | None) -> None:
+        if suspend_after_rounds is not None and (
+            type(suspend_after_rounds) is not int
+            or suspend_after_rounds <= 0
+            or self._config.continuation is None
+        ):
+            raise ValueError("round suspension requires a positive count and continuation policy")
+
+    async def run(
+        self,
+        request: ResearchRequest,
+        *,
+        run_id: str | None = None,
+        suspend_after_rounds: int | None = None,
+    ) -> ResearchResult:
+        self._validate_suspend(suspend_after_rounds)
+        if self._config.continuation is not None and run_id is None:
+            raise ValueError("durable continuation requires an explicit run identity")
         request = ResearchRequest.model_validate(request.model_dump())
         session = await self._collector.open(
             Goal(text=request.intent, seeds=request.seeds), run_id=run_id
         )
+        try:
+            return await self._drive(
+                request, session, run_id=run_id, suspend_after_rounds=suspend_after_rounds
+            )
+        finally:
+            session.ledger.close()
+
+    async def resume(
+        self,
+        run_id: str,
+        *,
+        checkpoint_sha256: str,
+        suspend_after_rounds: int | None = None,
+    ) -> ResearchResult:
+        self._validate_suspend(suspend_after_rounds)
+        checkpoint = CheckpointStore(self._config, run_id).read(checkpoint_sha256)
+        progress = checkpoint.progress
+        if (
+            progress.planner,
+            progress.analyst,
+            progress.reviewer,
+            progress.search_provider,
+            progress.search_revision,
+        ) != (
+            self._planner.model,
+            self._analyst.model,
+            self._reviewer.model,
+            self._search.name,
+            self._search.revision,
+        ):
+            raise ValueError("continuation requires the original bound model and search identities")
+        downtime = time.time() - checkpoint.saved_at
+        if downtime < 0:
+            raise ValueError("wall clock moved backwards since the checkpoint")
+        compiler = ResearchScopeCompiler(self._policy)
+        compiler.restore_hosts(checkpoint)
+        session = await self._collector.restore(
+            run_id,
+            progress.harvest,
+            checkpoint.session,
+            search_calls=progress.search_calls,
+            downtime_seconds=downtime,
+        )
+        try:
+            return await self._drive(
+                checkpoint.request,
+                session,
+                run_id=run_id,
+                checkpoint=checkpoint,
+                suspend_after_rounds=suspend_after_rounds,
+            )
+        finally:
+            session.ledger.close()
+
+    async def _answer(
+        self,
+        session: CollectionSession,
+        request: ResearchRequest,
+        questions: tuple[Question, ...],
+        assessment: Assessment,
+    ) -> tuple[AnswerDraft, AnswerReview]:
+        calls = ModelCalls(session, self._policy)
+        answering = AnswerRequest(
+            intent=request.intent,
+            questions=questions,
+            documents=session.evidence_documents,
+            assessment=assessment,
+        )
+        candidate = await calls.invoke(
+            "answer", self._analyst.model, answering, self._analyst.answer
+        )
+        self._validate_answer(candidate, questions, session.evidence_documents)
+        reviewing = ReviewRequest(
+            intent=request.intent,
+            questions=questions,
+            documents=session.evidence_documents,
+            answer=candidate,
+        )
+        checked = await calls.invoke(
+            "review", self._reviewer.model, reviewing, self._reviewer.review
+        )
+        if (
+            checked.answer_digest != candidate.content_digest()
+            or not checked.intent_covered
+            or len(checked.claims) != len(candidate.claims)
+            or {item.index for item in checked.claims} != set(range(len(candidate.claims)))
+            or any(item.verdict != "supported" for item in checked.claims)
+            or candidate.confidence < self._policy.min_answer_confidence
+        ):
+            raise UnsupportedReview(checked)
+        return candidate, checked
+
+    def _save(
+        self,
+        request: ResearchRequest,
+        session: CollectionSession,
+        run_id: str | None,
+        compiler: ResearchScopeCompiler,
+        history: SearchHistory,
+        questions: tuple[Question, ...],
+        rounds: list[ResearchRound],
+        assessment: Assessment | None,
+        *,
+        suspend: bool,
+    ) -> None:
+        if self._config.continuation is None:
+            return
+        if run_id is None:
+            raise ValueError("checkpoint requires its original run identity")
+        saved_at = time.time()
+        progress = ResearchResult(
+            schema="chimera.research-result/2",
+            status="partial",
+            stop_reason="rounds_exhausted",
+            harvest=self._collector.snapshot(session),
+            questions=questions,
+            rounds=tuple(rounds),
+            unresolved=tuple(question.id for question in questions),
+            answer=None,
+            review=None,
+            planner=self._planner.model,
+            analyst=self._analyst.model,
+            reviewer=self._reviewer.model,
+            search_provider=self._search.name,
+            search_revision=self._search.revision,
+            search_calls=session.budget.search_calls,
+            search_observations=history.observations,
+        )
+        saved = ResearchCheckpoint(
+            schema="ghimera.research-checkpoint/1",
+            run_id=run_id,
+            saved_at=saved_at,
+            request=request,
+            progress=progress,
+            session=session.checkpoint_state(),
+            admitted_hosts=compiler.hosts,
+            assessment=assessment,
+            next_action="answer"
+            if assessment is not None
+            and all(item.status == "answered" for item in assessment.coverage)
+            else "plan",
+        )
+        receipt = CheckpointStore(self._config, run_id).write(saved)
+        if suspend:
+            raise ResearchSuspended(receipt)
+
+    async def _drive(
+        self,
+        request: ResearchRequest,
+        session: CollectionSession,
+        *,
+        run_id: str | None,
+        checkpoint: ResearchCheckpoint | None = None,
+        suspend_after_rounds: int | None = None,
+    ) -> ResearchResult:
         calls, compiler = ModelCalls(session, self._policy), ResearchScopeCompiler(self._policy)
-        history = SearchHistory(self._search, session.budget, session.ledger)
-        questions: tuple[Question, ...] = ()
-        rounds: list[ResearchRound] = []
-        assessment = None
-        answer = None
-        review = None
+        history = SearchHistory(
+            self._search,
+            session.budget,
+            session.ledger,
+            restored=checkpoint.progress.search_observations if checkpoint is not None else (),
+        )
+        questions = checkpoint.progress.questions if checkpoint is not None else ()
+        rounds = list(checkpoint.progress.rounds) if checkpoint is not None else []
+        initial_rounds = len(rounds)
+        assessment = checkpoint.assessment if checkpoint is not None else None
+        answer: AnswerDraft | None = None
+        review: AnswerReview | None = None
         reason: Literal["answered", "rounds_exhausted", "budget_exhausted", "failed"] = (
             "rounds_exhausted"
         )
-        try:
-            await self._collector.import_local(session, request.local_documents)
-        except GhimeraRefused as exc:
-            self._refuse(session, exc.code)
-            reason = "budget_exhausted" if exc.code == RefusalCode.BUDGET_EXHAUSTED else "failed"
-        for number in range(1, self._policy.max_rounds + 1):
-            if reason in {"failed", "budget_exhausted"}:
+        if checkpoint is not None:
+            compiler.restore_hosts(checkpoint)
+            if checkpoint.next_action == "answer" and assessment is not None:
+                try:
+                    answer, review = await self._answer(session, request, questions, assessment)
+                    reason = "answered"
+                except GhimeraRefused as exc:
+                    self._refuse(session, exc.code)
+                    if isinstance(exc, UnsupportedReview):
+                        review = exc.review
+                    if exc.code == RefusalCode.UNSUPPORTED_ANSWER:
+                        assessment = None
+                    else:
+                        reason = (
+                            "budget_exhausted"
+                            if exc.code == RefusalCode.BUDGET_EXHAUSTED
+                            else "failed"
+                        )
+        else:
+            try:
+                await self._collector.import_local(session, request.local_documents)
+            except GhimeraRefused as exc:
+                self._refuse(session, exc.code)
+                reason = (
+                    "budget_exhausted" if exc.code == RefusalCode.BUDGET_EXHAUSTED else "failed"
+                )
+        for number in range(initial_rounds + 1, self._policy.max_rounds + 1):
+            if reason in {"failed", "budget_exhausted", "answered"}:
                 break
             try:
                 planning = PlanningRequest(
@@ -521,47 +757,27 @@ class ResearchLoop:
                         collection_stop=collection_stop,
                     )
                 )
+                self._save(
+                    request,
+                    session,
+                    run_id,
+                    compiler,
+                    history,
+                    questions,
+                    rounds,
+                    assessment,
+                    suspend=suspend_after_rounds is not None
+                    and len(rounds) - initial_rounds >= suspend_after_rounds,
+                )
                 if not questions or any(item.status != "answered" for item in assessment.coverage):
                     continue
-                answering = AnswerRequest(
-                    intent=request.intent,
-                    questions=questions,
-                    documents=session.evidence_documents,
-                    assessment=assessment,
-                )
-                candidate = await calls.invoke(
-                    "answer",
-                    self._analyst.model,
-                    answering,
-                    self._analyst.answer,
-                )
-                self._validate_answer(candidate, questions, session.evidence_documents)
-                reviewing = ReviewRequest(
-                    intent=request.intent,
-                    questions=questions,
-                    documents=session.evidence_documents,
-                    answer=candidate,
-                )
-                checked = await calls.invoke(
-                    "review",
-                    self._reviewer.model,
-                    reviewing,
-                    self._reviewer.review,
-                )
-                review = checked
-                if (
-                    checked.answer_digest != candidate.content_digest()
-                    or not checked.intent_covered
-                    or len(checked.claims) != len(candidate.claims)
-                    or {item.index for item in checked.claims} != set(range(len(candidate.claims)))
-                    or any(item.verdict != "supported" for item in checked.claims)
-                    or candidate.confidence < self._policy.min_answer_confidence
-                ):
-                    raise GhimeraRefused(RefusalCode.UNSUPPORTED_ANSWER)
-                answer, reason = candidate, "answered"
+                answer, review = await self._answer(session, request, questions, assessment)
+                reason = "answered"
                 break
             except GhimeraRefused as exc:
                 self._refuse(session, exc.code)
+                if isinstance(exc, UnsupportedReview):
+                    review = exc.review
                 if exc.code == RefusalCode.UNSUPPORTED_ANSWER:
                     # A subsequent plan sees a gap, not an apparently complete assessment.
                     assessment = None
