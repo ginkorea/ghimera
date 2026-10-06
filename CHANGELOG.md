@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Configured owner-private per-run JSONL observations, fsync-before-ack storage,
+  hash-chain replay checks, completion summaries and read-only run inspection.
+  Interrupted runs remain explicitly unsealed; no automatic refetch or resume.
+
 - Configurable single generic HTML reparse over retained source bytes, without
   a second fetch or renewed deadline. Success, refusal and cancellation attempts
   retain typed source/configuration-bound provenance and round-trip ledger checks.

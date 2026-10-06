@@ -123,7 +123,16 @@ class GoalLoop:
 
     async def open(self, goal: Goal, *, run_id: str | None = None) -> CollectionSession:
         budget = RunBudget(self._config, self._clock)
-        ledger = Ledger()
+        if self._config.journal is not None:
+            if run_id is None:
+                raise ChimeraRefused(RefusalCode.LEDGER_SINK_FAILED)
+            # Load the storage adapter only when selected. Importing it in the
+            # package initializer also executes it before `python -m` inspection.
+            from chimera.journal import DirectoryLedgerSink
+
+            ledger = Ledger(sink=DirectoryLedgerSink(self._config, run_id, goal, self._judge.model))
+        else:
+            ledger = Ledger()
         graph = None
         if self._config.graph is not None and self._config.graph.enabled:
             if run_id is None:
@@ -529,7 +538,7 @@ class GoalLoop:
         session._closed = True
         goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
         ledger.append(LedgerRow(sequence=ledger.next_sequence, event="stop", reason=stop))
-        return Harvest(
+        harvest = Harvest(
             schema="chimera.harvest/1",
             goal=goal,
             documents=session.documents,
@@ -548,3 +557,5 @@ class GoalLoop:
             ),
             graph=graph.snapshot() if graph is not None else None,
         )
+        ledger.finish(harvest)
+        return harvest

@@ -184,6 +184,11 @@ budgets live in `[references]`, not in Python. Source hashes and native locators
 are retained; a citing-source search hit is not proof that a citation exists.
 See [reference expansion](docs/C3_REFERENCES.md).
 
+For durable observations, configure `[journal]` and pass a unique `run_id`.
+The collector persists JSONL events before acknowledgment and seals a completion
+summary only after receipt reconciliation. Interrupted prefixes remain inspectable
+without silently refetching sources. See [run journals](docs/RUN_JOURNAL.md).
+
 Still required for the complete planned spider: the remaining browser adapters,
 representative publisher/locator acceptance, full PDF/OCR and Marker validation,
 real reference/cited-by adequacy, real served-model quality/admission and

@@ -1,0 +1,10 @@
+# Merge this table into the main collector config. Choose an owner-private
+# storage root on the intended data volume, not an implicit home/cache path.
+# Omission preserves the explicitly volatile embedded-library mode.
+[journal]
+schema = "chimera.run-journal-config/1"
+directory = "/absolute/private/data-volume/collector-runs"
+max_record_bytes = 33554432
+max_journal_bytes = 536870912
+max_summary_bytes = 4194304
+max_records = 10000

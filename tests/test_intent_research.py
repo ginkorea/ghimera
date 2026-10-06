@@ -146,7 +146,7 @@ class ReviewerFixture:
         )
 
 
-def run(*, research=None, analyst=None, reviewer=None, planner=None, cfg=None):
+def run(*, research=None, analyst=None, reviewer=None, planner=None, cfg=None, run_id=None):
     cfg = cfg or config(research=research or policy(), page_budget=30)
     route, search = FakeRoute(), SearchFixture()
     collector = GoalLoop(
@@ -164,7 +164,7 @@ def run(*, research=None, analyst=None, reviewer=None, planner=None, cfg=None):
         analyst=analyst or AnalystFixture(),
         reviewer=reviewer or ReviewerFixture(),
     )
-    result = asyncio.run(loop.run(ResearchRequest(intent="find ports")))
+    result = asyncio.run(loop.run(ResearchRequest(intent="find ports"), run_id=run_id))
     return result, route, search
 
 

@@ -24,6 +24,7 @@ class RefusalCode(StrEnum):
     FETCH_FAILED = "fetch_failed"
     GRAPH_CONTRACT = "graph_contract"
     GRAPH_SINK_FAILED = "graph_sink_failed"
+    LEDGER_SINK_FAILED = "ledger_sink_failed"
     TOR_REQUIRED = "tor_required"
     TOR_UNAVAILABLE = "tor_unavailable"
     INVALID_ONION_ADDRESS = "invalid_onion_address"
@@ -55,6 +56,10 @@ REFUSALS = MappingProxyType(
         ),
         RefusalCode.GRAPH_SINK_FAILED: (
             "Graph checkpoint was not acknowledged; preserve the journal and inspect its sink."
+        ),
+        RefusalCode.LEDGER_SINK_FAILED: (
+            "Run journal could not be persisted or verified; "
+            "preserve its files and inspect storage."
         ),
         RefusalCode.TOR_REQUIRED: (
             "This source requires configured Tor routing; never try it directly."

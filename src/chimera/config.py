@@ -12,6 +12,7 @@ from chimera.dedup_config import DedupConfig
 from chimera.document_config import DocumentExtractionConfig
 from chimera.extraction_config import ExtractionConfig
 from chimera.graph_types import GraphConfig
+from chimera.journal_config import JournalConfig
 from chimera.model_config import ModelBindingsConfig
 from chimera.reference_config import ReferenceConfig
 from chimera.research_config import ResearchConfig
@@ -116,6 +117,7 @@ class ChimeraConfig(BaseModel):
     model_policy: Literal["self_hosted_only"]
     http: HttpPolicy | None = None
     graph: GraphConfig | None = None
+    journal: JournalConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     transport: TransportConfig | None = None
     research: ResearchConfig | None = None
     models: ModelBindingsConfig | None = None
