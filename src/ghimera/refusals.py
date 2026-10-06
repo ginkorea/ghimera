@@ -37,7 +37,10 @@ class RefusalCode(StrEnum):
 REFUSALS = MappingProxyType(
     {
         RefusalCode.ROBOTS_DISALLOWED: "Robots denies this URL; use another seed or shelf ruling.",
-        RefusalCode.CHALLENGE_NOT_SOLVED: "Site challenge encountered; never solve or bypass it.",
+        RefusalCode.CHALLENGE_NOT_SOLVED: (
+            "Challenge remains unresolved; configure a local challenge gateway or supply "
+            "an authorized source session. Never treat a challenge as document content."
+        ),
         RefusalCode.LOGIN_WALL: (
             "Login required; supply an authorized source session or another source."
         ),

@@ -297,7 +297,7 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
                 or summary.ledger_rows != len(rows)
                 or receipt.effective_config != header.config
                 or receipt.judge != header.judge
-                or receipt.fetches != sum(row.event == "fetch" for row in rows)
+                or receipt.fetches != sum(row.event in {"fetch", "challenge"} for row in rows)
                 or receipt.bytes_read != sum(row.bytes_read for row in rows)
                 or receipt.encoding_calls != len(encoding)
                 or receipt.encoding_chars != sum(call.input_chars for call in encoding)

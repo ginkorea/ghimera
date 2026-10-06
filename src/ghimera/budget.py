@@ -15,6 +15,7 @@ class RunBudget:
         self.bytes_read = 0
         self.judge_calls = 0
         self.search_calls = 0
+        self.challenge_attempts = 0
         self.encoding_calls = 0
         self.encoding_chars = 0
         self._bytes_reserved = 0
@@ -65,6 +66,13 @@ class RunBudget:
         if self.judge_calls >= self.config.judge_budget:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         self.judge_calls += 1
+
+    def reserve_challenge(self) -> None:
+        self.check_time()
+        policy = self.config.challenges
+        if policy is None or self.challenge_attempts >= policy.max_attempts_per_run:
+            raise GhimeraRefused(RefusalCode.CHALLENGE_NOT_SOLVED)
+        self.challenge_attempts += 1
 
     def reserve_search(self) -> None:
         self.check_time()

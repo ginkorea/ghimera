@@ -1,0 +1,21 @@
+# Append this section to an existing collector recipe. Omit [challenges] to
+# disable automated recovery. This is configuration, not a browser installation.
+[challenges]
+schema = "ghimera.challenges/1"
+provider = "flaresolverr"
+provider_version = "3.5.2"
+endpoint = "http://127.0.0.1:8191/v1"
+network_boundary = "operator_managed_local_browser_gateway"
+allowed_origins = ["https://publisher.example"]
+allowed_cookie_names = ["cf_clearance"]
+max_attempts_per_run = 2
+timeout_seconds = 60.0
+max_request_bytes = 8192
+max_response_bytes = 65536
+max_header_bytes = 16384
+max_cookie_bytes = 4096
+session_ttl_seconds = 300.0
+session_cache_entries = 8
+# Optional, provider-supported Turnstile keyboard navigation. Set only for a
+# known site's widget layout; it is not a generic audio/image CAPTCHA solver.
+# tabs_till_verify = 1

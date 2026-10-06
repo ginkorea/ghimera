@@ -14,6 +14,8 @@ from typing import Protocol
 from curl_cffi import AsyncCurl, Curl, CurlError, CurlInfo, CurlOpt
 from curl_cffi.curl import CURL_WRITEFUNC_ERROR
 
+from ghimera.challenge_types import ChallengeEvidence
+from ghimera.challenges import ChallengeSessions
 from ghimera.config import GhimeraConfig
 from ghimera.fetch import FetchRoute
 from ghimera.models import FetchRequest, Page
@@ -83,6 +85,11 @@ def page_barrier(page: Page) -> RefusalCode | None:
     if page.content_type != "text/html":
         return None
     body = page.body.decode("utf-8", errors="replace").lower()
+    # Entitlement walls take precedence even when the login form embeds CAPTCHA.
+    if "type=" in body and "password" in body and "sign in to continue" in body:
+        return RefusalCode.LOGIN_WALL
+    if "subscribe to continue reading" in body or 'data-paywall="true"' in body:
+        return RefusalCode.PAYWALL
     if (
         "<title>security check - substation</title>" in body
         and "document.cookie" in body
@@ -102,10 +109,6 @@ def page_barrier(page: Page) -> RefusalCode | None:
         )
     ):
         return RefusalCode.CHALLENGE_NOT_SOLVED
-    if "type=" in body and "password" in body and "sign in to continue" in body:
-        return RefusalCode.LOGIN_WALL
-    if "subscribe to continue reading" in body or 'data-paywall="true"' in body:
-        return RefusalCode.PAYWALL
     return None
 
 
@@ -127,6 +130,7 @@ class CurlRoute(FetchRoute):
         self._config = config
         self._http = config.http
         self._sessions = SourceSessions(config.source_sessions, source_credentials)
+        self._challenges = ChallengeSessions(config.challenges) if config.challenges else None
         self._connector = RoutingConnector(
             config.http.network, config.transport, resolver or SystemResolver()
         )
@@ -147,6 +151,10 @@ class CurlRoute(FetchRoute):
 
     async def attempt(self, request: FetchRequest) -> Page:
         source_session = self._sessions.select(request.url)
+        clearance = self._challenges.select(request.url) if self._challenges else None
+        # Never merge browser cookies into an entitled account's Cookie header.
+        if source_session is not None:
+            clearance = None
         started = asyncio.get_running_loop().time()
         connection = await self._connector.prepare(request.url, request.timeout_seconds)
         remaining = request.timeout_seconds - (asyncio.get_running_loop().time() - started)
@@ -173,10 +181,15 @@ class CurlRoute(FetchRoute):
             curl.setopt(CurlOpt.SSL_VERIFYHOST, 2)
             curl.setopt(CurlOpt.TIMEOUT_MS, max(1, int(remaining * 1000)))
             curl.setopt(CurlOpt.ACCEPT_ENCODING, "")
+            user_agent = clearance.user_agent if clearance else self._config.user_agent
+            clearance_headers = (
+                [b"Cookie: " + clearance.cookie.get_secret_value().encode()] if clearance else []
+            )
             curl.setopt(
                 CurlOpt.HTTPHEADER,
                 [
-                    f"User-Agent: {self._config.user_agent}".encode(),
+                    f"User-Agent: {user_agent}".encode(),
+                    *clearance_headers,
                     *(f"{key}: {value}".encode() for key, value in request.headers),
                     *(
                         f"{key}: {secret.get_secret_value()}".encode("ascii")
@@ -198,7 +211,7 @@ class CurlRoute(FetchRoute):
             final_url = curl.getinfo(CurlInfo.EFFECTIVE_URL)
             if not isinstance(status, int) or not isinstance(final_url, bytes):
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-            return Page(
+            result = Page(
                 url=request.url,
                 final_url=final_url.decode("utf-8"),
                 status=status,
@@ -210,7 +223,12 @@ class CurlRoute(FetchRoute):
                 headers=tuple(headers.entries),
                 transport=connection.evidence,
                 source_session=source_session.evidence if source_session else None,
+                challenge_use=clearance.evidence if clearance else None,
             )
+            if clearance is not None and page_barrier(result) is not None:
+                if self._challenges is not None:
+                    self._challenges.discard(request.url)
+            return result
         except CurlError as exc:
             code = (
                 RefusalCode.BUDGET_EXHAUSTED
@@ -228,6 +246,20 @@ class CurlRoute(FetchRoute):
             await multi.close()
             curl.close()
             await connection.close()
+
+    async def clear_challenge(
+        self, page: Page, *, timeout_seconds: float, max_bytes: int
+    ) -> tuple[ChallengeEvidence, int]:
+        if (
+            self._challenges is None
+            or self._sessions.select(page.final_url) is not None
+            or page.transport is None
+            or page.transport.mode != "direct"
+        ):
+            raise GhimeraRefused(RefusalCode.CHALLENGE_NOT_SOLVED)
+        return await self._challenges.resolve(
+            page.final_url, timeout_seconds=timeout_seconds, max_bytes=max_bytes
+        )
 
     def escalation_reason(self, page: Page) -> str | None:
         barrier = page_barrier(page)

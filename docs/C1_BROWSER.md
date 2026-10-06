@@ -73,6 +73,11 @@ intercepted control route that is **never fetched**, and also covered by the
 network namespace. Original CSP/CORS response headers are preserved; cookies
 and decoded-body framing/compression headers are not replayed.
 
+The renderer itself does not solve challenges. A challenge detected in its DOM
+may enter the explicitly configured, separately networked local gateway through
+the parent fetch ladder once, followed by a guarded source refetch. See
+[challenge recovery](CHALLENGES.md); this does not give the renderer network access.
+
 Subsidiary redirects use the public `FetchLadder.resource_fetcher` single-hop
 port, sharing the same retry, cache, robots, politeness and accounting mechanism
 as document requests. Chromium's CDP `Fetch` request-stage interception locally

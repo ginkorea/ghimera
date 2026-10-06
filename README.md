@@ -215,8 +215,11 @@ The following guides cover the existing lower-level wiring:
 ## Scope and limitations
 
 Robots are honored by default. An override requires a recorded, reasoned,
-exact-host configuration decision; it does not disable CAPTCHA, login, paywall
-or challenge refusal. There is no challenge solver or authenticated-site bypass.
+exact-host configuration decision; it does not disable login/paywall refusal.
+Post-release source adds an opt-in local challenge gateway with bounded,
+exact-origin clearance reuse; see [challenge recovery](docs/CHALLENGES.md).
+That addition is not in the published 0.3.0 artifacts and does not guarantee
+universal CAPTCHA solving or provide an authenticated-site bypass.
 Tor routing is a transport capability, not a guarantee of anonymity or authority
 to access a source.
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Opt-in local FlareSolverr challenge recovery alongside the isolated Patchright
+  renderer. Versioned configuration declares exact source origins, provider
+  revision, clearance-cookie names, request/response limits, retry budget and
+  private cache lifetime. Recovery acquires only clearance metadata/cookies,
+  then verifies content through the ordinary guarded source fetch.
+- Private origin-scoped clearance and matching User-Agent reuse, with expiry,
+  cross-origin isolation and non-secret harvest/journal provenance. Challenge
+  work consumes the shared request, byte, deadline and politeness budget.
+- Explicit direct-route, public-source gateway boundary; account credentials
+  are never forwarded or merged. Unresolved challenges, robots denial and
+  login/paywall walls remain refusals. Real gateway/site acceptance and
+  route-preserving Tor recovery remain open; this is not universal CAPTCHA
+  solving and is not included in the immutable 0.3.0 artifacts.
+
 ## 0.3.0 — 2026-10-06
 
 - Consolidated project naming as `ghimera`: distribution, Python package,

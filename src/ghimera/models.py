@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ghimera.browser_types import RenderResult
+from ghimera.challenge_types import ChallengeEvidence
 from ghimera.config import GhimeraConfig, Probability
 from ghimera.dedup_types import ContentDrift, DedupEvidence
 from ghimera.document_types import DocumentLayout, DocumentParseEvidence
@@ -121,6 +122,7 @@ class Page(Record):
     transport: TransportEvidence | None = None
     rendered: RenderResult | None = None
     source_session: SourceSessionUse | None = None
+    challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def rendering_binding(self) -> "Page":
@@ -215,8 +217,11 @@ class DocumentSource(Record):
     transport: TransportEvidence | None = None
     rendered: RenderResult | None = None
     source_session: SourceSessionUse | None = None
+    challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     def validate_policy(self, config: GhimeraConfig) -> None:
+        if self.challenge_use is not None:
+            self.challenge_use.validate_policy(config.challenges, self.url)
         if self.source_session is not None:
             self.source_session.validate_policy(config.source_sessions, self.url)
         if self.rendered is not None:
@@ -333,6 +338,7 @@ class LedgerRow(Record):
         "intent_reference",
         "reference",
         "reference_query",
+        "challenge",
     ]
     url: str | None = None
     route: str | None = None
@@ -364,9 +370,20 @@ class LedgerRow(Record):
     reference: ReferenceDecision | None = None
     reference_query: ReferenceQuery | None = None
     source_session: SourceSessionUse | None = None
+    challenge: ChallengeEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if self.challenge_use is not None and self.event != "fetch":
+            raise ValueError("clearance use belongs to its source fetch")
+        if self.event == "challenge":
+            if (self.challenge is None) == (self.refusal is None):
+                raise ValueError("challenge attempt needs clearance evidence or refusal")
+        elif self.challenge is not None:
+            raise ValueError("challenge metadata belongs to its attempt")
         if self.search_response_sha256 is not None and (
             self.event != "fetch"
             or self.route is None
@@ -468,6 +485,11 @@ class Harvest(Record):
         validate_reference_ledger(self)
         parsing: dict[tuple[str, str, str | None], list[HtmlExtractionAttempt]] = {}
         for row in self.ledger:
+            for clearance in (row.challenge, row.challenge_use):
+                if clearance is not None:
+                    if row.url is None:
+                        raise ValueError("clearance observation requires its source URL")
+                    clearance.validate_policy(self.receipt.effective_config.challenges, row.url)
             if row.extraction_attempt is not None:
                 attempt = row.extraction_attempt
                 extraction_policy = self.receipt.effective_config.extraction
@@ -532,8 +554,14 @@ class Harvest(Record):
         if tuple(row.sequence for row in self.ledger) != tuple(range(len(self.ledger))):
             raise ValueError("ledger sequence must be contiguous")
         validate_reference_rows(self.receipt.effective_config, self.goal.text, self.ledger)
-        if self.receipt.fetches != sum(row.event == "fetch" for row in self.ledger):
+        if self.receipt.fetches != sum(row.event in {"fetch", "challenge"} for row in self.ledger):
             raise ValueError("fetch count does not match ledger")
+        challenge_rows = tuple(row for row in self.ledger if row.event == "challenge")
+        challenge_policy = self.receipt.effective_config.challenges
+        if challenge_rows and (
+            challenge_policy is None or len(challenge_rows) > challenge_policy.max_attempts_per_run
+        ):
+            raise ValueError("challenge attempts exceed their configured run budget")
         if self.receipt.bytes_read != sum(row.bytes_read for row in self.ledger):
             raise ValueError("byte spend does not match ledger")
         if self.receipt.judge_calls != sum(

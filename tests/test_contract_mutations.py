@@ -90,8 +90,8 @@ import pytest
         ),
         (
             "fetch",
-            "budget.reserve_fetch()",
-            "budget.check_time()",
+            "budget.reserve_fetch()\n        except GhimeraRefused:",
+            "budget.check_time()\n        except GhimeraRefused:",
             "test_fetch_route_conformance.py::test_fetch_conformance",
         ),
         (

@@ -4,10 +4,12 @@ import ipaddress
 import tomllib
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.browser_config import BrowserConfig
+from ghimera.challenge_config import ChallengeConfig
 from ghimera.dedup_config import DedupConfig
 from ghimera.document_config import DocumentExtractionConfig
 from ghimera.extraction_config import ExtractionConfig
@@ -130,10 +132,23 @@ class GhimeraConfig(BaseModel):
     search: SearxConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     references: ReferenceConfig | None = None
     source_sessions: tuple[SourceSessionPolicy, ...] = ()
+    challenges: ChallengeConfig | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
         validate_sessions(self.source_sessions)
+        if self.challenges is not None:
+            if self.http is None:
+                raise ValueError("challenges require the ordinary HTTP policy")
+            for origin in self.challenges.allowed_origins:
+                value = urlsplit(origin)
+                host = value.hostname or ""
+                if host.endswith(".onion") or (
+                    self.transport is not None and self.transport.mode_for(host) != "direct"
+                ):
+                    raise ValueError("this gateway cannot preserve Tor request identity")
+                if value.scheme != "https" and self.http.network.mode != "loopback_fixture":
+                    raise ValueError("public clearance cookies require HTTPS")
         if self.source_sessions and self.http is None:
             raise ValueError("source sessions require an HTTP policy")
         if (

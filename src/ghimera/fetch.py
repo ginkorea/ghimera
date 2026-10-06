@@ -9,6 +9,8 @@ from typing import ClassVar, final
 
 from ghimera.browser import PageRenderer, ResourceFetcher
 from ghimera.budget import RunBudget
+from ghimera.challenge_types import ChallengeEvidence
+from ghimera.challenges import ChallengeCancelled, ChallengeFailure
 from ghimera.config import GhimeraConfig
 from ghimera.ledger import Ledger
 from ghimera.models import FetchRequest, LedgerRow, Page, Scope
@@ -63,6 +65,11 @@ class FetchRoute(ABC):
 
     def source_session_selection(self, url: str) -> SourceSessionUse | None:
         return None
+
+    async def clear_challenge(
+        self, page: Page, *, timeout_seconds: float, max_bytes: int
+    ) -> tuple[ChallengeEvidence, int]:
+        raise GhimeraRefused(RefusalCode.CHALLENGE_NOT_SOLVED)
 
     @abstractmethod
     async def attempt(self, request: FetchRequest) -> Page: ...
@@ -142,7 +149,7 @@ class FetchLadder:
                     page = await self._attempt(route, url, budget, ledger)
             except GhimeraRefused as exc:
                 code = exc.code
-                # A challenge, login, paywall or robots denial is terminal, never escalated.
+                # Unresolved challenges and entitlement/robots walls stay terminal.
                 if code != RefusalCode.FETCH_FAILED:
                     raise
                 # 4xx must not be tried again through a more expensive route.
@@ -183,6 +190,8 @@ class FetchLadder:
         scope: Scope,
         budget: RunBudget,
         ledger: Ledger,
+        *,
+        allow_challenge: bool = True,
     ) -> Page:
         renderer, policy = self._renderer, budget.config.browser
         if renderer is None or policy is None:
@@ -225,6 +234,25 @@ class FetchLadder:
                     latency_seconds=max(0.0, budget.clock() - started),
                 )
             )
+            if (
+                exc.code == RefusalCode.CHALLENGE_NOT_SOLVED
+                and allow_challenge
+                and budget.config.challenges is not None
+            ):
+                await self._clear_challenge(route, page, budget, ledger)
+                retry = await self._follow(route, page.final_url, scope, budget, ledger)
+                if retry.content_type not in scope.content_types:
+                    raise GhimeraRefused(RefusalCode.CONTENT_TYPE_UNWANTED) from None
+                reason = route.escalation_reason(retry)
+                if reason == "javascript_required":
+                    # A second rendered challenge is terminal. Never recursively
+                    # launch solvers until the outer wall-clock expires.
+                    return await self._render(
+                        route, retry, scope, budget, ledger, allow_challenge=False
+                    )
+                if reason is not None:
+                    raise GhimeraRefused(RefusalCode.CHALLENGE_NOT_SOLVED) from None
+                return retry
             raise
         ledger.append(
             LedgerRow(
@@ -326,6 +354,7 @@ class FetchLadder:
                     source_session=page.source_session
                     if page
                     else route.source_session_selection(url),
+                    challenge_use=page.challenge_use if page else None,
                     transport=page.transport if page else route.transport_selection(url),
                     latency_seconds=max(0.0, budget.clock() - started),
                 )
@@ -419,6 +448,13 @@ class FetchLadder:
         for retry in range(budget.config.retry_budget + 1):
             try:
                 page = await self._attempt(route, url, budget, ledger, headers)
+                if (
+                    page_barrier(page) == RefusalCode.CHALLENGE_NOT_SOLVED
+                    and budget.config.challenges is not None
+                ):
+                    await self._clear_challenge(route, page, budget, ledger)
+                    # Refetch original bytes through ordinary DNS/TLS/robots guards.
+                    page = await self._attempt(route, url, budget, ledger)
                 if barrier := page_barrier(page):
                     raise GhimeraRefused(barrier)
                 if page.status < 500:
@@ -459,3 +495,54 @@ class FetchLadder:
             while len(self._cache) > policy.conditional_cache_entries:
                 self._cache.popitem(last=False)
         return page
+
+    async def _clear_challenge(
+        self, route: FetchRoute, page: Page, budget: RunBudget, ledger: Ledger
+    ) -> None:
+        policy = budget.config.challenges
+        if policy is None:
+            raise GhimeraRefused(RefusalCode.CHALLENGE_NOT_SOLVED)
+        budget.reserve_challenge()
+        allowance = budget.reserve_bytes(policy.max_response_bytes)
+        evidence, read, code = None, 0, None
+        cancelled = False
+        started = budget.clock()
+        try:
+            budget.reserve_fetch()  # The browser gateway is not free hidden work.
+            try:
+                async with asyncio.timeout(budget.remaining_seconds):
+                    if self._politeness is None:
+                        raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                    async with self._politeness.slot(page.final_url):
+                        evidence, read = await route.clear_challenge(
+                            page, timeout_seconds=budget.remaining_seconds, max_bytes=allowance
+                        )
+            except (GhimeraRefused, TimeoutError) as exc:
+                code = RefusalCode.CHALLENGE_NOT_SOLVED
+                read = exc.bytes_read if isinstance(exc, ChallengeFailure) else 0
+            except asyncio.CancelledError as exc:
+                cancelled = True
+                code = RefusalCode.CHALLENGE_NOT_SOLVED
+                read = exc.bytes_read if isinstance(exc, ChallengeCancelled) else 0
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="challenge",
+                    url=page.final_url,
+                    route=policy.provider,
+                    bytes_read=read,
+                    challenge=evidence,
+                    refusal=code,
+                    reason="clearance_acquired_not_content_verified"
+                    if evidence
+                    else "challenge_failed",
+                    latency_seconds=max(0.0, budget.clock() - started),
+                )
+            )
+            budget.record_bytes(read)
+            if cancelled:
+                raise asyncio.CancelledError
+            if code is not None:
+                raise GhimeraRefused(code)
+        finally:
+            budget.release_bytes(allowance)
