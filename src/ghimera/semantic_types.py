@@ -1,6 +1,7 @@
 """Configured source-local semantic observations, independent of crawler state."""
 
 from datetime import date
+from types import MappingProxyType
 from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
@@ -23,11 +24,21 @@ CitationId = Annotated[str, Field(pattern=r"^cite:[0-9a-f]{64}$")]
 MentionKey = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]*$")]
 SEMANTIC_PROMPT_REVISION = "ghimera-semantic-extraction/1"
 MENTION_KEY_PROMPT_REVISION = "ghimera-semantic-extraction/2"
+NATIVE_SPAN_PROMPT_REVISION = "ghimera-semantic-extraction/3"
+SEMANTIC_PROFILES = MappingProxyType(
+    {
+        "ghimera.semantics/1": (None, SEMANTIC_PROMPT_REVISION),
+        "ghimera.semantics/2": ("explicit_mention_keys", MENTION_KEY_PROMPT_REVISION),
+        "ghimera.semantics/3": ("native_span_keys", NATIVE_SPAN_PROMPT_REVISION),
+    }
+)
 
 
 class SemanticConfig(GraphRecord):
-    schema_version: Literal["ghimera.semantics/1", "ghimera.semantics/2"] = Field(alias="schema")
-    prompt_profile: Literal["explicit_mention_keys"] | None = Field(
+    schema_version: Literal["ghimera.semantics/1", "ghimera.semantics/2", "ghimera.semantics/3"] = (
+        Field(alias="schema")
+    )
+    prompt_profile: Literal["explicit_mention_keys", "native_span_keys"] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     model_role: Literal["analyst", "reviewer", "judge"]
@@ -42,10 +53,8 @@ class SemanticConfig(GraphRecord):
 
     @model_validator(mode="after")
     def distinct(self) -> "SemanticConfig":
-        if (self.schema_version == "ghimera.semantics/2") != (self.prompt_profile is not None):
-            raise ValueError(
-                "version-2 semantics require an explicit prompt profile; legacy has none"
-            )
+        if self.prompt_profile != SEMANTIC_PROFILES[self.schema_version][0]:
+            raise ValueError("semantic schema requires its exact versioned prompt profile")
         if (
             len(set(self.entity_roles)) != len(self.entity_roles)
             or len(set(self.relation_rules)) != len(self.relation_rules)
@@ -56,11 +65,7 @@ class SemanticConfig(GraphRecord):
 
     @property
     def effective_prompt_revision(self) -> str:
-        return (
-            MENTION_KEY_PROMPT_REVISION
-            if self.prompt_profile == "explicit_mention_keys"
-            else SEMANTIC_PROMPT_REVISION
-        )
+        return SEMANTIC_PROFILES[self.schema_version][1]
 
 
 class ProposedMention(GraphRecord):

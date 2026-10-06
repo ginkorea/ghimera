@@ -1,0 +1,17 @@
+# Non-active collector [semantics] block. Existing /1 and /2 prompts stay intact.
+# This profile explicitly reinforces literal source spans and per-name indices.
+schema = "ghimera.semantics/3"
+prompt_profile = "native_span_keys"
+model_role = "analyst"
+window_chars = 1500
+max_windows_per_document = 64
+max_calls_per_run = 256
+max_mentions_per_window = 32
+max_relations_per_window = 32
+entity_roles = ["person", "organization", "position"]
+relation_rules = ["reports_to", "holds_position", "member_of"]
+mention_rule = "mentions"
+
+# Match graph roles/rules and model context as described in semantics.toml.
+# No whitespace normalization, occurrence repair or validator relaxation occurs.
+# A copied native name can contain original spaces or escaped PDF line breaks.

@@ -24,6 +24,16 @@ evidence; archive readers reject mismatched revisions. Neither profile relaxes
 native-span, citation, ontology or endpoint validation. Stronger instructions
 are not a guarantee that a served model returns valid or accurate claims.
 
+Version 3 explicitly selects `prompt_profile="native_span_keys"`; see
+[the native-span example](../examples/semantics-native-spans.toml). It retains
+the mention-key instructions and adds per-surface occurrence counting, literal
+spaces/line breaks, and the prohibition on completing known titles from memory
+or other document windows. Every distinct name's first exact occurrence is 0,
+not its ordinal in the model's mention list. This binds
+`ghimera-semantic-extraction/3` in call and graph evidence. Version-1 and
+version-2 profiles do not silently acquire these instructions. No native text
+normalization, offset repair or changed acceptance threshold is introduced.
+
 Enable `[graph]` with `capture_semantics=true` and declare the entity roles,
 document-to-entity mention rule and allowed entity-to-entity relation rules.
 Keep the existing research question/query/source/document trace vocabulary.

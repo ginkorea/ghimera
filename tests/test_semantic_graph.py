@@ -227,6 +227,49 @@ def test_explicit_profile_retains_refusal_for_unlisted_relationship_endpoints(tm
         exercise(cfg, DanglingWire(cfg.models.analyst), (document(),))
 
 
+def test_native_span_profile_records_its_revision_and_disambiguates_occurrences(tmp_path):
+    cfg = configured(tmp_path, schema="ghimera.semantics/3", prompt_profile="native_span_keys")
+    wire = SemanticWire(cfg.models.analyst)
+    _, rows, _ = exercise(cfg, wire, (document(),))
+    assert cfg.semantics.effective_prompt_revision == "ghimera-semantic-extraction/3"
+    assert rows[0].model_call.prompt_revision == cfg.semantics.effective_prompt_revision
+    assert wire.requests[0]["semantic_recipe"]["prompt_profile"] == "native_span_keys"
+    assert "not the mention's list position" in wire.system
+    assert "Build the bounded mentions list FIRST" in wire.system
+    forged = rows[0].model_copy(
+        update={
+            "model_call": rows[0].model_call.model_copy(
+                update={"prompt_revision": "ghimera-semantic-extraction/2"}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="provenance differs"):
+        validate_rows(cfg, (forged,))
+    with pytest.raises(ValidationError):
+        configured(tmp_path, schema="ghimera.semantics/2", prompt_profile="native_span_keys")
+    with pytest.raises(ValidationError):
+        configured(tmp_path, schema="ghimera.semantics/3", prompt_profile="explicit_mention_keys")
+
+
+@pytest.mark.parametrize("bad", ("surface", "ordinal"))
+def test_native_span_profile_still_refuses_memory_names_and_global_ordinals(tmp_path, bad):
+    cfg = configured(tmp_path, schema="ghimera.semantics/3", prompt_profile="native_span_keys")
+
+    class WrongNativeWire(SemanticWire):
+        async def post(self, body):
+            response = await super().post(body)
+            raw = json.loads(response.body)
+            proposal = json.loads(raw["choices"][0]["message"]["content"])
+            proposal["mentions"][1]["surface" if bad == "surface" else "occurrence"] = (
+                "未在來源出現的委員會" if bad == "surface" else 1
+            )
+            raw["choices"][0]["message"]["content"] = json.dumps(proposal)
+            return ModelHttpResponse(200, json.dumps(raw).encode(), "application/json")
+
+    with pytest.raises(GhimeraRefused, match="semantic_extraction_failed"):
+        exercise(cfg, WrongNativeWire(cfg.models.analyst), (document(),))
+
+
 @pytest.mark.parametrize("bad", ("wrong_surface", "unknown_citation"))
 def test_hallucinated_entities_and_citations_refuse_before_semantic_graph_write(tmp_path, bad):
     cfg = configured(tmp_path)

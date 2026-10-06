@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Explicit version-3 native-span semantic prompt: per-name zero-based occurrence
+  indices, literal native whitespace and strict selected-window evidence.
+  Existing prompt profiles remain unchanged; invalid native spans still refuse
+  rather than being normalized or silently repaired.
+
 - Explicit version-2 semantic prompt profile for unique mention keys and
   closed relationship endpoints. Policy/call/graph provenance bind the selected
   revision, while version-1 recipe identities and validation remain unchanged.

@@ -127,6 +127,23 @@ MENTION_KEY_INSTRUCTIONS = (
     "relation endpoint occurs in mentions. Do not repair missing endpoints by "
     "inventing entities, duplicating keys, merging names or adding source facts."
 )
+NATIVE_SPAN_INSTRUCTIONS = (
+    " The occurrence value is not the mention's list position, mention key number, "
+    "or the ordering of different names. Count occurrences separately for each "
+    "EXACT surface string in this selected native quote. The first occurrence of "
+    "each distinct surface is 0: two different names each occurring once both "
+    "use occurrence=0, not 0 and 1. A higher index requires that same exact "
+    "surface to occur again in this window. Copy surface strings literally, "
+    "including original spaces and escaped line breaks within a name. Do not "
+    "rejoin line-wrapped names, translate, expand abbreviations or complete a "
+    "known title from memory. No other page, window or general organizational "
+    "knowledge is supplied as evidence. If a title is not literally present in "
+    "the quote, omit it and every relation that requires it. A phrase merely "
+    "containing an organization's name does not establish another organization. "
+    "Before returning JSON, verify each exact surface and its per-surface "
+    "zero-based occurrence in the quote; empty lists are correct when no "
+    "configured roles or explicit relationships are supported."
+)
 
 
 class WireMessage(BaseModel):
@@ -318,7 +335,14 @@ class SelfHostedModel:
                     MENTION_KEY_INSTRUCTIONS
                     if prompt.task == "semantic_extract"
                     and semantic is not None
-                    and semantic.prompt_profile == "explicit_mention_keys"
+                    and semantic.prompt_profile in {"explicit_mention_keys", "native_span_keys"}
+                    else ""
+                )
+                + (
+                    NATIVE_SPAN_INSTRUCTIONS
+                    if prompt.task == "semantic_extract"
+                    and semantic is not None
+                    and semantic.prompt_profile == "native_span_keys"
                     else ""
                 )
                 + (
