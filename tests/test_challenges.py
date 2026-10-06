@@ -4,7 +4,9 @@ import asyncio
 import json
 import threading
 import time
+import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -101,7 +103,9 @@ def endpoints():
                 "version": controls.get("version", "fixture-1"),
                 "solution": {
                     "url": controls.get("url", value["url"]),
+                    "status": controls.get("source_status", 200),
                     "userAgent": controls.get("agent", AGENT),
+                    "response": "private-gateway-dom-not-source-evidence",
                     "cookies": [
                         {
                             "name": "cf_clearance",
@@ -203,6 +207,84 @@ def test_clearance_retry_reuses_matching_agent_cookie_without_archiving_secrets(
     assert first.challenge_use == second.challenge_use == attempt.challenge
 
 
+@pytest.mark.parametrize("dialect", ["byparr_seconds", "flaresolverr"])
+def test_byparr_uses_its_declared_wire_and_preserves_native_evidence(endpoints, dialect):
+    cfg, ladder, scope, origin = setup(
+        endpoints,
+        schema="ghimera.challenges/2",
+        provider="byparr",
+        wire_dialect=dialect,
+    )
+    ledger, budget = Ledger(), RunBudget(cfg, time.monotonic)
+    page = asyncio.run(ladder.fetch(origin + "/first", scope, budget, ledger))
+    assert page.body == ARTICLE and page.challenge_use.provider == "byparr"
+    assert page.challenge_use.schema_version == "ghimera.challenge-evidence/2"
+    assert len(endpoints[3]) == 1
+    payload = endpoints[3][0][1]
+    if dialect == "byparr_seconds":
+        assert payload == dict(cmd="request.get", url=origin + "/first", max_timeout=2)
+    else:
+        assert payload == dict(
+            cmd="request.get", url=origin + "/first", maxTimeout=2000, returnOnlyCookies=True
+        )
+    assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
+    assert SECRET not in page.model_dump_json()
+    assert "private-gateway-dom" not in page.model_dump_json()
+    page.challenge_use.validate_policy(cfg.challenges, page.final_url)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"schema": "ghimera.challenges/1", "provider": "byparr"},
+        {"schema": "ghimera.challenges/2", "provider": "byparr"},
+        {"schema": "ghimera.challenges/1", "wire_dialect": "flaresolverr"},
+        {
+            "schema": "ghimera.challenges/2",
+            "provider": "flaresolverr",
+            "wire_dialect": "byparr_seconds",
+        },
+        {
+            "schema": "ghimera.challenges/2",
+            "provider": "byparr",
+            "wire_dialect": "flaresolverr",
+            "tabs_till_verify": 1,
+        },
+    ],
+)
+def test_provider_dialect_is_an_explicit_versioned_configuration(endpoints, changes):
+    with pytest.raises(ValidationError):
+        setup(endpoints, **changes)
+    assert not endpoints[2] and not endpoints[3]
+
+
+@pytest.mark.parametrize("status", [403, 500, None, True, "200"])
+def test_byparr_success_envelope_does_not_make_a_blocked_source_clearance(endpoints, status):
+    endpoints[4]["source_status"] = status
+    cfg, ladder, scope, origin = setup(
+        endpoints, schema="ghimera.challenges/2", provider="byparr", wire_dialect="byparr_seconds"
+    )
+    ledger = Ledger()
+    with pytest.raises(GhimeraRefused, match="challenge_not_solved"):
+        asyncio.run(ladder.fetch(origin + "/first", scope, RunBudget(cfg, time.monotonic), ledger))
+    assert len(endpoints[3]) == 1
+    assert sum(path == "/first" for path, _ in endpoints[2]) == 1
+    assert SECRET not in "".join(row.model_dump_json() for row in ledger.snapshot())
+
+
+@pytest.mark.parametrize(
+    "name", ["challenges.toml", "challenges-byparr.toml", "challenges-byparr-modern.toml"]
+)
+def test_shipped_challenge_examples_validate_and_retain_their_dialect(name):
+    example = Path(__file__).resolve().parents[1] / "examples" / name
+    policy = ChallengeConfig.model_validate(tomllib.loads(example.read_text())["challenges"])
+    assert ChallengeConfig.model_validate_json(policy.model_dump_json()) == policy
+    if name == "challenges.toml":
+        assert "wire_dialect" not in policy.model_dump(by_alias=True)
+    else:
+        assert policy.provider == "byparr" and policy.wire_dialect is not None
+
+
 @pytest.mark.parametrize(
     "path,code",
     [("/login", "login_wall"), ("/paywall", "paywall"), ("/blocked", "robots_disallowed")],
@@ -276,8 +358,16 @@ def test_default_refusal_remains_and_a_failed_retry_cannot_loop_forever(endpoint
     assert len(endpoints[3]) == 1
 
 
-def test_completed_harvest_and_durable_journal_reconcile_gateway_spend(endpoints, tmp_path):
-    cfg, ladder, scope, origin = setup(endpoints)
+@pytest.mark.parametrize("provider", ["flaresolverr", "byparr"])
+def test_completed_harvest_and_durable_journal_reconcile_gateway_spend(
+    endpoints, tmp_path, provider
+):
+    options = (
+        {}
+        if provider == "flaresolverr"
+        else dict(schema="ghimera.challenges/2", provider="byparr", wire_dialect="byparr_seconds")
+    )
+    cfg, ladder, scope, origin = setup(endpoints, **options)
     raw = cfg.model_dump(by_alias=True)
     raw["journal"] = dict(
         schema="chimera.run-journal-config/1",
@@ -310,6 +400,11 @@ def test_completed_harvest_and_durable_journal_reconcile_gateway_spend(endpoints
     forged["documents"][0]["challenge_use"]["origin"] = "https://other.example"
     with pytest.raises(ValidationError, match="clearance evidence"):
         Harvest.model_validate(forged)
+    if provider == "byparr":
+        forged = result.model_dump(by_alias=True)
+        forged["documents"][0]["challenge_use"]["schema"] = "ghimera.challenge-evidence/1"
+        with pytest.raises(ValidationError, match="clearance evidence"):
+            Harvest.model_validate(forged)
 
 
 def test_clearance_does_not_follow_a_cross_origin_redirect(endpoints):

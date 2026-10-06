@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
 Seconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+ChallengeProvider = Literal["flaresolverr", "byparr"]
+ChallengeDialect = Literal["flaresolverr", "byparr_seconds"]
 
 
 def exact_origin(url: str) -> str:
@@ -28,8 +30,9 @@ def exact_origin(url: str) -> str:
 
 class ChallengeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["ghimera.challenges/1"] = Field(alias="schema")
-    provider: Literal["flaresolverr"]
+    schema_version: Literal["ghimera.challenges/1", "ghimera.challenges/2"] = Field(alias="schema")
+    provider: ChallengeProvider
+    wire_dialect: ChallengeDialect | None = Field(default=None, exclude_if=lambda v: v is None)
     provider_version: Annotated[str, Field(min_length=1)]
     endpoint: str
     # Unlike the passive renderer, this gateway executes source scripts with
@@ -49,6 +52,17 @@ class ChallengeConfig(BaseModel):
 
     @model_validator(mode="after")
     def explicit(self) -> "ChallengeConfig":
+        if self.schema_version == "ghimera.challenges/1":
+            if self.provider != "flaresolverr" or self.wire_dialect is not None:
+                raise ValueError(
+                    "legacy challenge policy only admits the original FlareSolverr wire"
+                )
+        elif self.wire_dialect is None:
+            raise ValueError("version-2 challenge policy requires an explicit wire dialect")
+        if self.provider == "flaresolverr" and self.wire_dialect == "byparr_seconds":
+            raise ValueError("FlareSolverr requires its millisecond wire dialect")
+        if self.provider == "byparr" and self.tabs_till_verify is not None:
+            raise ValueError("Byparr does not implement FlareSolverr tabs_till_verify")
         endpoint = urlsplit(self.endpoint)
         if (
             endpoint.scheme != "http"

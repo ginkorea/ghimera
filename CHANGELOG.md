@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Configurable Byparr challenge gateway beside FlareSolverr and the existing
+  Patchright renderer. Version-2 policy explicitly selects the seconds-based
+  Camoufox-backed 2.x wire or the newer millisecond/cookies-only wire; provider
+  revisions and evidence stay distinct. Invalid dialects and blocked/missing
+  source statuses refuse before clearance reuse. Browser gateways remain
+  independently deployed services, not vendored dependencies or a universal
+  CAPTCHA success claim. Legacy challenge policy/digests remain unchanged.
+
 - Versioned resumable intent commands over the existing concrete Collector,
   with explicit run/resume/pause policy, digest-pinned original requests,
   private exact-output reservations and exclusive writers. A pause emits a

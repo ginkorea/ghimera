@@ -30,7 +30,8 @@ self-hosted model services, extraction policies and graph profile.
 - **Isolated JavaScript rendering.** Patchright runs in a network-isolated
   Linux worker; the parent fetch boundary handles its permitted HTTP resources,
   redirects and accounting. Browser binaries are explicitly configured and
-  verified, not downloaded on import. Camoufox/nodriver adapters remain planned.
+  verified, not downloaded on import. Alternate passive renderers remain planned;
+  post-release source also supports separately deployed challenge gateways.
 - **Native extraction.** Configured HTML fit-Markdown, adaptive locator
   profiles, language detection, DOCX tables and native PDF text preserve raw
   bytes beside extracted native-language text. Full PDF/OCR and Marker
@@ -77,6 +78,7 @@ controlled document check is not a universal quality claim.
 ### Unreleased additions after 0.3.0
 
 The feature branch adds explicitly configured local challenge recovery with
+FlareSolverr or Byparr (including its Camoufox-backed 2.x wire),
 private, origin-scoped clearance and guarded content verification; this is
 not a universal CAPTCHA solver. See [challenge recovery](docs/CHALLENGES.md).
 It also admits hash-pinned owned PDF/DOCX seeds before intent planning through

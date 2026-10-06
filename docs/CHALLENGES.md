@@ -13,7 +13,7 @@ cookie names, cache size/TTL, timeout and attempt budget are configuration—not
 Python edits. Effective non-secret policy is retained in the run receipt.
 
 `ChallengeConfig` owns validation. `CurlRoute.clear_challenge` is the recovery
-port; `ChallengeSessions` implements the local FlareSolverr API. The guarded
+port; `ChallengeSessions` implements the declared local gateway dialect. The guarded
 fetch ladder invokes that port only after detecting a challenge, after the
 normal source-scope/robots boundary. Its existing template remains final.
 If the robots file itself is challenged, recovery reads that file first; any
@@ -40,7 +40,7 @@ a solver or combines its cookies with an entitled account's session.
 
 ## Gateway deployment is a separate network boundary
 
-Use a locally installed, version-pinned FlareSolverr service bound only to
+Use a locally installed, version-pinned FlareSolverr or Byparr service bound only to
 loopback. The client refuses remote endpoints, redirects and unapproved provider
 versions, and never inherits a proxy or credential. Ghimera does not install,
 launch, modify or publicly expose that service. Pin its container image by
@@ -63,6 +63,45 @@ leak the selected route. Challenge-enabled onion/Tor origins refuse at config
 validation instead of silently switching to direct access. Tor/browser recovery
 needs a separate route-preserving implementation and acceptance.
 
+## Select a gateway through configuration
+
+The original `ghimera.challenges/1` FlareSolverr configuration and serialized
+digest remain unchanged. New `ghimera.challenges/2` policy requires an explicit
+`wire_dialect`, with non-secret provider provenance in
+`ghimera.challenge-evidence/2`. There is no automatic provider fallback.
+
+| Provider | Configuration | Request dialect |
+|---|---|---|
+| FlareSolverr | [original example](../examples/challenges.toml) | `maxTimeout` in milliseconds; `returnOnlyCookies=true` |
+| Byparr 2.1.0 | [Camoufox example](../examples/challenges-byparr.toml) | `max_timeout` in whole seconds |
+| Byparr 3.0.4 | [newer example](../examples/challenges-byparr-modern.toml) | FlareSolverr-compatible millisecond wire; cookies-only requested |
+
+The inspected [2.1.0 dependencies](https://github.com/ThePhaseless/Byparr/blob/v2.1.0/pyproject.toml)
+use Camoufox; [3.0.4 dependencies](https://github.com/ThePhaseless/Byparr/blob/v3.0.4/pyproject.toml)
+use a different Playwright-based stack. Browser identity is a deployed provider
+property, not something the client infers from the provider name. Pin the image
+digest and require its response version to match `provider_version`.
+Byparr's response version comes from its deployment `VERSION` setting; the
+version string alone is not cryptographic verification of its executable.
+
+Older Byparr returns page HTML and ignores FlareSolverr's `returnOnlyCookies`.
+Ghimera bounds that response and discards the DOM; large responses may refuse.
+It sends the actual seconds field instead of letting an ignored field select
+the provider's default timeout. Whole-second rounding is bounded by the local
+deadline, but client cancellation does not prove the separate gateway stopped
+its browser. Configure the provider's own resource limits and cleanup.
+The newer Byparr wire treats numbers below 1000 as seconds, so Ghimera sends a
+minimum of 1000 milliseconds while retaining the caller's shorter local deadline.
+Byparr clearance requires a successful source status, valid configured cookies
+and matching origin/version/User-Agent; a success envelope alone is insufficient.
+`tabs_till_verify` is FlareSolverr-only and refused for Byparr.
+
+Byparr is a separately deployed GPL-3.0 service; its code and browser binaries
+are not bundled, imported or installed by Ghimera. Deployment/distribution must
+retain the provider's own licence notices and obligations. The Python package
+adds no solver dependency or paid API. Nodriver and audio extensions are not
+silently added: a compatible driver is not a proven CAPTCHA solver.
+
 ## What upstream actually provides
 
 Sources inspected 6 October 2026:
@@ -79,10 +118,11 @@ Sources inspected 6 October 2026:
   tokens. A token is not a cookie and is not reused across the crawler pool.
 - [Buster](https://github.com/dessant/buster) is an audio-assistance extension,
   not a verified offline speech model or a service this package has integrated.
-- [Camoufox](https://github.com/daijro/camoufox) and
-  [nodriver](https://github.com/ultrafunkamsterdam/nodriver) remain alternate
-  browser candidates. Their licence obligations and equivalent network/resource
-  behavior must be checked before integration; they are not silently vendored.
+- [Camoufox](https://github.com/daijro/camoufox) is available through the explicit
+  Byparr 2.x gateway integration, not as an interchangeable passive renderer.
+- [nodriver](https://github.com/ultrafunkamsterdam/nodriver) remains an alternate
+  browser candidate. Its licence obligations and equivalent network/resource
+  behavior must be checked before integration; it is not silently vendored.
 
 Challenges normally require the remote site's validation services. Hosting the
 browser/solver locally avoids a paid solving API; it does not make the target
@@ -100,6 +140,17 @@ clearance → refetch, exact-origin reuse, expiry, failed/still-challenged resul
 bounded oversized responses, provider/version validation, redirect refusal,
 robots/entitlement separation and complete harvest/journal reconciliation.
 Those checks prove the adapter, not upstream challenge-solving accuracy.
+New Byparr checks cover both request dialects, provider/source-status validation,
+legacy policy serialization and versioned harvest/journal replay. They use local
+HTTP fixtures, not an installed Byparr browser or a remote challenge website.
+
+The provider-extension full gate on 6 October 2026 used
+`/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16), importing this
+checkout's `src/ghimera`. Offline lock validation resolved 137 packages; lint
+passed, all 125 checked files were formatted, and strict typing passed for 88
+source files. The complete suite passed **457 tests, zero failed, zero skipped**
+in 485.70 seconds. This verifies client integration and regressions, not the
+independently deployed providers' accuracy on public CAPTCHA sites.
 
 The complete `scripts/gate.sh` run on 6 October 2026 used
 `/tmp/chimera-c0-20261006/.venv/bin/python`, Python 3.11.16, importing this

@@ -1,0 +1,21 @@
+# Append to a collector recipe; omission disables challenge recovery.
+# Byparr 2.1.0 uses Camoufox and max_timeout in seconds, not maxTimeout.
+# Deploy independently, pinned by image digest, with restricted browser egress.
+[challenges]
+schema = "ghimera.challenges/2"
+provider = "byparr"
+provider_version = "2.1.0"
+wire_dialect = "byparr_seconds"
+endpoint = "http://127.0.0.1:8191/v1"
+network_boundary = "operator_managed_local_browser_gateway"
+allowed_origins = ["https://publisher.example"]
+allowed_cookie_names = ["cf_clearance"]
+max_attempts_per_run = 2
+timeout_seconds = 60.0
+max_request_bytes = 8192
+# This older provider returns HTML even though only cookies are consumed.
+max_response_bytes = 1048576
+max_header_bytes = 16384
+max_cookie_bytes = 4096
+session_ttl_seconds = 300.0
+session_cache_entries = 8

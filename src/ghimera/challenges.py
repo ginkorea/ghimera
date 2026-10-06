@@ -1,4 +1,4 @@
-"""FlareSolverr clearance adapter; local service, bounded wire, private volatile state.
+"""Local clearance gateways: explicit provider wire, private volatile state.
 
 The returned DOM is never treated as raw source evidence. Only declared
 clearance cookies are accepted; the ordinary guarded HTTP route refetches the
@@ -9,6 +9,7 @@ the gateway's browser identity, so this adapter never retries Tor directly.
 
 import asyncio
 import json
+import math
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -48,6 +49,7 @@ class Cookie(BaseModel):
 class Solution(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
     url: str
+    status: Annotated[int, Field(strict=True, ge=100, le=599)] | None = None
     user_agent: str = Field(alias="userAgent", repr=False)
     cookies: tuple[Cookie, ...]
 
@@ -98,12 +100,17 @@ class ChallengeSessions:
         timeout = min(timeout_seconds, policy.timeout_seconds)
         if timeout <= 0:
             raise ChallengeFailure(0)
-        payload: dict[str, str | int | bool] = {
-            "cmd": "request.get",
-            "url": url,
-            "maxTimeout": max(1, int(timeout * 1000)),
-            "returnOnlyCookies": True,
-        }
+        payload: dict[str, str | int | bool] = {"cmd": "request.get", "url": url}
+        if policy.wire_dialect == "byparr_seconds":
+            # Byparr 2.x ignores maxTimeout and returns DOM despite unknown
+            # returnOnlyCookies. Declare the real wire; never retain that DOM.
+            payload["max_timeout"] = max(1, math.ceil(timeout))
+        else:
+            # Byparr 3.x interprets <1000 as seconds, unlike FlareSolverr.
+            # The local deadline still bounds subsecond caller budgets.
+            minimum = 1000 if policy.provider == "byparr" else 1
+            payload["maxTimeout"] = max(minimum, int(timeout * 1000))
+            payload["returnOnlyCookies"] = True
         if policy.tabs_till_verify is not None:
             payload["tabs_till_verify"] = policy.tabs_till_verify
         raw = json.dumps(payload).encode()
@@ -156,6 +163,8 @@ class ChallengeSessions:
             wire.status != "ok"
             or wire.version != policy.provider_version
             or solution is None
+            or (policy.provider == "byparr" and solution.status is None)
+            or (solution.status is not None and not 200 <= solution.status < 300)
             or exact_origin(solution.url) != origin
             or not solution.user_agent.strip()
             or len(solution.user_agent.encode()) > policy.max_header_bytes
@@ -189,7 +198,11 @@ class ChallengeSessions:
             raise ValueError("missing or oversized clearance")
         return Clearance(
             ChallengeEvidence(
-                schema="ghimera.challenge-evidence/1",
+                schema=(
+                    "ghimera.challenge-evidence/1"
+                    if policy.schema_version == "ghimera.challenges/1"
+                    else "ghimera.challenge-evidence/2"
+                ),
                 origin=origin,
                 provider=policy.provider,
                 provider_version=policy.provider_version,
