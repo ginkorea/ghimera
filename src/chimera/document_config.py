@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from chimera.document_models import PdfModels
+
 Positive = Annotated[int, Field(strict=True, gt=0)]
 
 
@@ -44,6 +46,7 @@ class DocumentExtractionConfig(BaseModel):
     max_compression_ratio: Annotated[float, Field(gt=0, allow_inf_nan=False)]
     cpu_threads: Positive
     pdf_pipeline: Literal["native", "standard"]
+    pdf_models: PdfModels | None = Field(default=None, exclude_if=lambda value: value is None)
     artifacts_directory: Path | None = None
     artifacts: tuple[ParserArtifact, ...]
     do_ocr: bool
@@ -67,11 +70,16 @@ class DocumentExtractionConfig(BaseModel):
         ):
             raise ValueError("language bounds and unique candidates are required")
         if self.pdf_pipeline == "standard" and (
-            not self.artifacts or self.artifacts_directory is None
+            not self.artifacts or self.artifacts_directory is None or self.pdf_models is None
         ):
-            raise ValueError("standard PDF conversion requires a pinned offline artifact manifest")
+            raise ValueError(
+                "standard PDF needs explicit model choices and an offline artifact manifest"
+            )
         if self.pdf_pipeline == "native" and (
-            self.artifacts or self.artifacts_directory is not None or self.do_ocr
+            self.artifacts
+            or self.artifacts_directory is not None
+            or self.do_ocr
+            or self.pdf_models is not None
         ):
             raise ValueError(
                 "native PDF conversion has no layout/OCR models; select standard explicitly"
@@ -80,6 +88,14 @@ class DocumentExtractionConfig(BaseModel):
             raise ValueError("artifact root must be absolute")
         if len({artifact.path for artifact in self.artifacts}) != len(self.artifacts):
             raise ValueError("artifact paths cannot repeat")
+        if self.pdf_models is not None:
+            if self.do_ocr != (self.pdf_models.ocr is not None):
+                raise ValueError("enabled OCR requires exactly one explicit offline recognizer")
+            expected = set(
+                self.pdf_models.required_artifact_paths(with_tables=self.do_table_structure)
+            )
+            if not expected <= {artifact.path for artifact in self.artifacts}:
+                raise ValueError("every selected PDF model/config file must be in the manifest")
         return self
 
     def content_digest(self) -> str:

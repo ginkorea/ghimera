@@ -1,0 +1,7 @@
+{
+  "schema": "chimera.pdf-expectations/1",
+  "required_text": ["Taiwan", "Japan", "Capacity", "42", "19"],
+  "ordered_text": ["This section comes first.", "The second section examines"],
+  "page_count": 1,
+  "minimum_table_count": 1
+}

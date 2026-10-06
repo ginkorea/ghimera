@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Explicit offline PDF layout/table/OCR recipe, pinned worker dependencies and
+  artifacts, configurable column-aware reading order and reproducible local PDF
+  acceptance with source-bound receipts. Representative-corpus and Marker
+  acceptance remain open.
+
 - Authorized source sessions with caller-supplied cookies/headers, exact origin
   and path scope, protected browser resource support, non-secret audit metadata,
   and separation from discovery/model-control credentials.

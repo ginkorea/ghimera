@@ -52,7 +52,7 @@ def check_docx(request: DocumentRequest) -> None:
 
 def parse(request: DocumentRequest) -> Extracted:
     from docling.datamodel.base_models import ConversionStatus, DocumentStream, InputFormat
-    from docling.datamodel.pipeline_options import NativePdfPipelineOptions, PdfPipelineOptions
+    from docling.datamodel.pipeline_options import NativePdfPipelineOptions
     from docling.document_converter import (
         DocumentConverter,
         FormatOption,
@@ -93,18 +93,11 @@ def parse(request: DocumentRequest) -> Extracted:
                 )
             )
         else:
+            from chimera.document_pipeline import ConfiguredPdfPipeline, pdf_options
+
             check_artifacts(config)
             options[fmt] = PdfFormatOption(
-                pipeline_options=PdfPipelineOptions(
-                    artifacts_path=config.artifacts_directory,
-                    enable_remote_services=False,
-                    allow_external_plugins=False,
-                    document_timeout=config.timeout_seconds,
-                    do_ocr=config.do_ocr,
-                    do_table_structure=config.do_table_structure,
-                    generate_page_images=False,
-                    generate_picture_images=False,
-                )
+                pipeline_cls=ConfiguredPdfPipeline, pipeline_options=pdf_options(config)
             )
     else:
         raise ChimeraRefused(RefusalCode.CONTENT_TYPE_UNWANTED)

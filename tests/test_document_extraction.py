@@ -122,14 +122,20 @@ def test_native_chinese_docx_is_not_translated(tmp_path):
 
 
 def test_standard_pdf_requires_pinned_offline_artifacts_not_a_native_fallback(tmp_path):
+    from tests.test_document_models import artifacts, model_policy
+
     with pytest.raises(ValidationError):
         config(tmp_path, pdf_pipeline="standard")
+    models = model_policy(ocr=None)
+    root, entries = artifacts(tmp_path, models)
     cfg = config(
         tmp_path,
         pdf_pipeline="standard",
-        artifacts_directory=str(tmp_path / "models"),
-        artifacts=[dict(path="layout/model.safetensors", sha256="0" * 64, size_bytes=10)],
+        artifacts_directory=str(root),
+        artifacts=entries,
+        pdf_models=models.model_dump(by_alias=True),
     )
+    (root / entries[0]["path"]).unlink()
     with pytest.raises(ChimeraRefused) as exc:
         DocumentExtractor(cfg)
     assert exc.value.code == RefusalCode.ADAPTER_CONTRACT
