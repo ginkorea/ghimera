@@ -2,7 +2,11 @@
 
 import hashlib
 import re
+from typing import Annotated
 
+from pydantic import Field, model_validator
+
+from chimera.model_citations import citation_id
 from chimera.model_config import EvidenceContextConfig
 from chimera.models import Document, Record
 from chimera.refusals import ChimeraRefused, RefusalCode
@@ -11,6 +15,17 @@ from chimera.research_types import Citation
 
 class ContextWindow(Record):
     citation: Citation
+    citation_id: Annotated[str, Field(pattern=r"^cite:[0-9a-f]{64}$")]
+
+    @classmethod
+    def from_citation(cls, citation: Citation) -> "ContextWindow":
+        return cls(citation=citation, citation_id=citation_id(citation))
+
+    @model_validator(mode="after")
+    def bound_reference(self) -> "ContextWindow":
+        if self.citation_id != citation_id(self.citation):
+            raise ValueError("citation identifier must bind its exact native template")
+        return self
 
 
 class ContextDocument(Record):
@@ -74,7 +89,7 @@ class ContextSelector:
                 continue
             if used + len(citation.quote) > self._policy.max_chars:
                 raise ChimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
-            windows[key] = ContextWindow(citation=citation)
+            windows[key] = ContextWindow.from_citation(citation)
             chosen[(doc.sha256, doc.url)] = doc
             used += len(citation.quote)
         if len(chosen) > self._policy.max_documents:
@@ -122,8 +137,8 @@ class ContextSelector:
                     for key in windows
                 ):
                     continue
-                windows[(doc.sha256, doc.url, start, end)] = ContextWindow(
-                    citation=native_citation(doc, start, end)
+                windows[(doc.sha256, doc.url, start, end)] = ContextWindow.from_citation(
+                    native_citation(doc, start, end)
                 )
                 chosen[(doc.sha256, doc.url)] = doc
                 used += end - start

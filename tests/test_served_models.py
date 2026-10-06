@@ -58,6 +58,134 @@ def service(port, **changes):
     return ModelServiceConfig.model_validate(raw)
 
 
+def test_second_document_look_adds_native_context_without_rewriting_first_span(endpoint):
+    port, seen, _ = endpoint
+    bound = service(port)
+    client = SelfHostedModel(config(), bound)
+    native = "opening " * 180 + "target topic " + "later detail " * 420
+    extracted = Extracted(title="Native report", text=native, language="en")
+
+    async def looks():
+        await client.document(Goal(text="target topic"), extracted, second_look=False)
+        await client.document(Goal(text="target topic"), extracted, second_look=True)
+
+    asyncio.run(looks())
+    packets = [json.loads(row[1]["messages"][1]["content"]) for row in seen]
+    first, second = (packet["document"] for packet in packets)
+    assert len(first["text"]) == bound.context.window_chars
+    assert len(second["text"]) == bound.context.max_chars
+    assert second["start"] <= first["start"] < first["end"] <= second["end"]
+    for excerpt in (first, second):
+        assert excerpt["text"] == native[excerpt["start"] : excerpt["end"]]
+        assert excerpt["omitted_chars"] == len(native) - len(excerpt["text"])
+    assert second["omitted_chars"] < first["omitted_chars"]
+    assert packets[0]["second_look"] is False and packets[1]["second_look"] is True
+
+
+def test_template_id_citations_resolve_to_exact_native_spans_and_refuse_invented_ids():
+    from chimera.evidence_context import ContextWindow
+    from chimera.model_client import model_schema
+    from chimera.model_http import ModelHttpResponse
+    from chimera.research import citation_for
+    from chimera.research_types import (
+        AnswerDraft,
+        AnswerRequest,
+        Assessment,
+        EvidenceRequest,
+        Question,
+    )
+
+    bound = service(8769, citation_format="template_ids")
+    native = "港口報告。\nThe port is in Taiwan.\n" * 60
+    doc = Document(
+        url="https://example.org/report",
+        raw=b"original",
+        sha256=hashlib.sha256(b"original").hexdigest(),
+        extracted=Extracted(title="Native report", text=native, language="zh"),
+        verdict=Verdict(
+            decision="accept", kind="report", publisher="unknown", language="zh", reason="fixture"
+        ),
+    )
+
+    class ReferenceWire:
+        config = bound
+
+        def __init__(self):
+            self.invalid = False
+            self.seen = []
+
+        async def post(self, body):
+            request = json.loads(body)
+            packet = json.loads(request["messages"][1]["content"])
+            self.seen.append(packet)
+            reference = packet["evidence"]["windows"][0]["citation_id"]
+            references = [{"citation_id": "cite:" + "0" * 64 if self.invalid else reference}]
+            if packet["task"] == "assessment":
+                output = {
+                    "coverage": [
+                        {
+                            "question_id": "q1",
+                            "status": "answered",
+                            "reason": "fixture",
+                            "citations": references,
+                        }
+                    ]
+                }
+            else:
+                output = {
+                    "claims": [
+                        {
+                            "text": "The port is in Taiwan.",
+                            "question_ids": ["q1"],
+                            "citations": references,
+                        }
+                    ],
+                    "confidence": 0.9,
+                }
+            reply = {
+                "id": "fixture",
+                "model": "fixture-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": json.dumps(output)},
+                    }
+                ],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+            }
+            return ModelHttpResponse(200, json.dumps(reply).encode(), "application/json")
+
+    wire = ReferenceWire()
+    client = SelfHostedModel(config(), bound, http=wire)
+    packet = EvidenceRequest(
+        intent="port", questions=(Question(id="q1", text="Which port?"),), documents=(doc,)
+    )
+    assessment = asyncio.run(client.assess(packet))
+    citation = assessment.coverage[0].citations[0]
+    assert citation.matches(doc)
+    assert citation == citation_for(doc, citation.start, citation.end)
+    window = ContextWindow.model_validate(wire.seen[0]["evidence"]["windows"][0])
+    assert ContextWindow.model_validate_json(window.model_dump_json()) == window
+    with pytest.raises(ValidationError, match="exact native template"):
+        ContextWindow.model_validate({**window.model_dump(), "citation_id": "cite:" + "0" * 64})
+    for output in (Assessment, AnswerDraft):
+        schema = model_schema(output, template_ids=True)
+        assert schema["$defs"]["CitationReference"]["additionalProperties"] is False
+        assert set(schema["$defs"]["CitationReference"]["properties"]) == {"citation_id"}
+        assert "Citation" not in schema["$defs"]
+        assert "model_call" not in schema["properties"]
+    assert "citation_format" not in service(8769).model_dump()
+    draft = asyncio.run(client.answer(AnswerRequest(**packet.model_dump(), assessment=assessment)))
+    assert draft.claims[0].citations[0] == citation
+    assert draft.model_call.outcome == "success"
+    wire.invalid = True
+    with pytest.raises(ChimeraRefused, match="unsupported_answer"):
+        asyncio.run(client.assess(packet))
+    with pytest.raises(ChimeraRefused, match="unsupported_answer"):
+        asyncio.run(client.answer(AnswerRequest(**packet.model_dump(), assessment=assessment)))
+
+
 @pytest.fixture
 def endpoint():
     seen = []

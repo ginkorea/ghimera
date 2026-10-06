@@ -93,6 +93,9 @@ class ModelServiceConfig(PrivateModelService):
     temperature: Annotated[float, Field(ge=0, le=2, allow_inf_nan=False)]
     top_p: Annotated[float, Field(gt=0, le=1, allow_inf_nan=False)]
     response_format: Literal["json_object", "json_schema"]
+    citation_format: Literal["full", "template_ids"] = Field(
+        default="full", exclude_if=lambda value: value == "full"
+    )
     context: EvidenceContextConfig
 
     @model_validator(mode="after")

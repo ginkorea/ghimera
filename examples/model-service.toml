@@ -17,6 +17,7 @@ max_output_tokens = 4096
 temperature = 0.0
 top_p = 1.0
 response_format = "json_schema"
+citation_format = "template_ids"
 require_usage = true
 max_input_chars = 240000
 

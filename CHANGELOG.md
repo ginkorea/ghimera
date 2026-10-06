@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Explicit `citation_format = "template_ids"` for assessment and drafting:
+  the model selects supplied context IDs and the client restores exact native
+  quotations, offsets and hashes. Unknown/out-of-context IDs refuse without
+  similarity repair; full-citation mode remains the compatibility default.
+  Document judges' second looks now expand native context to the configured
+  character ceiling while retaining the first span. A real self-hosted-model
+  trial confirms these paths; its grader failure and independent-evaluation
+  gaps remain recorded rather than being described as complete acceptance.
+
 - An explicit configuration-driven intent command (`python -m chimera`) with
   bounded input reads, separately named environment credential bindings and
   private no-overwrite complete-result archives. Originals, citations, graph,
