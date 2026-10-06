@@ -9,6 +9,7 @@ from collections.abc import Callable
 from chimera.budget import RunBudget
 from chimera.config import ChimeraConfig
 from chimera.fetch import FetchLadder
+from chimera.graph import DirectoryGraphSink, GraphSink, ResearchGraph
 from chimera.ledger import Ledger
 from chimera.models import Document, Goal, Harvest, LedgerRow, Receipt, Scope, StopReason
 from chimera.ports import Extractor, Judge
@@ -25,6 +26,7 @@ class GoalLoop:
         extractor: Extractor,
         scorer: Scorer,
         judge: Judge,
+        graph_sink: GraphSink | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._config = config
@@ -32,13 +34,27 @@ class GoalLoop:
         self._extractor = extractor
         self._scorer = scorer
         self._judge = judge
+        self._graph_sink = graph_sink
         if judge.model.location == "external":
             raise ChimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
         self._clock = clock
 
-    async def run(self, goal: Goal, scope: Scope) -> Harvest:
+    async def run(self, goal: Goal, scope: Scope, *, run_id: str | None = None) -> Harvest:
         budget = RunBudget(self._config, self._clock)
         ledger = Ledger()
+        graph = None
+        if self._config.graph is not None and self._config.graph.enabled:
+            if run_id is None:
+                raise ChimeraRefused(RefusalCode.GRAPH_CONTRACT)
+            sink = (
+                self._graph_sink
+                if self._graph_sink is not None
+                else DirectoryGraphSink(self._config.graph, run_id)
+            )
+            graph = ResearchGraph(self._config.graph, run_id, sink)
+            await graph.start(goal.text)
+            for seed in goal.seeds:
+                await graph.discovered(seed, graph.intent_id)
         documents: dict[str, Document] = {}
         frontier = [(-1.0, seed, 0) for seed in goal.seeds]
         heapq.heapify(frontier)
@@ -57,6 +73,14 @@ class GoalLoop:
                 page = await self._fetcher.fetch(url, scope, budget, ledger)
                 async with asyncio.timeout(budget.remaining_seconds):
                     extracted = await self._extractor.extract(page)
+                document_node_id = None
+                if graph is not None:
+                    document_node_id = await graph.document(
+                        page.final_url,
+                        page.body,
+                        extracted.text,
+                        self._extractor.revision,
+                    )
                 verdict = None
                 for second_look in (False, True):
                     budget.reserve_judge()
@@ -115,9 +139,13 @@ class GoalLoop:
                 ranked = await self._scorer.score(goal, extracted, budget)
                 for link in ranked[: self._config.max_links_per_page]:
                     if link.score >= self._config.min_link_score and link.url not in visited:
+                        if graph is not None and document_node_id is not None:
+                            await graph.discovered(link.url, document_node_id)
                         heapq.heappush(frontier, (-link.score, link.url, depth + 1))
             except (ChimeraRefused, TimeoutError) as exc:
                 code = exc.code if isinstance(exc, ChimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+                if code in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}:
+                    raise
                 ledger.append(
                     LedgerRow(
                         sequence=ledger.next_sequence,
@@ -185,4 +213,5 @@ class GoalLoop:
                 effective_config=self._config,
                 judge=self._judge.model,
             ),
+            graph=graph.snapshot() if graph is not None else None,
         )

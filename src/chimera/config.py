@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from chimera.graph_types import GraphConfig
+
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 PositiveFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
@@ -102,6 +104,7 @@ class ChimeraConfig(BaseModel):
     egress_feature: Literal["crawl_egress"]
     model_policy: Literal["self_hosted_only"]
     http: HttpPolicy | None = None
+    graph: GraphConfig | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> "ChimeraConfig":

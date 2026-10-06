@@ -32,6 +32,9 @@ class Encoder(Protocol):
 
 
 class Extractor(Protocol):
+    @property
+    def revision(self) -> str: ...
+
     async def extract(self, page: Page) -> Extracted: ...
 
 

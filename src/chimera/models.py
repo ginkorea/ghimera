@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from chimera.config import ChimeraConfig, Probability
+from chimera.graph_types import GraphSnapshot
 from chimera.refusals import RefusalCode
 
 NonEmpty = Annotated[str, Field(min_length=1)]
@@ -185,6 +186,7 @@ class Harvest(Record):
     documents: tuple[Document, ...]
     ledger: tuple[LedgerRow, ...]
     receipt: Receipt
+    graph: GraphSnapshot | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> "Harvest":
@@ -202,4 +204,14 @@ class Harvest(Record):
             raise ValueError("accepted count does not match harvest")
         if any(doc.verdict.decision != "accept" for doc in self.documents):
             raise ValueError("only accepted documents belong in harvest")
+        graph_enabled = (
+            self.receipt.effective_config.graph is not None
+            and self.receipt.effective_config.graph.enabled
+        )
+        if graph_enabled != (self.graph is not None):
+            raise ValueError("enabled graph cannot be silently absent from harvest")
+        if self.graph is not None:
+            config = self.receipt.effective_config.graph
+            if config is None or self.graph.config_digest != config.content_digest():
+                raise ValueError("graph must bind the effective configuration")
         return self

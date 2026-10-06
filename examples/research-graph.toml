@@ -1,0 +1,53 @@
+# Example only: choose your owned output location and source handling explicitly.
+# Load this as the main configuration's [graph] section, or via GraphConfig.from_toml.
+schema = "chimera.graph-config/1"
+enabled = true
+profile = "research"
+profile_version = "1"
+identity_namespace = "my-research"
+projection_mode = "research"
+sink_path = "/tmp/chimera-research-graphs"
+max_batch_bytes = 2097152
+max_nodes = 10000
+max_edges = 20000
+capture_semantics = true
+semantic_min_confidence = 0.9
+source_audiences = ["owner"]
+handling_labels = ["research-run"]
+
+[[roles]]
+name = "intent"
+kind = "research_intent"
+
+[[roles]]
+name = "source"
+kind = "source"
+
+[[roles]]
+name = "document"
+kind = "content"
+
+[[roles]]
+name = "entity"
+kind = "entity"
+
+[[relations]]
+name = "discovered"
+predicate = "discovered_from"
+source_roles = ["source"]
+target_roles = ["intent", "document"]
+semantic = false
+
+[[relations]]
+name = "retrieved"
+predicate = "retrieved_from"
+source_roles = ["document"]
+target_roles = ["source"]
+semantic = false
+
+[[relations]]
+name = "mentions"
+predicate = "mentions"
+source_roles = ["document"]
+target_roles = ["entity"]
+semantic = true

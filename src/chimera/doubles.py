@@ -50,6 +50,10 @@ class FakeRoute(FetchRoute):
 
 
 class FakeExtractor:
+    @property
+    def revision(self) -> str:
+        return "offline-fixture-extractor@1"
+
     async def extract(self, page: Page) -> Extracted:
         return Extracted(
             title="fixture",

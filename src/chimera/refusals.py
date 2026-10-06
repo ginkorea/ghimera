@@ -19,6 +19,8 @@ class RefusalCode(StrEnum):
     NO_CRAWL_EGRESS = "no_crawl_egress"
     ADAPTER_CONTRACT = "adapter_contract"
     FETCH_FAILED = "fetch_failed"
+    GRAPH_CONTRACT = "graph_contract"
+    GRAPH_SINK_FAILED = "graph_sink_failed"
 
 
 REFUSALS = MappingProxyType(
@@ -36,6 +38,12 @@ REFUSALS = MappingProxyType(
         RefusalCode.NO_CRAWL_EGRESS: "No crawl_egress node; never use government-cloud egress.",
         RefusalCode.ADAPTER_CONTRACT: "Adapter violated its bounded result contract; inspect it.",
         RefusalCode.FETCH_FAILED: "Fetching failed; inspect route failure records.",
+        RefusalCode.GRAPH_CONTRACT: (
+            "Graph vocabulary, citation, version or budget refused; inspect the configured profile."
+        ),
+        RefusalCode.GRAPH_SINK_FAILED: (
+            "Graph checkpoint was not acknowledged; preserve the journal and inspect its sink."
+        ),
     }
 )
 
