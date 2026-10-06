@@ -1,6 +1,7 @@
 # Isolated browser rendering
 
 Status: standalone source candidate, not a deployed or complete C1 browser ladder.
+Measured source/wheel checks are recorded in [browser evidence](C1_BROWSER_EVIDENCE.md).
 
 `FetchLadder` composes a `PageRenderer` with the ordinary `FetchRoute` providers.
 The Patchright renderer is injected explicitly; a configured browser without
