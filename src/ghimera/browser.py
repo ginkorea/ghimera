@@ -95,6 +95,8 @@ class IsolatedBrowserRenderer:
     ) -> RenderResult:
         if (
             page.rendered is not None
+            or page.human_browser is not None
+            or page.status is None
             or not scope.permits(page.final_url)
             or page.content_type != "text/html"
             or not page.body
@@ -171,6 +173,8 @@ class IsolatedBrowserRenderer:
                 urls.add(previous.url)
                 previous_index = previous.redirected_from
             page = await resources.fetch(request.url)
+            if page.status is None or page.human_browser is not None:
+                raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             if not scope.permits(page.final_url):
                 raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
             if page.final_url != request.url:

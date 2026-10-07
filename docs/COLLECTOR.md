@@ -76,6 +76,13 @@ does not borrow source cookies, execute page scripts, solve challenges or retry
 another format. Missing result envelopes or malformed selected result links
 refuse rather than inventing hits. See [HTML search](C3_SEARCH_HTML.md).
 
+MCP discovery is supported in development source with `[search] schema =
+"ghimera.mcp-leads/1"` and an explicit `mcp_client` passed to `Collector` or
+`Collector.from_toml`. Default tool/field mappings match the `web_search` MCP
+envelope. The application owns the initialized session and credentials;
+Ghimera retains discovery provenance and fetches source URLs independently.
+See [MCP lead configuration](MCP_LEADS.md).
+
 All endpoints, thresholds, paths, language choices, timing and resource limits
 are configuration. `max_config_bytes` bounds one read before TOML parsing. The
 immutable effective configuration is available as `collector.config` and in the
@@ -90,6 +97,7 @@ other files:
 | PDF and DOCX | `[document_extraction]`; [documents](C2_DOCUMENTS.md) |
 | Owned PDF/DOCX seeds before planning (unreleased) | `[local_inputs]` and request `local_documents`; [local inputs](LOCAL_INPUTS.md) |
 | Isolated Patchright rendering | `[browser]`; [browser](C1_BROWSER.md) |
+| Same-browser human assistance (unreleased) | `[human_browser]` plus explicit `human_assistant` application port; [human browser](HUMAN_BROWSER.md) |
 | Native onion/open-web Tor routing | `[transport]`; [routing](TOR.md) |
 | Authorized source cookies/headers | `[[source_sessions]]`; [sessions](SOURCE_SESSIONS.md) |
 | Reference/citing-source expansion | `[references]`; [references](C3_REFERENCES.md) |
@@ -130,6 +138,15 @@ private model-control calls through Tor.
 `source_resolver` is an optional typed transport dependency, useful for explicit
 deployment DNS or controlled acceptance. It cannot disable the existing address,
 port, redirect or source-session validation.
+
+Unreleased `human_assistant` is a narrow application-owned interaction port, not
+a cookie import or credential-discovery route. The explicit `[human_browser]`
+recipe binds one dedicated local Chromium target. Collection after assistance
+continues in that same browser session and retains observed DOM as a distinct
+source kind through extraction, graph, private archive and completed-round
+resume. Selected browser origins never silently retry in the HTTP client's
+different session. Browser subresource traffic remains operator-managed and
+unmetered by the run; see [the boundary](HUMAN_BROWSER.md).
 
 ## Current evidence and remaining scope
 

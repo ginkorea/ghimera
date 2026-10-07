@@ -18,6 +18,10 @@ self-hosted model services, extraction policies and graph profile.
 - **Goal and intent loops.** Collect from configured seeds with `GoalLoop`, or
   use `ResearchLoop` to plan questions, discover sources through an injected
   search provider, assess gaps, and draft/review an evidence-cited answer.
+- **MCP discovery (development source).** Borrow an explicitly bound MCP
+  session to obtain source leads; default mappings support the `web_search`
+  envelope. Other tools and result paths are configurable. See
+  [MCP leads](docs/MCP_LEADS.md).
 - **Local models first.** Configured, already-served self-hosted models supply
   planning, judging, answer generation, review and embeddings. Compatible HTTP
   interfaces are supported; no external LLM fallback, model weights or model
@@ -81,6 +85,13 @@ The feature branch adds explicitly configured local challenge recovery with
 FlareSolverr or Byparr (including its Camoufox-backed 2.x wire),
 private, origin-scoped clearance and guarded content verification; this is
 not a universal CAPTCHA solver. See [challenge recovery](docs/CHALLENGES.md).
+An explicit dedicated Chromium session can also use an application-supplied
+human assistance port: finish ordinary login or a challenge in that browser,
+then continue collection in the same session. DOM acquisition remains distinct
+from HTTP responses throughout extraction, graph evidence, private archives and
+completed-round resume. Browser egress is operator-managed; verified browser
+Tor routing and real-publisher acceptance remain open. See
+[human-assisted collection](docs/HUMAN_BROWSER.md).
 It also admits hash-pinned owned PDF/DOCX seeds before intent planning through
 the same document pipeline. See [local inputs](docs/LOCAL_INPUTS.md).
 Configured [semantic extraction](docs/SEMANTIC_EXTRACTION.md) now produces

@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghimera.human_browser_types import HumanBrowserEvidence
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.transport_types import TransportEvidence
 
@@ -119,9 +120,18 @@ class GraphNode(GraphRecord):
         default=None, exclude_if=lambda value: value is None
     )
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    human_browser: HumanBrowserEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def content_bound(self) -> "GraphNode":
+        if self.human_browser is not None and (
+            self.role != "document"
+            or self.source_url != self.human_browser.final_url
+            or self.content_sha256 != self.human_browser.dom_sha256
+            or self.transport is not None
+            or self.local_input is not None
+        ):
+            raise ValueError("browser graph evidence belongs to its captured DOM document")
         if self.local_input is not None and (
             self.role != "document"
             or self.source_url != self.local_input.source_id

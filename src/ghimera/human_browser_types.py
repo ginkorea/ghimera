@@ -92,6 +92,10 @@ class HumanBrowserConfig(BaseModel):
             raise ValueError("browser attachment needs an explicit loopback WebSocket endpoint")
         if len({origin_key(item.origin) for item in self.origins}) != len(self.origins):
             raise ValueError("each eligible browser origin has one path-policy owner")
+        if self.declared_route == "direct" and any(
+            (urlsplit(item.origin).hostname or "").endswith(".onion") for item in self.origins
+        ):
+            raise ValueError("onion browser sources require Tor, never direct routing")
         if len(set(self.assistance_reasons)) != len(self.assistance_reasons):
             raise ValueError("browser assistance reasons must be unique")
         if bool(self.assistance_reasons) != bool(self.max_assistance_attempts):
@@ -144,6 +148,10 @@ class HumanAssistant(Protocol):
     async def assist(self, request: BrowserAssistanceRequest) -> AssistanceDecision: ...
 
 
+class CaptureScope(Protocol):
+    def permits(self, url: str) -> bool: ...
+
+
 class HumanBrowserEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["ghimera.human-browser-evidence/1"] = Field(alias="schema")
@@ -189,6 +197,28 @@ class HumanBrowserEvidence(BaseModel):
                 raise ValueError("successful DOM evidence requires its exact resumed assistance")
         return self
 
+    def validate_policy(self, policy: HumanBrowserConfig | None) -> None:
+        checked = HumanBrowserEvidence.model_validate(self.model_dump())
+        if policy is None or (
+            checked.policy_digest != policy.content_digest()
+            or checked.session_id != policy.session_id
+            or checked.target_id != policy.target_id
+            or checked.adapter_revision != policy.adapter_revision
+            or checked.driver_version != policy.driver_version
+            or checked.declared_route != policy.declared_route
+            or not policy.permits(checked.request_url)
+            or not policy.permits(checked.final_url)
+            or checked.dom_bytes > policy.max_dom_bytes
+            or len(checked.assistance) > policy.max_assistance_attempts
+            or any(
+                item.request.reason not in policy.assistance_reasons
+                or not policy.permits(item.request.final_url)
+                or item.request.observed_dom_bytes > policy.max_dom_bytes
+                for item in checked.assistance
+            )
+        ):
+            raise ValueError("browser evidence must bind its effective policy and scope")
+
 
 class BrowserCapture(BaseModel):
     model_config = ConfigDict(
@@ -213,29 +243,17 @@ class BrowserCapture(BaseModel):
     def validate_policy(self, policy: HumanBrowserConfig) -> None:
         # Replay does not trust model_copy or an already constructed nested model.
         checked = BrowserCapture.model_validate(self.model_dump())
-        evidence = checked.evidence
-        if (
-            evidence.policy_digest != policy.content_digest()
-            or evidence.session_id != policy.session_id
-            or evidence.target_id != policy.target_id
-            or evidence.adapter_revision != policy.adapter_revision
-            or evidence.driver_version != policy.driver_version
-            or evidence.declared_route != policy.declared_route
-            or not policy.permits(evidence.request_url)
-            or not policy.permits(evidence.final_url)
-            or len(self.dom) > policy.max_dom_bytes
-            or len(evidence.assistance) > policy.max_assistance_attempts
-            or any(
-                item.request.reason not in policy.assistance_reasons
-                or not policy.permits(item.request.final_url)
-                or item.request.observed_dom_bytes > policy.max_dom_bytes
-                for item in evidence.assistance
-            )
-        ):
-            raise ValueError("browser capture must bind its exact policy, session and URL scope")
+        checked.evidence.validate_policy(policy)
 
 
 class AuthorizedBrowserSession(Protocol):
     """Each capture detaches its own driver; it never closes a borrowed browser."""
 
-    async def capture(self, url: str) -> BrowserCapture: ...
+    async def capture(
+        self,
+        url: str,
+        *,
+        max_bytes: int | None = None,
+        timeout_seconds: float | None = None,
+        scope: CaptureScope | None = None,
+    ) -> BrowserCapture: ...

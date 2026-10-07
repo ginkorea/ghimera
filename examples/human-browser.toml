@@ -1,8 +1,9 @@
 # Non-active configuration fragment. Never attach to an ambient/first browser tab.
 # Replace endpoint and target with an explicitly selected dedicated Chromium tab.
-# The core capture adapter is implemented on the development line; Collector,
-# archive and graph composition are not wired yet. Collector refuses this recipe
-# rather than silently ignoring it. This fragment enables no browser by itself.
+# The development Collector composes this recipe through native extraction,
+# graph, archive and resume. Supply an explicit HumanAssistant application port
+# for these assistance reasons; the CLI does not create one for you.
+# This fragment launches no browser and supplies no source/model credentials.
 [human_browser]
 schema = "ghimera.human-browser/1"
 adapter = "patchright_cdp"

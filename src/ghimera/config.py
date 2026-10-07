@@ -18,6 +18,7 @@ from ghimera.graph_types import GraphConfig
 from ghimera.human_browser_types import HumanBrowserConfig
 from ghimera.journal_config import JournalConfig
 from ghimera.local_input_types import LocalInputConfig
+from ghimera.mcp_lead_config import McpLeadConfig
 from ghimera.model_config import ModelBindingsConfig
 from ghimera.reference_config import ReferenceConfig
 from ghimera.research_config import ResearchConfig
@@ -136,7 +137,9 @@ class GhimeraConfig(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     scoring: ScoringConfig | None = None
-    search: SearxConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+    search: SearxConfig | McpLeadConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     references: ReferenceConfig | None = None
     source_sessions: tuple[SourceSessionPolicy, ...] = ()
     challenges: ChallengeConfig | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -148,6 +151,13 @@ class GhimeraConfig(BaseModel):
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
+        if self.human_browser is not None and self.transport is not None:
+            if any(
+                self.transport.mode_for(urlsplit(item.origin).hostname or "")
+                != self.human_browser.declared_route
+                for item in self.human_browser.origins
+            ):
+                raise ValueError("browser declaration cannot override the configured source route")
         validate_sessions(self.source_sessions)
         if self.continuation is not None and (self.journal is None or self.research is None):
             raise ValueError("continuation requires the existing journal and research policy")

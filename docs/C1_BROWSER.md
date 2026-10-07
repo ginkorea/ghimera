@@ -130,8 +130,9 @@ lifecycle acceptance.
 
 Same-browser human-assisted Chromium capture is implemented in development
 source, with a paired DOM/provenance reader and real local-browser checks.
-Its FetchLadder/Collector, graph/archive/resume composition and real publisher
-acceptance remain open: [HUMAN_BROWSER.md](HUMAN_BROWSER.md). It must not be
+Its FetchLadder/Collector, graph/archive/resume composition is implemented in
+development source; full verification and real publisher acceptance remain
+separate: [HUMAN_BROWSER.md](HUMAN_BROWSER.md). It must not be
 mislabeled as this isolated renderer or cookie-replay acceptance.
 
 Camoufox/nodriver fallback, public Tor browser corpus acceptance,

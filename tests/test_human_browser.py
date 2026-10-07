@@ -69,6 +69,7 @@ def test_policy_is_explicit_and_its_capture_scope_is_exact():
         {"timeout_seconds": float("inf")},
         {"assistance_reasons": ["budget_exhausted"]},
         {"origins": [dict(origin="http://example.org", path_prefixes=["/"], allow_http=False)]},
+        {"origins": [dict(origin="http://example.onion", path_prefixes=["/"], allow_http=True)]},
     ],
 )
 def test_invalid_policy_refuses_before_contact(changes):
@@ -92,8 +93,23 @@ def test_recipe_boundary_preserves_legacy_and_cannot_silently_ignore_capture():
     data["human_browser"] = policy().model_dump()
     configured = GhimeraConfig.model_validate(data)
     assert GhimeraConfig.model_validate_json(configured.model_dump_json()) == configured
-    with pytest.raises(ValueError, match="not wired yet"):
+    with pytest.raises(GhimeraRefused, match="source_session_unavailable"):
         Collector(configured)
+
+
+def test_browser_cannot_override_configured_tor_source_routing():
+    from pathlib import Path
+
+    from tests.test_tor_transport import policy as tor_policy
+
+    original = GhimeraConfig.from_toml(Path("examples/chimera.toml"))
+    values = original.model_dump()
+    values.update(
+        human_browser=policy().model_dump(),
+        transport=tor_policy(9050).model_dump(),
+    )
+    with pytest.raises(ValidationError, match="browser declaration"):
+        GhimeraConfig.model_validate(values)
 
 
 @contextmanager
@@ -152,13 +168,15 @@ async def with_browser(tmp_path, origin, operation):
                 "--remote-debugging-port=0",
                 "--remote-debugging-address=127.0.0.1",
                 "--no-proxy-server",
+                "--host-resolver-rules=MAP fixture.example 127.0.0.1",
             ],
         )
         try:
-            unrelated = context.pages[0]
-            page = await context.new_page()
-            await unrelated.goto("about:blank")
+            # Chromium/Patchright may retire its startup about:blank target.
+            # Explicit owned tabs make the non-first-target assertion stable.
+            unrelated = await context.new_page()
             await unrelated.set_content("<p>Unrelated private fixture tab</p>")
+            page = await context.new_page()
             cdp = await context.new_cdp_session(page)
             target_id = (await cdp.send("Target.getTargetInfo"))["targetInfo"]["targetId"]
             await cdp.detach()

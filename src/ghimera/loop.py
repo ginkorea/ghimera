@@ -520,6 +520,7 @@ class GoalLoop:
                 self._extractor.revision,
                 transport=page.transport,
                 local_input=page.local_input,
+                human_browser=page.human_browser,
             )
         # Score native evidence before the judge. Similarity guides the frontier,
         # but never replaces a document verdict or factual source evidence.
@@ -569,6 +570,7 @@ class GoalLoop:
                 source_session=page.source_session,
                 challenge_use=page.challenge_use,
                 local_input=page.local_input,
+                human_browser=page.human_browser,
             )
             content = session._content
             matched = content.match(candidate) if content is not None else None
@@ -752,6 +754,7 @@ class GoalLoop:
                 self._extractor.revision,
                 transport=source.transport,
                 local_input=source.local_input,
+                human_browser=source.human_browser,
             )
             await graph.discovered(link.url, parent)
         return True

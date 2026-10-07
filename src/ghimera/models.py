@@ -17,6 +17,7 @@ from ghimera.extraction_attempts import HtmlExtractionAttempt, validate_chain
 from ghimera.extraction_types import ExtractionEvidence
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.graph_types import GraphSnapshot
+from ghimera.human_browser_types import AssistanceObservation, BrowserCapture, HumanBrowserEvidence
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.model_types import ModelCallEvidence
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
@@ -112,6 +113,7 @@ class FetchRequest(Record):
     max_bytes: Annotated[int, Field(strict=True, gt=0)]
     timeout_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
     headers: tuple[tuple[Literal["if-none-match", "if-modified-since"], str], ...] = ()
+    scope: Scope | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @field_validator("headers")
     @classmethod
@@ -124,7 +126,7 @@ class FetchRequest(Record):
 class Page(Record):
     url: NonEmpty
     final_url: NonEmpty
-    status: Annotated[int, Field(strict=True, ge=100, le=599)]
+    status: Annotated[int, Field(strict=True, ge=100, le=599)] | None
     content_type: NonEmpty
     body: bytes
     headers: tuple[tuple[str, str], ...] = ()
@@ -134,9 +136,34 @@ class Page(Record):
     source_session: SourceSessionUse | None = None
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    human_browser: HumanBrowserEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def rendering_binding(self) -> "Page":
+        if (self.status is None) != (self.human_browser is not None):
+            raise ValueError("only explicit browser DOM acquisition has no HTTP status")
+        if self.human_browser is not None:
+            BrowserCapture(dom=self.body, evidence=self.human_browser)
+            if (
+                self.url != self.human_browser.request_url
+                or self.final_url != self.human_browser.final_url
+                or self.content_type != self.human_browser.content_type
+                or self.headers
+                or self.revalidated
+                or any(
+                    value is not None
+                    for value in (
+                        self.transport,
+                        self.rendered,
+                        self.source_session,
+                        self.challenge_use,
+                        self.local_input,
+                    )
+                )
+            ):
+                raise ValueError(
+                    "browser DOM cannot impersonate an HTTP response or isolated render"
+                )
         if self.local_input is not None and (
             self.url != self.local_input.source_id
             or self.final_url != self.url
@@ -247,8 +274,11 @@ class DocumentSource(Record):
     source_session: SourceSessionUse | None = None
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    human_browser: HumanBrowserEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     def validate_policy(self, config: GhimeraConfig) -> None:
+        if self.human_browser is not None:
+            self.human_browser.validate_policy(config.human_browser)
         if self.local_input is not None:
             self.local_input.validate_policy(config.local_inputs)
         if self.challenge_use is not None:
@@ -287,6 +317,21 @@ class DocumentSource(Record):
 
     @model_validator(mode="after")
     def source_binding(self) -> "DocumentSource":
+        if self.human_browser is not None:
+            BrowserCapture(dom=self.raw, evidence=self.human_browser)
+            if self.human_browser.final_url != self.url or any(
+                value is not None
+                for value in (
+                    self.transport,
+                    self.rendered,
+                    self.source_session,
+                    self.challenge_use,
+                    self.local_input,
+                )
+            ):
+                raise ValueError(
+                    "browser-observed sources retain their distinct acquisition evidence"
+                )
         if self.local_input is not None and (
             self.local_input.source_id != self.url
             or self.local_input.sha256 != self.sha256
@@ -446,9 +491,46 @@ class LedgerRow(Record):
         default=None, exclude_if=lambda v: v is None
     )
     planning_graph: PlanningGraph | None = Field(default=None, exclude_if=lambda v: v is None)
+    human_browser: HumanBrowserEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    human_assistance: tuple[AssistanceObservation, ...] = Field(
+        default=(), exclude_if=lambda v: not v
+    )
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if (
+            self.route == "human_browser_dom"
+            or self.human_browser is not None
+            or self.human_assistance
+        ):
+            if (
+                self.event != "fetch"
+                or self.status is not None
+                or any(
+                    value is not None
+                    for value in (
+                        self.transport,
+                        self.rendered,
+                        self.source_session,
+                        self.challenge_use,
+                        self.local_input,
+                    )
+                )
+            ):
+                raise ValueError(
+                    "browser capture observations are not HTTP/isolated-render evidence"
+                )
+            if self.human_browser is not None and (
+                self.refusal is not None
+                or self.human_assistance
+                or self.url != self.human_browser.request_url
+                or self.bytes_read != self.human_browser.collector_dom_bytes_read
+            ):
+                raise ValueError("successful browser capture must retain its exact DOM spend")
+            if self.human_assistance and self.refusal is None:
+                raise ValueError("failed browser assistance requires its terminal refusal")
+            if self.refusal is None and self.human_browser is None:
+                raise ValueError("successful browser route cannot discard capture evidence")
         if self.event == "semantic_review":
             if (self.semantic_review is None) == (self.refusal is None):
                 raise ValueError("semantic review requires its assessment or refusal")
@@ -598,10 +680,12 @@ class Harvest(Record):
 
     @model_validator(mode="after")
     def consistent(self) -> "Harvest":
+        from ghimera.human_browser_validation import validate_harvest as validate_browser_harvest
         from ghimera.references import validate_reference_ledger
         from ghimera.scoring_validation import validate_reference_rows
 
         validate_reference_ledger(self)
+        validate_browser_harvest(self)
         inputs = tuple(row for row in self.ledger if row.event == "local_input")
         input_policy = self.receipt.effective_config.local_inputs
         if inputs and (

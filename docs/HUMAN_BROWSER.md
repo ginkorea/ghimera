@@ -1,11 +1,22 @@
 # Human-assisted, same-browser collection
 
-Status: **core same-target Chromium capture implemented in development source**;
-Collector composition, archive/graph readers and real publisher acceptance are
-not complete. This does not close the full browser/collector acceptance row.
+Status: **same-target Chromium capture and Collector composition implemented in
+development source**. Native extraction, graph/archive readers and completed-round
+resume retain its distinct DOM evidence. Full-package verification and real
+publisher acceptance are separate; this does not close the full collector row.
 The existing authorized HTTP sessions and local
 challenge gateways remain separate, working mechanisms. Their cookies are not
 silently imported into this mechanism.
+
+Combined browser/MCP development source passed the complete `scripts/gate.sh`
+on 7 October 2026 UTC: **739 passed, exit 0**, in 629.45 seconds, plus Ruff,
+formatting and strict mypy. Python 3.11.16 imported this worktree's source;
+installed Chromium 151.0.7922.34 exercised controlled loopback browser fixtures.
+This includes Collector extraction, graph/archive readback and completed-round
+resume, not real-publisher or verified Tor-browser acceptance. Test outputs were
+placed on an explicitly selected real-volume directory: available filesystem
+space alone did not reveal the user's exhausted tmpfs quota. `GHIMERA_GATE_WORK`
+now selects that gate workspace without changing production Python.
 
 The collector should be a proxy for an authorized human. A person may complete
 a site's ordinary sign-in, subscription or challenge in an explicitly selected
@@ -44,8 +55,8 @@ explicit deployment egress control and record that distinction.
 
 ## Small contracts, existing collection owner
 
-This is the target composition. The concrete capture port is implemented;
-the FetchLadder/Collector connections below remain subsequent integration work.
+The concrete capture port is composed through the existing FetchLadder and
+Collector. It does not add another research loop or storage owner.
 
 ```mermaid
 classDiagram
@@ -190,12 +201,38 @@ route remains separate. Native PDF/download capture, passive-driver alternatives
 and transport verification are still required follow-ups, not silent HTML
 substitutes.
 
-The concrete `Collector` currently refuses a recipe selecting `human_browser`
-with an explicit not-wired error. It cannot silently ignore an enabled capture
-recipe. Next work integrates the capture through FetchLadder accounting, native
-extraction and every document/ledger/graph/archive/resume reader **before**
-turning on this source kind in complete collection runs. No source or full
-collector release is claimed by this core implementation.
+## Collector composition (unreleased)
+
+`Collector(config, human_assistant=application_port)` and its `from_toml`
+equivalent accept the explicit application-owned assistance port. A configured
+assistance recipe without that port refuses before network work. A zero-assistance
+recipe can collect from an already entitled browser session. The intent command
+does not supply an interactive human port; interactive command-line assistance
+remains a separate deliverable.
+
+`HumanBrowserRoute` reuses FetchLadder's run budget, scope, concurrency and
+cadence. It is selected only for configured origins. A denied path, failed
+interaction or exhausted capture on a selected origin cannot fall back to the
+HTTP client's different session. The existing guarded HTTP route obtains robots
+policy first; the existing explicit recorded exact-host override remains
+available. This top-level decision does not claim to meter or control the
+operator-managed browser's subresource traffic.
+
+The remaining run byte/time allowance bounds each capture and human deadline.
+Discarded interstitial DOM bytes count against the same allowance. Failed and
+cancelled assistance retains its observations and measured DOM spend; callback
+exceptions do not enter the ledger. HTML extraction consumes UTF-8 observed DOM
+without labeling it as raw HTTP response bytes or isolated-renderer output.
+Documents and graph document nodes retain the exact capture identity. Graph
+identity includes that capture identity so repeated identical DOM observations
+do not collide with differing acquisition evidence.
+
+Paired Harvest/result archive readers bind document and graph metadata to the
+successful ledger capture and effective policy. Metadata stripping, invented
+HTTP statuses, changed DOM and changed session/target/policy are rejected.
+Completed-round continuation retains these captures and source bodies without
+requiring another browser navigation. These are source capabilities, not a
+published release or real-site acceptance claim.
 
 ## Bounded development evidence
 

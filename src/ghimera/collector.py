@@ -11,15 +11,21 @@ from ghimera.documents import DocumentExtractionSuite, DocumentExtractor
 from ghimera.embedding import SelfHostedEncoder
 from ghimera.embedding_types import EmbeddingReferences
 from ghimera.extraction import HtmlExtractor
-from ghimera.fetch import FetchLadder
+from ghimera.fetch import FetchLadder, FetchRoute
 from ghimera.http import CurlRoute
+from ghimera.human_browser import ChromiumHumanSession
+from ghimera.human_browser_route import HumanBrowserRoute
+from ghimera.human_browser_types import HumanAssistant
 from ghimera.loop import GoalLoop
+from ghimera.mcp_lead_config import McpLeadConfig
+from ghimera.mcp_leads import McpLeadClient, McpLeadSearch
 from ghimera.model_client import SelfHostedModels
 from ghimera.models import Goal, Harvest, Scope
 from ghimera.ports import Extractor
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research import ResearchLoop
 from ghimera.research_types import ResearchRequest, ResearchResult
+from ghimera.search import GroundedSearch
 from ghimera.searxng import SearxHtmlSearch, SearxSearch
 from ghimera.semantic_scoring import EmbeddingScorer
 from ghimera.source_sessions import SourceCredentials
@@ -44,14 +50,18 @@ class Collector:
         encoder_credential: SecretStr | None = None,
         source_credentials: Mapping[str, SourceCredentials] | None = None,
         source_resolver: Resolver | None = None,
+        human_assistant: HumanAssistant | None = None,
+        mcp_client: McpLeadClient | None = None,
     ) -> None:
         # Revalidate injected models: model_copy(update=...) can bypass guards.
         config = GhimeraConfig.model_validate(config.model_dump())
-        if config.human_browser is not None:
-            raise ValueError(
-                "human_browser capture is available through ChromiumHumanSession; "
-                "Collector composition and archive readers are not wired yet"
-            )
+        human_session = (
+            ChromiumHumanSession(config.human_browser, assistant=human_assistant)
+            if config.human_browser is not None
+            else None
+        )
+        if human_assistant is not None and config.human_browser is None:
+            raise ValueError("human assistance requires an explicit browser recipe")
         if (
             config.http is None
             or config.research is None
@@ -72,17 +82,32 @@ class Collector:
             raise ValueError(
                 "research content types require matching configured extraction adapters"
             )
+        search: GroundedSearch
+        if isinstance(config.search, McpLeadConfig):
+            if mcp_client is None:
+                raise ValueError("MCP discovery requires an explicitly bound MCP client")
+            search = McpLeadSearch(config.search, mcp_client)
+        else:
+            if mcp_client is not None:
+                raise ValueError("MCP client requires an MCP discovery recipe")
+            search_type = (
+                SearxHtmlSearch if config.search.response_format == "html" else SearxSearch
+            )
+            search = search_type(config, config.search, resolver=source_resolver)
         models = SelfHostedModels.from_config(config, credentials=model_credentials)
         encoder = SelfHostedEncoder(config.scoring.encoder, credential=encoder_credential)
         scorer = EmbeddingScorer(config.scoring, encoder, references)
         route = CurlRoute(config, resolver=source_resolver, source_credentials=source_credentials)
+        routes: tuple[FetchRoute, ...] = (route,)
+        if human_session is not None and config.human_browser is not None:
+            routes = (HumanBrowserRoute(config.human_browser, human_session), route)
         extractor: Extractor = HtmlExtractor(config)
         if config.document_extraction is not None:
             extractor = DocumentExtractionSuite(html=extractor, documents=DocumentExtractor(config))
         renderer = IsolatedBrowserRenderer(config) if config.browser is not None else None
         collection = GoalLoop(
             config=config,
-            fetcher=FetchLadder((route,), renderer=renderer),
+            fetcher=FetchLadder(routes, renderer=renderer),
             extractor=extractor,
             scorer=scorer,
             judge=models.judge,
@@ -93,11 +118,10 @@ class Collector:
             if config.semantics is not None and config.semantics.verification is not None
             else None,
         )
-        search_type = SearxHtmlSearch if config.search.response_format == "html" else SearxSearch
         research = ResearchLoop(
             config=config,
             collector=collection,
-            search=search_type(config, config.search, resolver=source_resolver),
+            search=search,
             planner=models.planner,
             analyst=models.analyst,
             reviewer=models.reviewer,
@@ -115,6 +139,8 @@ class Collector:
         encoder_credential: SecretStr | None = None,
         source_credentials: Mapping[str, SourceCredentials] | None = None,
         source_resolver: Resolver | None = None,
+        human_assistant: HumanAssistant | None = None,
+        mcp_client: McpLeadClient | None = None,
     ) -> "Collector":
         return cls(
             GhimeraConfig.from_toml(path, max_bytes=max_config_bytes),
@@ -123,6 +149,8 @@ class Collector:
             encoder_credential=encoder_credential,
             source_credentials=source_credentials,
             source_resolver=source_resolver,
+            human_assistant=human_assistant,
+            mcp_client=mcp_client,
         )
 
     @property

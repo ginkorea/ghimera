@@ -181,6 +181,8 @@ async def render(request: BrowserRequest) -> RenderResult:
                     not navigation_seen and url == page.final_url and method == "GET"
                 ):
                     navigation_seen = True
+                    if page.status is None:
+                        raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
                     await fulfill(
                         incoming.request_id, page.status, page.content_type, page.body, page.headers
                     )

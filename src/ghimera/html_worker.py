@@ -107,7 +107,11 @@ def parse(request: ExtractionRequest, events: list[LocatorEvent]) -> Extracted:
     from scrapling.parser import Selector
 
     config, page = request.config, request.page
-    actual_encoding = "utf-8" if page.rendered is not None else encoding(page, config)
+    actual_encoding = (
+        "utf-8"
+        if page.rendered is not None or page.human_browser is not None
+        else encoding(page, config)
+    )
     source = (page.rendered.html if page.rendered is not None else page.body).decode(
         actual_encoding, errors="replace"
     )

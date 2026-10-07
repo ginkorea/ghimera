@@ -8,6 +8,7 @@ unobserved HTTP response bytes or closes the caller's browser.
 import asyncio
 import base64
 import hashlib
+import math
 import time
 import uuid
 from importlib.metadata import PackageNotFoundError, version
@@ -16,16 +17,18 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ghimera.http import html_barrier
+from ghimera.human_browser_errors import HumanCaptureCancelled, HumanCaptureFailure
 from ghimera.human_browser_types import (
     AssistanceDecision,
     AssistanceObservation,
     BrowserAssistanceRequest,
     BrowserCapture,
+    CaptureScope,
     HumanAssistant,
     HumanBrowserConfig,
     HumanBrowserEvidence,
 )
-from ghimera.refusals import FetchCancelled, FetchFailure, GhimeraRefused, RefusalCode
+from ghimera.refusals import GhimeraRefused, RefusalCode
 
 if TYPE_CHECKING:
     from patchright.async_api import Browser, Page, Playwright
@@ -51,25 +54,14 @@ class DomReply(BaseModel):
     complete: bool = Field(strict=True)
 
 
-class HumanCaptureFailure(FetchFailure):
-    def __init__(
-        self, code: RefusalCode, bytes_read: int, observations: tuple[AssistanceObservation, ...]
-    ) -> None:
-        self.assistance = observations
-        super().__init__(code, bytes_read)
-
-
-class HumanCaptureCancelled(FetchCancelled):
-    def __init__(self, bytes_read: int, observations: tuple[AssistanceObservation, ...]) -> None:
-        self.assistance = observations
-        super().__init__(bytes_read)
-
-
 class CaptureWork:
     """Mutable observations belong to one capture, never to the browser/session."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_bytes: int, scope: CaptureScope | None, deadline: float) -> None:
         self.bytes_read = 0
+        self.max_bytes = max_bytes
+        self.scope = scope
+        self.deadline = deadline
         self.assistance: list[AssistanceObservation] = []
 
 
@@ -92,12 +84,29 @@ class ChromiumHumanSession:
         # One target cannot be navigated/captured by two operations simultaneously.
         self._target_lock = asyncio.Lock()
 
-    async def capture(self, url: str) -> BrowserCapture:
-        if not self.config.permits(url):
+    async def capture(
+        self,
+        url: str,
+        *,
+        max_bytes: int | None = None,
+        timeout_seconds: float | None = None,
+        scope: CaptureScope | None = None,
+    ) -> BrowserCapture:
+        if not self.config.permits(url) or (scope is not None and not scope.permits(url)):
             raise HumanCaptureFailure(RefusalCode.OUT_OF_SCOPE, 0, ())
-        work = CaptureWork()
+        maximum = self.config.max_dom_bytes * (self.config.max_assistance_attempts + 1)
+        if max_bytes is not None:
+            if type(max_bytes) is not int or max_bytes <= 0:
+                raise HumanCaptureFailure(RefusalCode.BUDGET_EXHAUSTED, 0, ())
+            maximum = min(maximum, max_bytes)
+        timeout = self.config.timeout_seconds
+        if timeout_seconds is not None:
+            if timeout_seconds <= 0 or not math.isfinite(timeout_seconds):
+                raise HumanCaptureFailure(RefusalCode.BUDGET_EXHAUSTED, 0, ())
+            timeout = min(timeout, timeout_seconds)
+        work = CaptureWork(maximum, scope, asyncio.get_running_loop().time() + timeout)
         try:
-            async with asyncio.timeout(self.config.timeout_seconds), self._target_lock:
+            async with asyncio.timeout(timeout), self._target_lock:
                 return await self._capture(url, work)
         except asyncio.CancelledError:
             raise HumanCaptureCancelled(work.bytes_read, tuple(work.assistance)) from None
@@ -198,8 +207,13 @@ class ChromiumHumanSession:
     async def _dom(
         self, page: "Page", work: CaptureWork
     ) -> tuple[bytes, str, Literal["text/html", "application/xhtml+xml"]]:
-        if not self.config.permits(page.url):
+        if not self.config.permits(page.url) or (
+            work.scope is not None and not work.scope.permits(page.url)
+        ):
             raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+        allowance = min(self.config.max_dom_bytes, work.max_bytes - work.bytes_read)
+        if allowance <= 0:
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         reply = DomReply.model_validate(
             await page.evaluate(
                 """cap => {
@@ -212,15 +226,19 @@ class ChromiumHumanSession:
                     return {url: document.URL, content_type: document.contentType,
                         dom_base64: btoa(binary), complete: bytes.length <= cap};
                 }""",
-                self.config.max_dom_bytes,
+                allowance,
                 isolated_context=True,
             )
         )
         dom = base64.b64decode(reply.dom_base64, validate=True)
         work.bytes_read += len(dom)
-        if not self.config.permits(reply.url) or page.url != reply.url:
+        if (
+            not self.config.permits(reply.url)
+            or page.url != reply.url
+            or (work.scope is not None and not work.scope.permits(reply.url))
+        ):
             raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
-        if len(dom) > self.config.max_dom_bytes:
+        if len(dom) > allowance:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if not reply.complete:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
@@ -253,6 +271,12 @@ class ChromiumHumanSession:
             reason = "paywall"
         else:
             raise GhimeraRefused(barrier)
+        timeout = min(
+            self.config.assistance_timeout_seconds,
+            work.deadline - asyncio.get_running_loop().time(),
+        )
+        if timeout <= 0:
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         if (
             reason not in self.config.assistance_reasons
             or len(work.assistance) >= self.config.max_assistance_attempts
@@ -271,10 +295,10 @@ class ChromiumHumanSession:
             reason=reason,
             observed_dom_sha256=hashlib.sha256(dom).hexdigest(),
             observed_dom_bytes=len(dom),
-            deadline_unix_seconds=time.time() + self.config.assistance_timeout_seconds,
+            deadline_unix_seconds=time.time() + timeout,
         )
         try:
-            async with asyncio.timeout(self.config.assistance_timeout_seconds):
+            async with asyncio.timeout(timeout):
                 decision = await self._assistant.assist(request)
                 decision = AssistanceDecision.model_validate(decision.model_dump())
         except TimeoutError:
