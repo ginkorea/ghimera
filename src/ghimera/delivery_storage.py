@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import TypeAdapter
 
 from ghimera.delivery_config import DeliveryOutboxConfig
-from ghimera.delivery_types import DeliveryAck, DeliveryItem, DeliveryState
+from ghimera.delivery_types import DeliveryAck, DeliveryItem, DeliveryQueueSummary, DeliveryState
 from ghimera.private_database import PrivateDatabase
 
 StateName = Literal["pending", "delivering", "acknowledged"]
@@ -256,3 +256,47 @@ class DeliveryStorage:
                 raise ValueError("only the exact acknowledged result may be pruned")
             self.private.db.execute("UPDATE items SET payload=NULL WHERE id=?", (identity,))
         return self.state(identity)
+
+    def summary(self) -> DeliveryQueueSummary:
+        self.check()
+        counts = TypeAdapter(tuple[int, int, int, int, int, int]).validate_python(
+            self.private.db.execute(
+                "SELECT COUNT(*),COALESCE(SUM(state='pending'),0),"
+                "COALESCE(SUM(state='delivering'),0),COALESCE(SUM(state='acknowledged'),0),"
+                "COALESCE(SUM(state!='acknowledged' AND attempts>=?),0),"
+                "COALESCE(SUM(length(payload)),0) FROM items",
+                (self.config.max_attempts,),
+            ).fetchone(),
+            strict=True,
+        )
+        return DeliveryQueueSummary(
+            schema="ghimera.delivery-queue/1",
+            items=counts[0],
+            pending=counts[1],
+            delivering=counts[2],
+            acknowledged=counts[3],
+            exhausted=counts[4],
+            retained_payload_bytes=counts[5],
+        )
+
+    def acknowledged_candidates(
+        self, *, limit: int, after_delivery_id: str | None
+    ) -> tuple[str, ...]:
+        """Bounded stable cursor over retained payloads; this does not authorize pruning."""
+        self.check()
+        if type(limit) is not int or not 0 < limit <= self.config.max_items:
+            raise ValueError("retention batch must fit the explicit outbox item allowance")
+        after = 0
+        if after_delivery_id is not None:
+            row = self.private.db.execute(
+                "SELECT rowid FROM items WHERE id=?", (after_delivery_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("retention cursor must name a retained outbox identity")
+            (after,) = TypeAdapter(tuple[int]).validate_python(row, strict=True)
+        rows = self.private.db.execute(
+            "SELECT id FROM items WHERE state='acknowledged' AND payload IS NOT NULL"
+            " AND rowid>? ORDER BY rowid LIMIT ?",
+            (after, limit),
+        ).fetchall()
+        return tuple(TypeAdapter(tuple[str]).validate_python(row, strict=True)[0] for row in rows)

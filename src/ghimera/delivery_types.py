@@ -86,3 +86,39 @@ class DeliveryState(Record):
         if self.status == "delivering" and self.attempts == 0:
             raise ValueError("a delivering item requires its durable admitted attempt")
         return self
+
+
+class DeliveryQueueSummary(Record):
+    """Logical queue occupancy, not filesystem free space or SQLite file size."""
+
+    schema_version: Literal["ghimera.delivery-queue/1"] = Field(alias="schema")
+    items: Annotated[int, Field(strict=True, ge=0)]
+    pending: Annotated[int, Field(strict=True, ge=0)]
+    delivering: Annotated[int, Field(strict=True, ge=0)]
+    acknowledged: Annotated[int, Field(strict=True, ge=0)]
+    exhausted: Annotated[int, Field(strict=True, ge=0)]
+    retained_payload_bytes: Annotated[int, Field(strict=True, ge=0)]
+
+    @model_validator(mode="after")
+    def counted(self) -> "DeliveryQueueSummary":
+        if (
+            self.items != self.pending + self.delivering + self.acknowledged
+            or self.exhausted > self.pending + self.delivering
+        ):
+            raise ValueError("delivery queue counts must describe the same snapshot")
+        return self
+
+
+class DeliveryWorkerStatus(Record):
+    """Per-process health; durable retries/acknowledgements remain in the outbox."""
+
+    schema_version: Literal["ghimera.delivery-worker-status/1"] = Field(alias="schema")
+    policy_sha256: Digest
+    phase: Literal["stopped", "starting", "running", "stopping", "failed"]
+    cycles: Annotated[int, Field(strict=True, ge=0)]
+    acknowledged_items: Annotated[int, Field(strict=True, ge=0)]
+    failed_attempts: Annotated[int, Field(strict=True, ge=0)]
+    pruned_items: Annotated[int, Field(strict=True, ge=0)]
+    prune_refusals: Annotated[int, Field(strict=True, ge=0)]
+    last_failure: Literal["unavailable", "refused", "uncertain", "worker_failed"] | None
+    queue: DeliveryQueueSummary | None

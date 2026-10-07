@@ -13,8 +13,13 @@ from ghimera.delivery_collector import (
     DeliveryHandoffFailure,
     QueuedCollection,
 )
-from ghimera.delivery_config import DeliveryOutboxConfig, DirectoryDeliveryConfig
+from ghimera.delivery_config import (
+    DeliveryOutboxConfig,
+    DeliveryWorkerConfig,
+    DirectoryDeliveryConfig,
+)
 from ghimera.delivery_outbox import DeliveryOutbox
+from ghimera.delivery_worker import DeliveryWorker
 from ghimera.directory_delivery import DirectoryDeliverySink
 from ghimera.human_browser import BoundPageHumanSession
 from ghimera.local_input_types import LocalDocumentSeed
@@ -50,6 +55,8 @@ __all__ = [
     "QueuedCollection",
     "DeliveryOutbox",
     "DeliveryOutboxConfig",
+    "DeliveryWorker",
+    "DeliveryWorkerConfig",
     "DirectoryDeliverySink",
     "DirectoryDeliveryConfig",
     "DeliveryHandoffFailure",

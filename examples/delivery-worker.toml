@@ -1,0 +1,8 @@
+# Inert background policy: no directories, credentials or tasks are discovered.
+# Inject the outbox and exact destination separately. Opt into pruning only
+# when you want fresh-readback-confirmed payload removal from the outbox.
+schema = "ghimera.delivery-worker/1"
+poll_seconds = 2.0
+shutdown_grace_seconds = 30.0
+retention = "keep"
+max_prunes_per_cycle = 32

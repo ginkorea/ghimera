@@ -9,7 +9,13 @@ from typing import TypeVar
 from ghimera.delivery_config import DeliveryOutboxConfig
 from ghimera.delivery_sink import DeliverySink
 from ghimera.delivery_storage import DeliveryStorage, Failure
-from ghimera.delivery_types import DeliveryAck, DeliveryItem, DeliveryState, Result
+from ghimera.delivery_types import (
+    DeliveryAck,
+    DeliveryItem,
+    DeliveryQueueSummary,
+    DeliveryState,
+    Result,
+)
 from ghimera.directory_delivery import DirectoryDeliverySink
 from ghimera.owned_worker import off_loop
 
@@ -53,6 +59,22 @@ class DeliveryOutbox:
 
     async def check_ready(self) -> None:
         await self._apply(lambda store: None)
+
+    async def check_destination(self, sink: DeliverySink) -> None:
+        self._sink_check(sink)
+        await self.check_ready()
+
+    async def summary(self) -> DeliveryQueueSummary:
+        return await self._apply(lambda store: store.summary())
+
+    async def acknowledged_candidates(
+        self, *, limit: int, after_delivery_id: str | None = None
+    ) -> tuple[str, ...]:
+        return await self._apply(
+            lambda store: store.acknowledged_candidates(
+                limit=limit, after_delivery_id=after_delivery_id
+            )
+        )
 
     async def enqueue(self, result: Result) -> DeliveryState:
         item = DeliveryItem(

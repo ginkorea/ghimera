@@ -82,8 +82,9 @@ acknowledge an already durable write without writing another copy. This is
 delivery. Clock corrections affect expiry. Retry/audit exhaustion retains the
 payload and needs an explicit operator policy increase or rotation; it never
 turns failure into success. Cancellation drains owned storage work and dispatch
-children before returning. The caller schedules the next dispatch; there is no
-hidden background retry loop.
+children before returning. The outbox alone is caller-driven. An explicitly
+owned `DeliveryWorker` can schedule subsequent dispatches without changing
+those durable retry rules.
 
 ## Retention
 
@@ -95,13 +96,102 @@ and deduplication tombstone. Enqueuing the same result does not redeliver it.
 The destination copy and separately stored evidence corpus are untouched.
 
 SQLite may reuse freed pages; pruning is not a claim of physical disk shrinkage.
-Automatic age retention, compaction/rotation, a remote storage adapter and
-unattended service lifecycle remain implementation/deployment requirements.
+Automatic age retention, compaction/rotation and a remote storage adapter remain
+implementation/deployment requirements. The development worker below adds
+explicit background lifecycle and readback-gated payload pruning, not physical
+disk shrinkage or automatic tombstone/audit rotation.
 Item count, total item bytes including acknowledgement reservations, individual
 payload/ack limits and attempt-record count prevent unbounded accepted growth;
 filesystem/journal overhead still requires operator headroom and monitoring.
 
+## Explicit background worker (development candidate)
+
+`DeliveryWorkerConfig` (`ghimera.delivery-worker/1`) owns polling cadence,
+shutdown grace, bounded pruning and `keep` versus `prune_acknowledged` policy.
+It is separate from the immutable result/outbox identities. The inactive
+[worker fragment](../examples/delivery-worker.toml) retains payloads by default.
+Construction/import does not start a task, discover credentials, create stores
+or contact a destination. An async context owns start, stop and error propagation:
+
+```python
+from ghimera import DeliveryWorker
+
+async with DeliveryWorker(worker_policy, outbox=outbox, sink=sink) as worker:
+    queued = await service.run("Find evidence answering this question")
+    # Polling discovers this and future arrivals without manual dispatch.
+    # Optionally call worker.wake() after enqueue to shorten the polling delay.
+    print(worker.status.model_dump_json())
+```
+
+Collection and delivery are independent; the context above stops its worker on
+exit, so an application should own it for the application's intended lifetime.
+Graceful stop finishes the active cycle. At the configured grace deadline it
+cancels/drains owned tasks, leaving unfinished durable claims uncertain for
+normal expiry/readback reconciliation. Cancellation of the owner also drains
+its worker before returning. Unexpected failures reach the lifecycle owner and
+set `phase=failed`; no raw exception text is stored in status.
+
+Delivery and retention run concurrently within a bounded cycle. Retention scans
+only acknowledged items with retained payloads and calls the same fresh-readback
+pruning method; there is no generic directory deletion. Its stable bounded
+cursor advances on refused readback and wraps later, so one missing destination
+copy cannot starve healthy neighbors. Pending, uncertain and retry-exhausted
+results remain retained. Worker counters are process-local observations, not a
+globally unique delivery ledger. Queue counts and retained-envelope bytes are
+a recent SQLite snapshot; they do not measure free disk space. Claims and
+exhaustion remain authoritative in the durable outbox across process restarts.
+
+The new command can own a local delivery worker independently of collection:
+
+```bash
+ghimera-delivery --config /absolute/path/delivery-command.toml --max-config-bytes 65536
+# Equivalent from an explicitly installed interpreter:
+python -m ghimera.delivery_command --config /absolute/path/delivery-command.toml --max-config-bytes 65536
+```
+
+The [complete command example](../examples/delivery-command.toml) declares both
+existing stores, their shared exact target, worker policy and status cadence.
+Create those stores explicitly with the existing library constructors first;
+this command never overwrites or silently creates them. It emits flushed JSONL
+health without source contents or credentials, handles SIGTERM/SIGINT, applies
+the shutdown grace even mid-delivery, and exits nonzero on worker failure.
+Signal ownership belongs to this standalone Linux process. Embedding callers
+use `DeliveryWorker` and their own lifecycle instead of installing its command's
+signal handlers. An external service manager can run/restart the command, but
+no operating-system service or remote destination has been deployed by these
+source changes. General collection run/status/pause/resume/cancel API and
+operation-level crash recovery remain tracked separately.
+
+`keep` is the safe example policy. `prune_acknowledged` explicitly opts into
+immediate bounded cleanup after verified destination durability; it is not an
+age-based policy. Tombstones and attempt audit are retained, so their configured
+limits still require explicit operator rotation rather than silently forgetting
+delivered identities. A local second directory is not an off-host archive.
+
 ## Verification
+
+The background-worker candidate's final delivery/command/package-boundary
+selection returned **37 passed in 15.82 seconds**, zero failures/skips, using
+Python 3.11.16 at `/tmp/chimera-c0-20261006/.venv/bin/python`, importing
+`/tmp/ghimera-unattended-delivery-20261007/src/ghimera`. It exercised actual
+SQLite stores and fresh command processes, SIGTERM both after delivery and
+during an interrupted durable write, owner cancellation/draining, restart
+readback without a duplicate, exhausted retry retention, fair pruning beside
+a missing copy, inert examples and safe diagnostics. Ruff check/format passed;
+strict mypy passed 148 source files. No source changes occurred during the run.
+
+That same interpreter/source then drove a separate actual command process over
+three retained native PDF/DOCX/inline-PDF research archives from the 0.4.3 gate.
+All three complete results reached a distinct durable destination, were read
+back exactly, and only then lost their outbox payloads. Reopening both stores
+preserved original bytes/parser/session/citation/graph records; re-enqueue did
+not redeliver. SIGTERM exited zero with `phase=stopped`, acknowledged=3,
+pruned=3, pending=0 and no retained outbox payload bytes. Records and effective
+configuration remain in the owned `ghimera-native-delivery-aktBCP` operator
+directory. These are controlled native archives, not representative publisher
+or served-model quality; no new source/model request, platform change or shared
+runtime occurred. The combined full-package gate and publication are still
+separate pending requirements for this development candidate.
 
 The initial delivery-only run returned 15 passes in 9.21 seconds, no skips,
 using Python 3.11.16 at `/tmp/chimera-c0-20261006/.venv/bin/python`, importing

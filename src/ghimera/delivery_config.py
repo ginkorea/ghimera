@@ -62,3 +62,17 @@ class DeliveryOutboxConfig(DeliveryStoreConfig):
     @property
     def identity(self) -> str:
         return hashlib.sha256(self.model_dump_json().encode()).hexdigest()
+
+
+class DeliveryWorkerConfig(Record):
+    """Background policy independent of the published store/result identities."""
+
+    schema_version: Literal["ghimera.delivery-worker/1"] = Field(alias="schema")
+    poll_seconds: Seconds
+    shutdown_grace_seconds: Seconds
+    retention: Literal["keep", "prune_acknowledged"]
+    max_prunes_per_cycle: Positive
+
+    @property
+    def identity(self) -> str:
+        return hashlib.sha256(self.model_dump_json().encode()).hexdigest()

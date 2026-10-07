@@ -1,0 +1,45 @@
+# Inactive: explicitly initialize both private stores before starting this worker.
+# Adjust paths, target revision, bounds and cadence before deployment.
+schema = "ghimera.delivery-command/1"
+status_seconds = 10.0
+
+[worker]
+schema = "ghimera.delivery-worker/1"
+poll_seconds = 2.0
+shutdown_grace_seconds = 30.0
+retention = "keep"
+max_prunes_per_cycle = 32
+
+[outbox]
+schema = "ghimera.delivery-outbox/1"
+directory = "/srv/ghimera/delivery/outbox-example"
+max_items = 10000
+max_item_bytes = 16777216
+max_total_item_bytes = 1073741824
+max_ack_bytes = 8192
+max_attempt_records = 100000
+max_attempts = 5
+max_claims_per_dispatch = 32
+dispatch_concurrency = 4
+database_timeout_seconds = 5.0
+delivery_timeout_seconds = 60.0
+claim_seconds = 120.0
+retry_delay_seconds = 30.0
+
+[outbox.target]
+schema = "ghimera.delivery-target/1"
+id = "owned_result_archive"
+revision = "replace-with-reviewed-destination-revision"
+
+[destination]
+schema = "ghimera.directory-delivery/1"
+directory = "/srv/ghimera/delivery/destination-example"
+max_items = 10000
+max_item_bytes = 16777216
+max_total_item_bytes = 1073741824
+database_timeout_seconds = 5.0
+
+[destination.target]
+schema = "ghimera.delivery-target/1"
+id = "owned_result_archive"
+revision = "replace-with-reviewed-destination-revision"

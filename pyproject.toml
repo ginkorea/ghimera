@@ -21,6 +21,7 @@ Changelog = "https://github.com/ginkorea/ghimera/blob/main/CHANGELOG.md"
 
 [project.scripts]
 ghimera = "ghimera.command:main"
+ghimera-delivery = "ghimera.delivery_command:main"
 
 [project.optional-dependencies]
 browser = ["patchright==1.63.0"]

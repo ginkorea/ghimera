@@ -173,6 +173,11 @@ is available. Destination readback precedes acknowledgement and any explicit
 local-payload pruning. The included local durable destination is not off-host
 backup; remote adapters and unattended service deployment remain open.
 
+The development source also includes a configurable `DeliveryWorker` and
+`ghimera-delivery` command for background retries, JSONL health and optional
+readback-confirmed outbox cleanup. It does not change the immutable 0.4.3
+artifacts. See [delivery lifecycle and configuration](docs/DELIVERY_OUTBOX.md).
+
 Use a dedicated virtual environment:
 
 ```bash

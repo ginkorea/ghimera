@@ -162,7 +162,13 @@ paths. It is a document-policy fragment: validate it with
 collector configuration. It is not an independent full collector config. The
 existing English and Pacific examples retain their published identities. The
 new example and its regression are development source, not part of the immutable
-0.4.3 archives; their full package gate and next publication remain separate.
+0.4.3 archives; their next publication remains separate. The complete
+`scripts/gate.sh` at `ad0341ec57dd2a5bed8c85f9d8830f3ad6dd2252` returned
+**951 passed in 866.03 seconds**, no failures or skips, using Python 3.11.16
+at `/tmp/chimera-c0-20261006/.venv/bin/python`, importing
+`/tmp/ghimera-delivery-outbox-20261007/src/ghimera`. Ruff/format, strict mypy
+and the offline lock check also passed. Source/tests/examples were frozen for
+the entire gate. This verifies package behavior, not general OCR accuracy.
 
 Reproduction records are retained under the owned
 `ghimera-043-release-R1PMMC/rapidocr-zh-Hans` and `rapidocr-zh-Hant` operator
