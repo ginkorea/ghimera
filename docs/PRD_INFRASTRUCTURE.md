@@ -151,6 +151,11 @@ those capabilities without taking ownership of source/model internals. I09 may
 run on separate hardware, and no downstream platform integration is implied by
 publishing the standalone package.
 
+Redirect work now has a typed, native-CDP request-stage guard candidate;
+see BROWSER_NAVIGATION_GUARD.md for ownership, exact chain evidence and the
+remaining FetchLadder budget/admission, capture and archive/graph integration.
+It does not close I08 or change the existing Collector's supported policies.
+
 ## Delivery and release discipline
 
 Implement and commit bounded rows with tests for their owning contracts and

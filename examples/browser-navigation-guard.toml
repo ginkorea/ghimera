@@ -1,0 +1,8 @@
+# Non-active development fragment for the explicit borrowed-page component.
+# This is NOT yet accepted as a Collector/human_browser config field.
+schema = "ghimera.browser-navigation/1"
+adapter_revision = "ghimera-chromium-navigation-guard/1"
+interception_owner = "exclusive_main_frame_during_operation"
+max_redirects = 4
+admission_timeout_seconds = 10.0
+cleanup_timeout_seconds = 3.0

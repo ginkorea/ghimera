@@ -190,8 +190,12 @@ pruned=3, pending=0 and no retained outbox payload bytes. Records and effective
 configuration remain in the owned `ghimera-native-delivery-aktBCP` operator
 directory. These are controlled native archives, not representative publisher
 or served-model quality; no new source/model request, platform change or shared
-runtime occurred. The combined full-package gate and publication are still
-separate pending requirements for this development candidate.
+runtime occurred. The frozen delivery source at `9e060f4` then passed the full
+`scripts/gate.sh`: **967 passed in 872.15 seconds**, zero failures/skips, on the
+same Python 3.11.16 interpreter and unattended-delivery checkout. Offline lock,
+Ruff check/format and strict mypy passed first. This completed gate does not
+cover later browser-navigation source changes. Independent next-version wheel
+acceptance and publication remain separate pending requirements.
 
 The initial delivery-only run returned 15 passes in 9.21 seconds, no skips,
 using Python 3.11.16 at `/tmp/chimera-c0-20261006/.venv/bin/python`, importing
