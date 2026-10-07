@@ -8,6 +8,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghimera.browser_navigation_types import BrowserNavigationConfig, BrowserNavigationEvidence
+from ghimera.browser_operation_types import BrowserOperation
 from ghimera.document_media import DocumentMime
 from ghimera.source_session_types import origin_key, path_matches, safe_path
 
@@ -135,6 +137,7 @@ class HumanBrowserConfig(BaseModel):
     cleanup_timeout_seconds: PositiveSeconds
     max_dom_bytes: Annotated[int, Field(strict=True, gt=0)]
     downloads: BrowserDownloadConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    navigation: BrowserNavigationConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def explicit_binding(self) -> "HumanBrowserConfig":
@@ -180,6 +183,8 @@ class HumanBrowserConfig(BaseModel):
             raise ValueError("download actions must stay within the selected browser scope")
         if self.downloads is not None and self.adapter != "patchright_page":
             raise ValueError("downloads require the caller-bound page connection")
+        if self.navigation is not None and self.adapter != "patchright_page":
+            raise ValueError("guarded navigation requires the caller-bound page connection")
         return self
 
     def permits(self, url: str) -> bool:
@@ -205,6 +210,9 @@ class BrowserAssistanceRequest(BaseModel):
     observed_dom_sha256: Digest
     observed_dom_bytes: Annotated[int, Field(strict=True, gt=0)]
     deadline_unix_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    navigation: BrowserNavigationEvidence | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     def content_digest(self) -> str:
         return hashlib.sha256(self.model_dump_json().encode()).hexdigest()
@@ -256,6 +264,9 @@ class HumanBrowserEvidence(BaseModel):
     dom_bytes: Annotated[int, Field(strict=True, gt=0)]
     collector_dom_bytes_read: Annotated[int, Field(strict=True, gt=0)]
     assistance: tuple[AssistanceObservation, ...]
+    navigation: BrowserNavigationEvidence | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @property
     def captured_sha256(self) -> str:
@@ -306,6 +317,9 @@ class HumanBrowserEvidence(BaseModel):
             )
         ):
             raise ValueError("browser evidence must bind its effective policy and scope")
+        validate_navigation(checked.navigation, policy, checked.request_url, checked.final_url)
+        for item in checked.assistance:
+            validate_assistance_navigation(item.request, policy)
 
 
 class BrowserCapture(BaseModel):
@@ -366,6 +380,12 @@ class BrowserDownloadEvidence(BaseModel):
     collector_file_bytes_read: Annotated[int, Field(strict=True, gt=0)]
     collector_dom_bytes_read: Annotated[int, Field(strict=True, ge=0)]
     assistance: tuple[AssistanceObservation, ...]
+    navigation: BrowserNavigationEvidence | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    landing_navigation: BrowserNavigationEvidence | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @property
     def captured_sha256(self) -> str:
@@ -428,7 +448,7 @@ class BrowserDownloadEvidence(BaseModel):
             or checked.driver_version != policy.driver_version
             or checked.declared_route != policy.declared_route
             or checked.navigation_url != action.navigation_url
-            or checked.final_url != action.source_url
+            or (checked.navigation is None and checked.final_url != action.source_url)
             or checked.content_type != action.content_type
             or not policy.permits(checked.final_url)
             or (action.selector is None) != (checked.initiator_url is None)
@@ -445,6 +465,17 @@ class BrowserDownloadEvidence(BaseModel):
             )
         ):
             raise ValueError("download evidence must bind its effective action and limits")
+        validate_navigation(checked.navigation, policy, checked.request_url, checked.final_url)
+        for item in checked.assistance:
+            validate_assistance_navigation(item.request, policy)
+        if action.selector is not None:
+            if checked.initiator_url is None:
+                raise ValueError("click downloads require their actual landing URL")
+            validate_navigation(
+                checked.landing_navigation, policy, action.navigation_url, checked.initiator_url
+            )
+        elif checked.landing_navigation is not None:
+            raise ValueError("direct navigation cannot claim a landing-page click")
 
 
 class BrowserResponseEvidence(BaseModel):
@@ -480,6 +511,9 @@ class BrowserResponseEvidence(BaseModel):
     file_sha256: Digest
     file_bytes: Annotated[int, Field(strict=True, gt=0)]
     collector_file_bytes_read: Annotated[int, Field(strict=True, gt=0)]
+    navigation: BrowserNavigationEvidence | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @property
     def captured_sha256(self) -> str:
@@ -492,8 +526,8 @@ class BrowserResponseEvidence(BaseModel):
     @model_validator(mode="after")
     def actual_response_binding(self) -> "BrowserResponseEvidence":
         if (
-            self.request_url != self.final_url
-            or self.document_url != self.request_url
+            (self.navigation is None and self.request_url != self.final_url)
+            or self.document_url != self.final_url
             or self.collector_file_bytes_read != self.file_bytes
             or (self.content_type == "application/pdf")
             != (self.media_observation == "pdf_header_at_start")
@@ -522,6 +556,45 @@ class BrowserResponseEvidence(BaseModel):
             or checked.file_bytes > policy.downloads.max_file_bytes
         ):
             raise ValueError("inline response must bind its selected session, policy and limits")
+        validate_navigation(checked.navigation, policy, checked.request_url, checked.final_url)
+
+
+def validate_navigation(
+    evidence: BrowserNavigationEvidence | None,
+    policy: HumanBrowserConfig,
+    request_url: str,
+    final_url: str,
+) -> None:
+    """Replay requires the exact chain whenever the effective policy enabled it."""
+    if evidence is None:
+        if policy.navigation is not None:
+            raise ValueError("guarded acquisition cannot omit native navigation evidence")
+        return
+    if policy.navigation is None:
+        raise ValueError("navigation evidence requires its effective policy")
+    evidence.validate_policy(policy.navigation, policy)
+    if evidence.request_url != request_url or evidence.final_url != final_url:
+        raise ValueError("native navigation must bind the captured source and final URL")
+
+
+def validate_assistance_navigation(
+    request: BrowserAssistanceRequest, policy: HumanBrowserConfig
+) -> None:
+    """An interstitial belongs to the source action or its configured landing page."""
+    action = (
+        next(
+            (item for item in policy.downloads.actions if item.source_url == request.request_url),
+            None,
+        )
+        if policy.downloads is not None
+        else None
+    )
+    root = (
+        action.navigation_url
+        if action is not None and action.selector is not None
+        else request.request_url
+    )
+    validate_navigation(request.navigation, policy, root, request.final_url)
 
 
 BrowserSourceEvidence = Annotated[
@@ -598,4 +671,5 @@ class AuthorizedBrowserSession(Protocol):
         max_bytes: int | None = None,
         timeout_seconds: float | None = None,
         scope: CaptureScope | None = None,
+        operation: BrowserOperation | None = None,
     ) -> BrowserAcquisition: ...

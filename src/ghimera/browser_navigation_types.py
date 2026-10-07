@@ -1,12 +1,20 @@
 """Bounded caller-delegated main-frame navigation, not browser-wide egress control."""
 
+from __future__ import annotations
+
 import hashlib
-from typing import Annotated, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ghimera.human_browser_types import Digest, HumanBrowserConfig, Identifier, PositiveSeconds
 from ghimera.source_session_types import origin_key, safe_path
+
+if TYPE_CHECKING:
+    from ghimera.human_browser_types import HumanBrowserConfig
+
+Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]
+PositiveSeconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 
 class BrowserNavigationConfig(BaseModel):
@@ -44,7 +52,7 @@ class BrowserNavigationHop(BaseModel):
     network_id: Identifier
 
     @model_validator(mode="after")
-    def source_url(self) -> "BrowserNavigationHop":
+    def source_url(self) -> BrowserNavigationHop:
         if origin_key(self.url) is None or safe_path(self.url) is None:
             raise ValueError("navigation hops require unambiguous HTTP(S) URLs")
         return self
@@ -64,7 +72,7 @@ class BrowserNavigationEvidence(BaseModel):
     browser_subresource_requests: None
 
     @model_validator(mode="after")
-    def continuous_chain(self) -> "BrowserNavigationEvidence":
+    def continuous_chain(self) -> BrowserNavigationEvidence:
         first = self.hops[0]
         if (
             first.url != self.request_url
@@ -86,6 +94,8 @@ class BrowserNavigationEvidence(BaseModel):
         return self
 
     def validate_policy(self, policy: BrowserNavigationConfig, browser: HumanBrowserConfig) -> None:
+        from ghimera.human_browser_types import HumanBrowserConfig
+
         checked = BrowserNavigationEvidence.model_validate(self.model_dump())
         policy = BrowserNavigationConfig.model_validate(policy.model_dump())
         browser = HumanBrowserConfig.model_validate(browser.model_dump())

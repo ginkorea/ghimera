@@ -121,6 +121,8 @@ under the owned `ghimera-043-release-R1PMMC` operator directory. It used no
 credentials, assistance or inference. A public sample is not a representative
 publisher, entitled-session or research-quality benchmark.
 
-Representative entitled publishers,
+An integrated development candidate supports admitted final-URL navigation before
+the explicit second inline GET; see [guarded collection](BROWSER_NAVIGATION_GUARD.md).
+It is not published support. Representative entitled publishers,
 onion-browser networking, pagination, cross-origin/redirected files and native
 Pacific OCR/research quality remain open in the infrastructure PRD.

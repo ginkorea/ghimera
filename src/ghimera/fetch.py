@@ -8,6 +8,8 @@ from types import MappingProxyType
 from typing import ClassVar, final
 
 from ghimera.browser import PageRenderer, ResourceFetcher
+from ghimera.browser_operation import RunBrowserAdmission, RunBrowserOutputBudget
+from ghimera.browser_operation_types import BrowserOperation
 from ghimera.budget import RunBudget
 from ghimera.challenge_types import ChallengeEvidence
 from ghimera.challenges import ChallengeCancelled, ChallengeFailure
@@ -52,8 +54,15 @@ class FetchRoute(ABC):
             raise TypeError("FetchRoute declares name, bool needs_browser, nonnegative cost")
 
     @final
-    async def execute(self, request: FetchRequest) -> Page:
-        return await self.attempt(request)
+    async def execute(
+        self, request: FetchRequest, *, operation: BrowserOperation | None = None
+    ) -> Page:
+        if operation is None:
+            return await self.attempt(request)
+        return await self.attempt_browser(request, operation)
+
+    async def attempt_browser(self, request: FetchRequest, operation: BrowserOperation) -> Page:
+        raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
 
     def validate_config(self, config: GhimeraConfig) -> None:
         """Stateless fixture routes accept config; stateful routes check their binding."""
@@ -158,8 +167,12 @@ class FetchLadder:
                     elif not self._politeness.matches(budget.config):
                         raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
                     if route.captures_browser_dom:
-                        await self._browser_permitted(url, scope, budget, ledger)
-                        page = await self._attempt(route, url, budget, ledger, scope=scope)
+                        browser = budget.config.human_browser
+                        if browser is not None and browser.navigation is not None:
+                            page = await self._guarded_browser(route, url, scope, budget, ledger)
+                        else:
+                            await self._browser_permitted(url, scope, budget, ledger)
+                            page = await self._attempt(route, url, budget, ledger, scope=scope)
                     else:
                         page = (
                             await self._hop(route, url, scope, budget, ledger)
@@ -211,6 +224,21 @@ class FetchLadder:
     async def _browser_permitted(
         self, url: str, scope: Scope, budget: RunBudget, ledger: Ledger
     ) -> None:
+        await self._browser_url_permitted(url, scope, budget, ledger)
+        selected = budget.config.human_browser
+        if selected is not None and selected.downloads is not None:
+            action = next(
+                (item for item in selected.downloads.actions if item.source_url == url), None
+            )
+            if action is not None and action.navigation_url != url:
+                await self._browser_url_permitted(action.navigation_url, scope, budget, ledger)
+
+    async def _browser_url_permitted(
+        self, url: str, scope: Scope, budget: RunBudget, ledger: Ledger
+    ) -> None:
+        selected = budget.config.human_browser
+        if not scope.permits(url) or selected is None or not selected.permits(url):
+            raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
         http_routes = tuple(
             route for route in self._routes if route.uses_http and route.handles(url)
         )
@@ -225,15 +253,22 @@ class FetchLadder:
         # Browser-owned traffic is separately declared; top-level collection
         # still honors the existing exact-host robots decision and cadence.
         await self._politeness.permits(url, robots_get, ledger)
-        selected = budget.config.human_browser
-        if selected is not None and selected.downloads is not None:
-            action = next(
-                (item for item in selected.downloads.actions if item.source_url == url), None
-            )
-            if action is not None and action.navigation_url != url:
-                if not scope.permits(action.navigation_url):
-                    raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
-                await self._politeness.permits(action.navigation_url, robots_get, ledger)
+
+    async def _guarded_browser(
+        self, route: FetchRoute, url: str, scope: Scope, budget: RunBudget, ledger: Ledger
+    ) -> Page:
+        if self._politeness is None:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+
+        async def permitted(target: str) -> None:
+            await self._browser_url_permitted(target, scope, budget, ledger)
+
+        admission = RunBrowserAdmission(budget, self._politeness, ledger, permitted)
+        operation = BrowserOperation(admission, RunBrowserOutputBudget(budget))
+        try:
+            return await self._execute(route, url, budget, ledger, (), scope, operation)
+        finally:
+            await admission.close()
 
     async def _render(
         self,
@@ -348,14 +383,17 @@ class FetchLadder:
         ledger: Ledger,
         headers: tuple[tuple[str, str], ...],
         scope: Scope | None,
+        operation: BrowserOperation | None = None,
     ) -> Page:
         policy = budget.config.http if route.uses_http else None
         maximum = policy.max_response_bytes if policy else budget.remaining_bytes
-        allowance = await budget.wait_bytes(maximum)
+        allowance = await budget.wait_bytes(maximum) if operation is None else maximum
         try:
-            budget.reserve_fetch()
+            if operation is None:
+                budget.reserve_fetch()
         except GhimeraRefused:
-            budget.release_bytes(allowance)
+            if operation is None:
+                budget.release_bytes(allowance)
             raise
         started = budget.clock()
         request = FetchRequest.model_validate(
@@ -376,7 +414,11 @@ class FetchLadder:
         try:
             try:
                 async with asyncio.timeout(request.timeout_seconds):
-                    page = await route.execute(request)
+                    page = (
+                        await route.execute(request)
+                        if operation is None
+                        else await route.execute(request, operation=operation)
+                    )
                 bytes_read = (
                     page.human_browser.collector_bytes_read
                     if page.human_browser
@@ -385,13 +427,19 @@ class FetchLadder:
                 page = Page.model_validate(page.model_dump())
                 if route.captures_browser_dom != (page.human_browser is not None):
                     raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                if operation is not None and bytes_read != operation.output.bytes_read:
+                    raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             except (GhimeraRefused, TimeoutError) as exc:
                 code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.FETCH_FAILED
                 bytes_read = max(bytes_read, exc.bytes_read if isinstance(exc, FetchFailure) else 0)
                 assistance = exc.assistance if isinstance(exc, HumanCaptureFailure) else ()
+                if operation is not None:
+                    bytes_read = operation.output.bytes_read
             except asyncio.CancelledError as exc:
                 bytes_read = exc.bytes_read if isinstance(exc, FetchCancelled) else 0
                 assistance = exc.assistance if isinstance(exc, HumanCaptureCancelled) else ()
+                if operation is not None:
+                    bytes_read = operation.output.bytes_read
                 ledger.append(
                     LedgerRow(
                         sequence=ledger.next_sequence,
@@ -407,7 +455,8 @@ class FetchLadder:
                         human_assistance=assistance,
                     )
                 )
-                budget.record_bytes(bytes_read)
+                if operation is None:
+                    budget.record_bytes(bytes_read)
                 # asyncio.timeout converts precisely CancelledError, not our subtype.
                 raise asyncio.CancelledError from None
             ledger.append(
@@ -430,14 +479,16 @@ class FetchLadder:
                     latency_seconds=max(0.0, budget.clock() - started),
                 )
             )
-            budget.record_bytes(bytes_read)
+            if operation is None:
+                budget.record_bytes(bytes_read)
             if code is not None:
                 raise GhimeraRefused(code)
             if page is None:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             return page
         finally:
-            budget.release_bytes(allowance)
+            if operation is None:
+                budget.release_bytes(allowance)
 
     async def _follow(
         self,

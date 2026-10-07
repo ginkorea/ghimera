@@ -3,6 +3,11 @@
 Status: published in 0.4.2 with a combined gate, native controlled acceptance
 and byte-equal public artifact readback; see [release acceptance](RELEASE_042.md).
 
+An integrated development candidate adds explicit before-contact redirect
+admission and final-event correlation. It is not in the published 0.4.3 package;
+see [guarded collection](BROWSER_NAVIGATION_GUARD.md) for configuration and its
+controlled acceptance, separate from representative publisher workflows.
+
 The authorized-browser port can return either a DOM snapshot or a document
 download. Both go through the existing FetchLadder, document extraction,
 relevance, native evidence graph, journal and result archive. There is no second

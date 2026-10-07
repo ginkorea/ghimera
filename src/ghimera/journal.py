@@ -29,7 +29,7 @@ from ghimera.journal_types import (
     canonical,
     digest,
 )
-from ghimera.models import Goal, Harvest, LedgerRow, ModelIdentity
+from ghimera.models import Goal, Harvest, LedgerRow, ModelIdentity, count_fetch_attempts
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
 
@@ -358,7 +358,7 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
                 or summary.ledger_rows != len(rows)
                 or receipt.effective_config != header.config
                 or receipt.judge != header.judge
-                or receipt.fetches != sum(row.event in {"fetch", "challenge"} for row in rows)
+                or receipt.fetches != count_fetch_attempts(header.config, tuple(rows))
                 or receipt.bytes_read != sum(row.bytes_read for row in rows)
                 or receipt.encoding_calls != len(encoding)
                 or receipt.encoding_chars != sum(call.input_chars for call in encoding)

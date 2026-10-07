@@ -12,11 +12,17 @@ import math
 import time
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Literal, Protocol, final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from ghimera.browser_download_stream import DownloadSpend
+from ghimera.browser_navigation import BrowserNavigationGuard
+from ghimera.browser_navigation_types import BrowserNavigationEvidence
+from ghimera.browser_operation_types import BrowserOperation
 from ghimera.http import html_barrier
 from ghimera.human_browser_errors import HumanCaptureCancelled, HumanCaptureFailure
 from ghimera.human_browser_types import (
@@ -79,12 +85,32 @@ class ObservedBrowser(BaseModel):
 class CaptureWork:
     """Mutable observations belong to one capture, never to the browser/session."""
 
-    def __init__(self, max_bytes: int, scope: CaptureScope | None, deadline: float) -> None:
+    def __init__(
+        self,
+        max_bytes: int,
+        scope: CaptureScope | None,
+        deadline: float,
+        operation: BrowserOperation | None = None,
+    ) -> None:
         self.bytes_read = 0
+        self.capture_id = uuid.uuid4().hex
         self.max_bytes = max_bytes
         self.scope = scope
         self.deadline = deadline
         self.assistance: list[AssistanceObservation] = []
+        self.operation = operation
+
+    @asynccontextmanager
+    async def reading(self, maximum: int) -> AsyncIterator[DownloadSpend]:
+        if self.operation is None:
+            yield self
+            return
+        maximum = min(maximum, self.max_bytes - self.bytes_read)
+        async with self.operation.output.reading(maximum) as spend:
+            try:
+                yield spend
+            finally:
+                self.bytes_read += spend.bytes_read
 
 
 class HumanBrowserSession(ABC):
@@ -126,7 +152,12 @@ class HumanBrowserSession(ABC):
         max_bytes: int | None = None,
         timeout_seconds: float | None = None,
         scope: CaptureScope | None = None,
+        operation: BrowserOperation | None = None,
     ) -> BrowserAcquisition:
+        if (self.config.navigation is not None) != (operation is not None) or (
+            self.config.navigation is not None and scope is None
+        ):
+            raise HumanCaptureFailure(RefusalCode.ADAPTER_CONTRACT, 0, ())
         if not self.config.permits(url) or (scope is not None and not scope.permits(url)):
             raise HumanCaptureFailure(RefusalCode.OUT_OF_SCOPE, 0, ())
         maximum = self.config.max_dom_bytes * (self.config.max_assistance_attempts + 1)
@@ -141,7 +172,7 @@ class HumanBrowserSession(ABC):
             if timeout_seconds <= 0 or not math.isfinite(timeout_seconds):
                 raise HumanCaptureFailure(RefusalCode.BUDGET_EXHAUSTED, 0, ())
             timeout = min(timeout, timeout_seconds)
-        work = CaptureWork(maximum, scope, asyncio.get_running_loop().time() + timeout)
+        work = CaptureWork(maximum, scope, asyncio.get_running_loop().time() + timeout, operation)
         try:
             async with asyncio.timeout(timeout), self._target_lock:
                 return await self._capture(url, work)
@@ -195,10 +226,36 @@ class HumanBrowserSession(ABC):
             return await self._download(browser, page, url, action, work)
         if self.config.downloads is not None and self.config.downloads.navigation_content_types:
             return await self._download(browser, page, url, None, work)
-        await page.goto(
-            url, wait_until="domcontentloaded", timeout=self.config.timeout_seconds * 1000
-        )
-        return await self._capture_dom(browser, page, url, work)
+        async with self._navigation(page, url, work) as guard:
+            await page.goto(
+                url, wait_until="domcontentloaded", timeout=self.config.timeout_seconds * 1000
+            )
+            return await self._capture_dom(browser, page, url, work, guard)
+
+    @asynccontextmanager
+    async def _navigation(
+        self, page: "Page", url: str, work: CaptureWork
+    ) -> AsyncIterator[BrowserNavigationGuard | None]:
+        from patchright.async_api import Error
+
+        if self.config.navigation is None:
+            yield None
+            return
+        if work.operation is None or work.scope is None:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        async with BrowserNavigationGuard(
+            self.config.navigation,
+            browser_policy=self.config,
+            page=page,
+            request_url=url,
+            scope=work.scope,
+            admission=work.operation.admission,
+        ) as guard:
+            try:
+                yield guard
+            except Error:
+                guard.check()
+                raise
 
     async def _capture_dom(
         self,
@@ -206,42 +263,81 @@ class HumanBrowserSession(ABC):
         page: "Page",
         url: str,
         work: CaptureWork,
+        guard: BrowserNavigationGuard | None = None,
     ) -> BrowserCapture:
-        capture_id = uuid.uuid4().hex
-        while True:
-            dom, final_url, content_type = await self._dom(page, work)
-            barrier = html_barrier(content_type, dom)
-            if barrier is None:
-                result = BrowserCapture(
-                    dom=dom,
-                    evidence=HumanBrowserEvidence(
-                        schema="ghimera.human-browser-evidence/1",
-                        acquisition="browser_dom",
-                        capture_id=capture_id,
-                        request_url=url,
-                        final_url=final_url,
-                        session_id=self.config.session_id,
-                        target_id=self.config.target_id,
-                        policy_digest=self.config.content_digest(),
-                        adapter_revision=self.config.adapter_revision,
-                        driver_version=self.config.driver_version,
-                        browser_version=browser.version,
-                        lifecycle=self.config.lifecycle,
-                        network_boundary=self.config.network_boundary,
-                        declared_route="direct",
-                        route_verification="operator_declaration_only",
-                        browser_subresource_bytes=None,
-                        browser_subresource_requests=None,
-                        content_type=content_type,
-                        dom_sha256=hashlib.sha256(dom).hexdigest(),
-                        dom_bytes=len(dom),
-                        collector_dom_bytes_read=work.bytes_read,
-                        assistance=tuple(work.assistance),
-                    ),
+        dom, final_url, content_type, navigation = await self._assisted_dom(
+            page, url, work, guard, navigation_root=url
+        )
+        result = BrowserCapture(
+            dom=dom,
+            evidence=HumanBrowserEvidence(
+                schema="ghimera.human-browser-evidence/1",
+                acquisition="browser_dom",
+                capture_id=work.capture_id,
+                request_url=url,
+                final_url=final_url,
+                session_id=self.config.session_id,
+                target_id=self.config.target_id,
+                policy_digest=self.config.content_digest(),
+                adapter_revision=self.config.adapter_revision,
+                driver_version=self.config.driver_version,
+                browser_version=browser.version,
+                lifecycle=self.config.lifecycle,
+                network_boundary=self.config.network_boundary,
+                declared_route="direct",
+                route_verification="operator_declaration_only",
+                browser_subresource_bytes=None,
+                browser_subresource_requests=None,
+                content_type=content_type,
+                dom_sha256=hashlib.sha256(dom).hexdigest(),
+                dom_bytes=len(dom),
+                collector_dom_bytes_read=work.bytes_read,
+                assistance=tuple(work.assistance),
+                navigation=navigation,
+            ),
+        )
+        result.validate_policy(self.config)
+        return result
+
+    async def _assisted_dom(
+        self,
+        page: "Page",
+        request_url: str,
+        work: CaptureWork,
+        guard: BrowserNavigationGuard | None,
+        *,
+        navigation_root: str,
+    ) -> tuple[
+        bytes, str, Literal["text/html", "application/xhtml+xml"], BrowserNavigationEvidence | None
+    ]:
+        async with AsyncExitStack() as owned:
+            while True:
+                dom, final_url, content_type = await self._dom(page, work)
+                navigation = await guard.settled_evidence(final_url) if guard is not None else None
+                barrier = html_barrier(content_type, dom)
+                if barrier is None:
+                    return dom, final_url, content_type, navigation
+                if guard is not None:
+                    await guard.release_for_assistance()
+                    if work.operation is None:
+                        raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                    await work.operation.admission.yield_to_human()
+                await self._assist(
+                    request_url, final_url, work.capture_id, barrier, dom, work, navigation
                 )
-                result.validate_policy(self.config)
-                return result
-            await self._assist(url, final_url, capture_id, barrier, dom, work)
+                if guard is not None:
+                    # The human owns challenge/login actions. Re-admit a fresh
+                    # collector navigation afterward, never attest to unknown
+                    # human/browser traffic with the previous native chain.
+                    guard = await owned.enter_async_context(
+                        self._navigation(page, navigation_root, work)
+                    )
+                    try:
+                        await page.goto(navigation_root, wait_until="domcontentloaded")
+                    except Exception:
+                        if guard is not None:
+                            guard.check()
+                        raise
 
     async def _download(
         self,
@@ -251,10 +347,6 @@ class HumanBrowserSession(ABC):
         action: BrowserDownloadAction | None,
         work: CaptureWork,
     ) -> BrowserAcquisition:
-        from patchright.async_api import Error
-
-        from ghimera.browser_download_stream import admit_download_media, read_download
-
         policy = self.config.downloads
         navigation_url = action.navigation_url if action is not None else url
         selector = action.selector if action is not None else None
@@ -262,22 +354,59 @@ class HumanBrowserSession(ABC):
             raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
         if action is None and not policy.navigation_content_types:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-        capture_id = uuid.uuid4().hex
+        capture_id = work.capture_id
         initiator_url: str | None = None
+        landing_navigation: BrowserNavigationEvidence | None = None
         if selector is not None:
-            await page.goto(navigation_url, wait_until="domcontentloaded")
-            while True:
-                dom, final_url, dom_content_type = await self._dom(page, work)
-                if (barrier := html_barrier(dom_content_type, dom)) is None:
-                    initiator_url = final_url
-                    break
-                await self._assist(url, final_url, capture_id, barrier, dom, work)
+            async with self._navigation(page, navigation_url, work) as landing:
+                await page.goto(navigation_url, wait_until="domcontentloaded")
+                _, initiator_url, _, landing_navigation = await self._assisted_dom(
+                    page, url, work, landing, navigation_root=navigation_url
+                )
+        async with self._navigation(page, url, work) as guard:
+            return await self._download_file(
+                browser,
+                page,
+                url,
+                action,
+                work,
+                guard,
+                capture_id=capture_id,
+                navigation_url=navigation_url,
+                initiator_url=initiator_url,
+                landing_navigation=landing_navigation,
+            )
+
+    async def _download_file(
+        self,
+        browser: BrowserIdentity,
+        page: "Page",
+        url: str,
+        action: BrowserDownloadAction | None,
+        work: CaptureWork,
+        guard: BrowserNavigationGuard | None,
+        *,
+        capture_id: str,
+        navigation_url: str,
+        initiator_url: str | None,
+        landing_navigation: BrowserNavigationEvidence | None,
+    ) -> BrowserAcquisition:
+        from patchright.async_api import Error
+
+        from ghimera.browser_download_stream import admit_download_media, read_download
+
+        policy = self.config.downloads
+        if policy is None:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        selector = action.selector if action is not None else None
         download: Download | None = None
         owned_downloads: list[Download] = []
         ready: asyncio.Future[Download] = asyncio.get_running_loop().create_future()
 
         def observed(item: "Download") -> None:
-            if item.page == page and item.url == url:
+            if item.page == page and (
+                guard.matches(item.url) if guard is not None else item.url == url
+            ):
                 owned_downloads.append(item)
                 if not ready.done():
                     ready.set_result(item)
@@ -315,26 +444,37 @@ class HumanBrowserSession(ABC):
                     if inline is not None and header.split(";", 1)[0].strip().lower() in (
                         inline.content_types
                     ):
-                        if response is None or response.status != 200 or response.url != url:
+                        if (
+                            response is None
+                            or response.status != 200
+                            or (guard is None and response.url != url)
+                        ):
                             raise GhimeraRefused(RefusalCode.FETCH_FAILED)
-                        return await self._inline_response(browser, page, url, header, work)
+                        chain = (
+                            await guard.settled_evidence(response.url)
+                            if guard is not None
+                            else None
+                        )
+                        return await self._inline_response(browser, page, url, header, work, chain)
                     # Ordinary HTML follows its unchanged same-session DOM path:
                     # no timeout waiting for a nonexistent download and no refetch.
-                    return await self._capture_dom(browser, page, url, work)
+                    return await self._capture_dom(browser, page, url, work, guard)
             download = await ready
+            navigation = await guard.settled_evidence(download.url) if guard is not None else None
             if (
                 download.page != page
                 or not self.config.permits(download.url)
                 or (work.scope is not None and not work.scope.permits(download.url))
             ):
                 raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
-            body = await read_download(
-                download,
-                max_file_bytes=policy.max_file_bytes,
-                chunk_bytes=policy.read_chunk_bytes,
-                spend=work,
-                cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
-            )
+            async with work.reading(policy.max_file_bytes + 1) as spend:
+                body = await read_download(
+                    download,
+                    max_file_bytes=policy.max_file_bytes,
+                    chunk_bytes=policy.read_chunk_bytes,
+                    spend=spend,
+                    cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
+                )
             content_type, media_observation = admit_download_media(
                 body,
                 (action.content_type,) if action is not None else policy.navigation_content_types,
@@ -368,6 +508,8 @@ class HumanBrowserSession(ABC):
                 collector_file_bytes_read=work.bytes_read - dom_spend,
                 collector_dom_bytes_read=dom_spend,
                 assistance=tuple(work.assistance),
+                navigation=navigation,
+                landing_navigation=landing_navigation,
             )
             result = BrowserDownloadCapture(body=body, evidence=evidence)
             result.validate_policy(self.config)
@@ -401,27 +543,32 @@ class HumanBrowserSession(ABC):
         url: str,
         navigation_header: str,
         work: CaptureWork,
+        navigation: BrowserNavigationEvidence | None = None,
     ) -> BrowserResponseCapture:
         from ghimera.browser_inline_stream import read_inline
 
         policy = self.config.downloads
         if policy is None or policy.inline is None:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        final_url = navigation.final_url if navigation is not None else url
         if (
-            page.url != url
-            or not self.config.permits(url)
-            or (work.scope is not None and not work.scope.permits(url))
+            page.url != final_url
+            or not self.config.permits(final_url)
+            or (work.scope is not None and not work.scope.permits(final_url))
         ):
             raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
-        read = await read_inline(
-            page,
-            url,
-            formats=policy.inline.content_types,
-            max_file_bytes=policy.max_file_bytes,
-            spend=work,
-            timeout_seconds=work.deadline - asyncio.get_running_loop().time(),
-            cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
-        )
+        if work.operation is not None:
+            await work.operation.admission.admit_inline(final_url)
+        async with work.reading(policy.max_file_bytes + 1) as spend:
+            read = await read_inline(
+                page,
+                final_url,
+                formats=policy.inline.content_types,
+                max_file_bytes=policy.max_file_bytes,
+                spend=spend,
+                timeout_seconds=work.deadline - asyncio.get_running_loop().time(),
+                cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
+            )
         evidence = BrowserResponseEvidence(
             schema="ghimera.browser-response-evidence/1",
             acquisition="browser_response",
@@ -452,6 +599,7 @@ class HumanBrowserSession(ABC):
             file_sha256=hashlib.sha256(read.body).hexdigest(),
             file_bytes=len(read.body),
             collector_file_bytes_read=len(read.body),
+            navigation=navigation,
         )
         capture = BrowserResponseCapture(body=read.body, evidence=evidence)
         capture.validate_policy(self.config)
@@ -489,11 +637,17 @@ class HumanBrowserSession(ABC):
     async def _dom(
         self, page: "Page", work: CaptureWork
     ) -> tuple[bytes, str, Literal["text/html", "application/xhtml+xml"]]:
+        async with work.reading(self.config.max_dom_bytes) as spend:
+            return await self._dom_read(page, work, spend)
+
+    async def _dom_read(
+        self, page: "Page", work: CaptureWork, spend: DownloadSpend
+    ) -> tuple[bytes, str, Literal["text/html", "application/xhtml+xml"]]:
         if not self.config.permits(page.url) or (
             work.scope is not None and not work.scope.permits(page.url)
         ):
             raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
-        allowance = min(self.config.max_dom_bytes, work.max_bytes - work.bytes_read)
+        allowance = min(self.config.max_dom_bytes, spend.max_bytes - spend.bytes_read)
         if allowance <= 0:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         reply = DomReply.model_validate(
@@ -513,7 +667,7 @@ class HumanBrowserSession(ABC):
             )
         )
         dom = base64.b64decode(reply.dom_base64, validate=True)
-        work.bytes_read += len(dom)
+        spend.bytes_read += len(dom)
         if (
             not self.config.permits(reply.url)
             or page.url != reply.url
@@ -543,6 +697,7 @@ class HumanBrowserSession(ABC):
         barrier: RefusalCode,
         dom: bytes,
         work: CaptureWork,
+        navigation: BrowserNavigationEvidence | None = None,
     ) -> None:
         reason: Literal["challenge_not_solved", "login_wall", "paywall"]
         if barrier == RefusalCode.CHALLENGE_NOT_SOLVED:
@@ -578,6 +733,7 @@ class HumanBrowserSession(ABC):
             observed_dom_sha256=hashlib.sha256(dom).hexdigest(),
             observed_dom_bytes=len(dom),
             deadline_unix_seconds=time.time() + timeout,
+            navigation=navigation,
         )
         try:
             async with asyncio.timeout(timeout):

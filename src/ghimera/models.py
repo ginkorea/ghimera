@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ghimera.browser_operation_types import BrowserSourceAction
 from ghimera.browser_types import RenderResult
 from ghimera.challenge_types import ChallengeEvidence
 from ghimera.config import GhimeraConfig, Probability
@@ -550,9 +551,21 @@ class LedgerRow(Record):
     human_assistance: tuple[AssistanceObservation, ...] = Field(
         default=(), exclude_if=lambda v: not v
     )
+    browser_action: BrowserSourceAction | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if self.browser_action is not None and (
+            self.event != "policy"
+            or self.url != self.browser_action.url
+            or self.route is not None
+            or self.status is not None
+            or self.bytes_read != 0
+            or self.human_browser is not None
+            or self.refusal is not None
+            or self.reason != "browser_source_action_reserved"
+        ):
+            raise ValueError("browser action is a known budget reservation, not an HTTP result")
         if (
             self.route == "human_browser_dom"
             or self.human_browser is not None
@@ -708,6 +721,18 @@ class LedgerRow(Record):
         return self
 
 
+def count_fetch_attempts(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> int:
+    """Guarded capture is an aggregate observation; its known actions own spend."""
+    browser = config.human_browser
+    guarded = browser is not None and browser.navigation is not None
+    return sum(
+        row.browser_action is not None
+        or row.event == "challenge"
+        or (row.event == "fetch" and not (guarded and row.route == "human_browser_dom"))
+        for row in rows
+    )
+
+
 class Receipt(Record):
     fetches: NonNegative
     bytes_read: NonNegative
@@ -828,7 +853,7 @@ class Harvest(Record):
         if tuple(row.sequence for row in self.ledger) != tuple(range(len(self.ledger))):
             raise ValueError("ledger sequence must be contiguous")
         validate_reference_rows(self.receipt.effective_config, self.goal.text, self.ledger)
-        if self.receipt.fetches != sum(row.event in {"fetch", "challenge"} for row in self.ledger):
+        if self.receipt.fetches != count_fetch_attempts(self.receipt.effective_config, self.ledger):
             raise ValueError("fetch count does not match ledger")
         challenge_rows = tuple(row for row in self.ledger if row.event == "challenge")
         challenge_policy = self.receipt.effective_config.challenges

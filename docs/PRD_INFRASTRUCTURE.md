@@ -151,10 +151,13 @@ those capabilities without taking ownership of source/model internals. I09 may
 run on separate hardware, and no downstream platform integration is implied by
 publishing the standalone package.
 
-Redirect work now has a typed, native-CDP request-stage guard candidate;
-see BROWSER_NAVIGATION_GUARD.md for ownership, exact chain evidence and the
-remaining FetchLadder budget/admission, capture and archive/graph integration.
-It does not close I08 or change the existing Collector's supported policies.
+Redirect work is now an integrated development candidate: the full Collector
+accepts explicit human_browser.navigation on its caller-bound Page, reuses the
+run's robots/cadence/budgets, and retains native source-chain evidence through
+documents, graph, journal and archives. Controlled native/importer acceptance
+passed 166 tests; see BROWSER_NAVIGATION_GUARD.md for exact environment and scope.
+The combined gate, installed-package and representative publisher/Tor acceptance
+remain required. This is not published support or full I08 closure.
 
 ## Delivery and release discipline
 

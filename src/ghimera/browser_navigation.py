@@ -214,9 +214,9 @@ class BrowserNavigationGuard:
                     return
                 if not self._browser_policy.permits(hop.url) or not self._scope.permits(hop.url):
                     raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+                self._hops.append(hop)
                 await session.send("Fetch.continueRequest", {"requestId": event.request_id})
                 self._pending.discard(event.request_id)
-                self._hops.append(hop)
             except GhimeraRefused as exc:
                 self._failure = self._failure or exc.code
                 await self._fail(event.request_id)
@@ -252,6 +252,30 @@ class BrowserNavigationGuard:
     def check(self) -> None:
         if self._failure is not None:
             raise GhimeraRefused(self._failure)
+
+    def matches(self, final_url: str) -> bool:
+        """Correlate a same-page download while continueRequest's reply is in flight."""
+        return (
+            self._failure is None
+            and not self._closing
+            and bool(self._hops)
+            and self._hops[-1].url == final_url
+        )
+
+    async def settled_evidence(self, final_url: str) -> BrowserNavigationEvidence:
+        # The network/download event can arrive before continueRequest replies.
+        # Its chain is already admitted, but replay waits for that reply to settle.
+        async with self._lock:
+            return self.evidence(final_url)
+
+    async def release_for_assistance(self) -> None:
+        """Yield navigation to the caller, not to an automated challenge solver.
+
+        Subsequent collector work requires a NEW guard and admitted navigation;
+        this closed chain cannot attest to the human's browser-wide traffic.
+        """
+        self.check()
+        await self._close()
 
     def evidence(self, final_url: str) -> BrowserNavigationEvidence:
         self.check()

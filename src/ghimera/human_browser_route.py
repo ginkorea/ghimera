@@ -1,5 +1,6 @@
 """A browser-DOM FetchRoute, sharing the ladder's ordering/accounting owner."""
 
+from ghimera.browser_operation_types import BrowserOperation
 from ghimera.config import GhimeraConfig
 from ghimera.fetch import FetchRoute
 from ghimera.http import html_barrier
@@ -29,14 +30,29 @@ class HumanBrowserRoute(FetchRoute):
         return any(origin_key(url) == origin_key(item.origin) for item in self._config.origins)
 
     async def attempt(self, request: FetchRequest) -> Page:
+        return await self._capture(request, None)
+
+    async def attempt_browser(self, request: FetchRequest, operation: BrowserOperation) -> Page:
+        return await self._capture(request, operation)
+
+    async def _capture(self, request: FetchRequest, operation: BrowserOperation | None) -> Page:
         if request.headers or request.scope is None:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-        capture = await self._session.capture(
-            request.url,
-            max_bytes=request.max_bytes,
-            timeout_seconds=request.timeout_seconds,
-            scope=request.scope,
-        )
+        if operation is None:
+            capture = await self._session.capture(
+                request.url,
+                max_bytes=request.max_bytes,
+                timeout_seconds=request.timeout_seconds,
+                scope=request.scope,
+            )
+        else:
+            capture = await self._session.capture(
+                request.url,
+                max_bytes=request.max_bytes,
+                timeout_seconds=request.timeout_seconds,
+                scope=request.scope,
+                operation=operation,
+            )
         capture.validate_policy(self._config)
         return Page(
             url=request.url,

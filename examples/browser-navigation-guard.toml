@@ -1,5 +1,7 @@
-# Non-active development fragment for the explicit borrowed-page component.
-# This is NOT yet accepted as a Collector/human_browser config field.
+# Merge into a complete human_browser recipe using adapter="patchright_page".
+# Inject the application-owned Page session into Collector; this is not a CLI
+# browser launcher, profile importer or proof of browser-wide routing.
+[human_browser.navigation]
 schema = "ghimera.browser-navigation/1"
 adapter_revision = "ghimera-chromium-navigation-guard/1"
 interception_owner = "exclusive_main_frame_during_operation"

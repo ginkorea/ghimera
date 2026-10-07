@@ -1,4 +1,4 @@
-# Caller-session redirect guard (development candidate)
+# Caller-session redirects (integrated development candidate)
 
 The existing native download observer compares the download URL with the
 frontier request. Chromium reports a redirected attachment's final URL instead,
@@ -6,10 +6,13 @@ so that observer misses the file. Inline PDFs also navigate to their final URL,
 which the current exact-original inline binding rejects. Loosening that binding
 after navigation would contact an unadmitted redirect before detecting it.
 
-`BrowserNavigationGuard` is the new request-stage primitive for closing that
-gap. It is not yet wired into `Collector`, `HumanBrowserRoute` or archive/graph
-provenance; redirected-file support remains open until that integration passes.
-No additional Collector config is accepted and silently ignored.
+The full `Collector` now consumes an explicit `human_browser.navigation` policy
+through its existing FetchLadder and caller-bound Page session. Redirected HTML,
+PDF/DOCX attachments, inline originals and mapped download landing pages retain
+their native before-contact chain through extraction, citations, graph, journal
+and archive readback. This is an integrated development candidate, not published
+support. Representative publisher, Tor-browser and model-quality acceptance remain
+separate requirements.
 
 ## Ownership and configuration
 
@@ -22,9 +25,12 @@ default permission, credential discovery, profile import or new HTTP client.
 
 `BrowserNavigationConfig` (`ghimera.browser-navigation/1`) owns maximum redirects,
 finite per-hop admission timeout, cleanup timeout and the explicit interception
-ownership declaration. `examples/browser-navigation-guard.toml` is a non-active
-component fragment, not a newly supported Collector field. The existing browser
-recipe/identity is unchanged. Competing interception owners cannot be discovered
+ownership declaration. Merge `examples/browser-navigation-guard.toml` into a
+complete `human_browser` recipe. It is an actual `[human_browser.navigation]`
+table. Use `adapter = "patchright_page"` and inject the application-owned Page
+through `BoundPageHumanSession` into Collector. CDP attachment mode rejects this
+policy instead of ignoring it. Omission preserves the published recipe/evidence
+serialized identities. Competing interception owners cannot be discovered
 through CDP, so callers must actually delegate exclusive control; this is not a
 claim that a declaration proves global browser ownership.
 
@@ -61,39 +67,72 @@ bounded separately from admission; the guard is single-use.
 `ghimera.browser-navigation-evidence/1` records only native URLs, request-chain
 IDs, target, digests and before-contact admission. It does not invent HTTP
 status/headers, retained file bytes, a completed download or robots results.
-It is not yet embedded into the current source evidence. Replay rejects a
+It is embedded into capture, document, graph, journal and archive evidence.
+Replay rejects a
 stripped/discontinuous chain, loops, changed final URL, changed effective policy
 or browser scope, and a redirect count beyond the configured bound.
 
-## Remaining integration (not optional for closure)
+## Run-owned integration and human continuation
 
-1. Give the existing FetchLadder a typed per-operation admission port. Reuse its
-   robots/cadence owner and actual page/time/byte spend. Do not add another
-   permission cache or callback to serialized FetchRequest records.
-2. Resolve reentrant budgeting before wiring the port: the present `_execute`
-   reserves browser output bytes before capture. A redirect needing a fresh
-   robots request cannot wait for the reservation held by that same capture.
-   Preserve concurrent byte safety without silently waiving robots or budgets.
-   Likewise, do not nest a redirect's host slot inside the held original host's
-   global slot; the run must transfer/release owned admission correctly.
-3. Integrate navigation, mapped clicks/landing pages, inline final-URL fetch and
-   download event correlation using the observed native chain, not an arbitrary
-   final-URL match. Preserve actual bounded document bytes and assistance spend.
-4. Carry/replay the chain through source documents, graph, journal and archives.
-   Old omitted policy/evidence must preserve their published serialized identity.
-5. Prove the full collector path over controlled native redirected PDF/DOCX/HTML,
-   denied cross-origin hops, budget/cancellation, and representative publisher
-   workflows. A primitive test is not end-to-end or publisher acceptance.
+FetchLadder supplies ephemeral typed `BrowserOperation` ports, never callbacks or
+credentials in serialized FetchRequest. Admission reuses the run's existing
+robots, cadence, request and byte-budget owners. Release the previous host/global
+slot before fetching fresh robots policy or acquiring the next slot. Reserve
+output bytes only during actual bounded DOM/file reads, not while awaiting
+redirect admission. This prevents reentrant one-slot/byte-budget deadlocks while
+preserving concurrent byte safety and actual refusal/cancellation spend.
+
+`ghimera.browser-source-action/1` records each known main-frame or explicit inline
+GET allowance as a typed policy ledger row: an attempted action, not completion
+or browser-wide traffic. A capture's aggregate fetch row records collector bytes,
+not another request allowance. Harvest and journal replay share one counting
+function. Replay requires prior known spend for every retained chain, including
+failed assistance, and a separate inline reservation for every inline acquisition.
+
+Native downloads correlate the same-Page event with the admitted final hop before
+retaining bounded originals. Explicit click downloads retain both landing and
+file chains. Inline originals keep the existing bounded second same-origin GET
+with redirects refused; navigation is not represented as intercepted PDF bytes.
+
+Before human assistance, detach this operation's interception and release its
+source slot. Preserve the interstitial chain and actual DOM spend. After explicit
+resume, admit a fresh collector navigation to the original source or mapped landing
+URL, retaining its chain separately. The earlier chain does not attest to unknown
+human requests. Challenge/login/subscription interaction is a human port, not a
+solver or entitlement bypass. Browser flows depending on non-reloadable transient
+page state still need representative acceptance; the controlled witness uses
+browser-persisted completion state. Borrowed and unrelated tabs remain open.
+
+Combined gate, independent installed-package acceptance, representative publisher
+workflows and immutable publication remain required; I08 is not wholly closed.
 
 ## Verification record
+
+The frozen full integration and affected browser/fetch/journal/continuation/package
+selection passed **166 tests in 271.27 seconds**, zero failures/skips, under
+Python 3.11.16 at `/tmp/chimera-c0-20261006/.venv/bin/python`, importing
+`/tmp/ghimera-browser-redirects-20261007/src/ghimera`. Strict mypy passed
+**152 source files**. Native Chromium used owned loopback publishers and synthetic
+session cookies; sources stayed frozen during the run.
+
+Witnesses include actual redirected HTML/PDF/DOCX/inline parsing and citations;
+graph/journal/archive readback; mapped redirected landing clicks; denied final
+contact; fresh redirected-origin robots with one global slot and bounded bytes;
+human continuation with separate chains; cancellation preserving spend and an
+immediately reusable target/slots; mutations stripping provenance or known spend.
+Search/model protocol fixtures are not real served-model or publisher-quality
+evidence. Earlier fixture-only tuple and mutation-message failures were corrected
+without weakening origin, byte or provenance checks.
+
+### Earlier primitive evidence (not the full integration)
 
 The final owning guard plus download/inline/navigation and package-boundary
 selection passed **42 tests in 90.49 seconds**, zero failures/skips, under
 Python 3.11.16 at `/tmp/chimera-c0-20261006/.venv/bin/python`, importing
 `/tmp/ghimera-browser-redirects-20261007/src/ghimera`. Sources stayed frozen
 during that run. Ruff check/format passed (225 files); strict mypy passed
-150 source files. The sample component config is separate from the current
-Collector config and does not activate the guard implicitly.
+150 source files. At that earlier revision the sample component config was not
+a Collector field; the integration above supersedes that limitation.
 
 The native witnesses used installed Chromium and owned loopback sources:
 302/307 chains into ordinary HTML, attachments and inline PDF; retained
