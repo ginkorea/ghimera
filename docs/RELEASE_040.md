@@ -1,7 +1,12 @@
 # ghimera 0.4.0 release acceptance
 
-Status: release candidate; final combined source gate and independent wheel checks green.
-No publication is implied by this document until its terminal evidence is added.
+Status: **PUBLISHED** on GitHub and PyPI; final combined source gate,
+independent wheel checks and public artifact byte readback are green.
+
+The immutable `v0.4.0` tag targets
+`f4f60fd7972575e614959ba98e6e33e18e07be5f`. That tagged source includes the
+gate evidence; this subsequent documentation record confirms publication and
+does not move the tag or replace its artifacts.
 
 ## Scope
 
@@ -52,6 +57,24 @@ contents, and install the exact wheel into an isolated environment without an
 editable source path. Verify public imports, command help and configuration
 examples, then retain artifact hashes. Confirm upload by downloading the public
 artifacts and comparing their bytes with the tested files.
+
+Completed artifact evidence:
+
+| File | Bytes | SHA-256 |
+|---|---:|---|
+| `ghimera-0.4.0-py3-none-any.whl` | 282483 | `298aebe8d5ddb1c4da6474a71b0885dcae285c4885a33c8b8ed9ada2c34d76bb` |
+| `ghimera-0.4.0.tar.gz` | 901481 | `46009839b099f69a01c65387badd2a97886f50788219794c9160d8ced4ef2065` |
+
+The final wheel is byte-identical to the independently installed/tested wheel;
+only release/PRD documentation changed after the frozen gate. Both final
+artifacts passed strict Twine metadata/content inspection. The GitHub atomic
+push fast-forwarded main and added the tag. The exact files were uploaded to
+PyPI, their published JSON digests matched, and both downloaded public files
+compared byte-identical with the checked local artifacts. The dirty independent
+main checkout and existing immutable 0.3.0 release remained untouched.
+
+Public records: [PyPI 0.4.0](https://pypi.org/project/ghimera/0.4.0/) and
+[GitHub tag](https://github.com/ginkorea/ghimera/tree/v0.4.0).
 
 ## Acceptance limits
 
