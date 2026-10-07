@@ -51,6 +51,18 @@ authorities remain distinct.
 
 ## Selective visual processing
 
+Pacific language admission is required per stage, not inferred from a generic
+"multilingual" model claim. Priority languages are Simplified and Traditional
+Chinese (kept distinct), Japanese, Korean, Tagalog/Filipino, English, Indonesian,
+Malay, Vietnamese and Thai. Khmer, Lao, Burmese, Māori and Russian remain
+additional coverage targets. The current image profile declares local OCR
+packs separately from native-text language detection, the scanned-PDF
+recognizer, semantic models and embeddings. Keep originals in their native
+script; translation is not a substitute for native OCR or evidence offsets.
+Record admission and actual quality separately for each language/script and
+layout, including mixed-script and vertical material. Missing models fail
+preflight; unvalidated quality remains an explicit acceptance gap.
+
 1. Discover image candidates from retained HTML/DOM: actual source URL, parent
    document hash, native caption/alt/surrounding text, element locator and declared
    dimensions. Include lazy-image/srcset/picture candidates through an explicit
@@ -91,7 +103,7 @@ is inspected separately from schema-valid fixture replies.
 
 | ID | Requirement | Current state | Closure evidence |
 |---|---|---|---|
-| I01 | Configurable pacing, nonnegative jitter, origin cooldown and `Retry-After` | Built in release candidate; final combined gate pending | Deterministic scheduler and real HTTP checks; robots/global floors preserved; cooled origin cannot monopolize global slots |
+| I01 | Configurable pacing, nonnegative jitter, origin cooldown and `Retry-After` | Source-complete; included in combined 825-pass gate | Deterministic scheduler and real HTTP checks; robots/global floors preserved; cooled origin cannot monopolize global slots |
 | I02 | Concurrent fetch/extract/encode/review stages | Missing | Slow-stage acceptance demonstrates unrelated source progress with bounded resource use, exact accounting and cancellation |
 | I03 | Durable operation frontier and uncertain-call reconciliation | Round checkpoints built; operation recovery missing | Crash before/after source/model/graph acknowledgement resumes without lost or duplicate evidence and preserves actual spend |
 | I04 | Durable original/chunk/vector store and query interface | Native scoring built; corpus vector index missing | Fresh-process native passage retrieval, exact chunk/source/model bindings, index generation isolation and rebuild |
