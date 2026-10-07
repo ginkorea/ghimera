@@ -118,7 +118,7 @@ fetched or that the external server's index identity is authentic.
       `onion_search`, without implicitly deploying an MCP server.
 - [ ] Exercise schema/URL validation, partial search failures, byte/time limits,
       cancellation, credential isolation and restart/resume quota preservation.
-- [ ] Run the corrected complete package gate before calling the candidate green.
+- [x] Run the corrected complete package gate before calling the candidate green.
 - [ ] Provision a pinned operator-owned index/crawler with explicit storage,
       permitted seeds and maintenance configuration; do not modify a shared
       deployment or download a corpus implicitly.
@@ -157,6 +157,13 @@ witness verifies the Ahmia client uses it too. The complete mutation module
 then returned **18 passed in 45.46 seconds**, no skips reported, using the same
 interpreter and source path. A fresh complete gate is still required; the failed
 earlier run is not relabeled green.
+
+The corrected full combined 0.4.0 source gate returned **794 passed in 677.03
+seconds**, no skips reported, using `/tmp/chimera-c0-20261006/.venv/bin/python`
+(Python 3.11.16), importing this owned Ahmia worktree's `src/ghimera`. Offline
+lock, Ruff/format and strict mypy over 113 source files all passed. Source and
+tests stayed frozen during that run. This closes the package source gate, not
+real index provision, discovery adequacy or downstream deployment.
 
 ## Future downstream architecture: external Ahmia MCP, governed results
 
