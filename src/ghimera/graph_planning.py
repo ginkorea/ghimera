@@ -306,7 +306,10 @@ def validate_context(
         source = sources[span.document_id]
         document = docs[(source.source_url, source.document_sha256)]
         text = document.extracted.text
-        if not 0 <= span.start < span.end <= len(text) or text[span.start : span.end] != span.quote:
+        proof = document.extracted.pdf_transcription
+        if not span.matches_reading(
+            document.sha256, text, pdf_reading=proof.graph_reading() if proof is not None else None
+        ):
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
     for gap in context.gaps:
         document = docs[(gap.source.source_url, gap.source.document_sha256)]

@@ -102,6 +102,56 @@ class GraphConfig(GraphRecord):
         return self
 
 
+class GraphReadingPage(GraphRecord):
+    page_index: Count
+    start: Count
+    end: Positive
+    text_sha256: Digest
+    image_sha256: Digest
+    transcription_call_sha256: Digest
+    review_call_sha256: Digest
+
+    @model_validator(mode="after")
+    def nonempty(self) -> "GraphReadingPage":
+        if self.end <= self.start:
+            raise ValueError("graph reading pages require nonempty selected text")
+        return self
+
+
+class GraphPdfReading(GraphRecord):
+    """Compact references to retained page/model evidence, never duplicate pixels."""
+
+    schema_version: Literal["ghimera.graph-pdf-reading/1"] = Field(alias="schema")
+    source_sha256: Digest
+    text_sha256: Digest
+    config_sha256: Digest
+    pages: Annotated[tuple[GraphReadingPage, ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def ordered(self) -> "GraphPdfReading":
+        offset = 0
+        for index, page in enumerate(self.pages):
+            if page.page_index != index or page.start != offset:
+                raise ValueError("graph readings require complete ordered source pages")
+            offset = page.end + 2
+        return self
+
+    def validate_text(self, text: str) -> None:
+        if (
+            self.text_sha256 != hashlib.sha256(text.encode()).hexdigest()
+            or self.pages[-1].end != len(text)
+            or any(
+                page.text_sha256 != hashlib.sha256(text[page.start : page.end].encode()).hexdigest()
+                or (page.page_index and text[page.start - 2 : page.start] != "\n\n")
+                for page in self.pages
+            )
+        ):
+            raise ValueError("graph reading must bind the exact selected text and page spans")
+
+    def cited_pages(self, start: int, end: int) -> tuple[int, ...]:
+        return tuple(p.page_index for p in self.pages if start < p.end and end > p.start)
+
+
 class GraphNode(GraphRecord):
     id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]*:[0-9a-f]{64}$")]
     role: Name
@@ -123,6 +173,24 @@ class GraphNode(GraphRecord):
     human_browser: BrowserSourceEvidence | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    pdf_reading: GraphPdfReading | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @staticmethod
+    def document_identity(
+        source_url: str,
+        content_sha256: str,
+        text_sha256: str,
+        revision: str,
+        *,
+        human_browser: BrowserSourceEvidence | None = None,
+        pdf_reading: GraphPdfReading | None = None,
+    ) -> str:
+        identity = f"{len(source_url)}:{source_url}:{content_sha256}:{text_sha256}:{revision}"
+        if human_browser is not None:
+            identity += f":{human_browser.acquisition}:{human_browser.capture_id}"
+        if pdf_reading is not None:
+            identity += f":{pdf_reading.content_digest()}"
+        return identity
 
     @model_validator(mode="after")
     def content_bound(self) -> "GraphNode":
@@ -145,9 +213,26 @@ class GraphNode(GraphRecord):
             if self.text is None or self.content_sha256 is None or self.source_url is None:
                 raise ValueError("document graph node needs version, URL and retained text")
             if self.text_sha256 != hashlib.sha256(self.text.encode("utf-8")).hexdigest():
-                raise ValueError("document text digest must match retained native text")
+                raise ValueError("document text digest must match its retained reading")
+            if self.pdf_reading is not None:
+                if self.pdf_reading.source_sha256 != self.content_sha256:
+                    raise ValueError("graph PDF reading must bind its original source")
+                self.pdf_reading.validate_text(self.text)
+                if self.identity != self.document_identity(
+                    self.source_url,
+                    self.content_sha256,
+                    hashlib.sha256(self.text.encode()).hexdigest(),
+                    self.revision,
+                    human_browser=self.human_browser,
+                    pdf_reading=self.pdf_reading,
+                ):
+                    raise ValueError(
+                        "graph PDF reading must bind its exact representation identity"
+                    )
         elif any(value is not None for value in (self.text, self.text_sha256, self.content_sha256)):
             raise ValueError("content version fields belong only to document nodes")
+        elif self.pdf_reading is not None:
+            raise ValueError("PDF reading provenance belongs only to document nodes")
         return self
 
 
@@ -158,11 +243,72 @@ class GraphEvidence(GraphRecord):
     start: Count
     end: Positive
     quote: Text
+    basis: Literal["native", "reviewed_pdf_transcription"] = Field(
+        default="native", exclude_if=lambda v: v == "native"
+    )
+    page_indices: tuple[Count, ...] = Field(default=(), exclude_if=lambda v: not v)
+    reading_sha256: Digest | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @classmethod
+    def from_reading(
+        cls,
+        document_id: str,
+        document_sha256: str,
+        text: str,
+        start: int,
+        end: int,
+        *,
+        pdf_reading: GraphPdfReading | None = None,
+    ) -> "GraphEvidence":
+        if not 0 <= start < end <= len(text):
+            raise ValueError("graph evidence requires a span within its selected reading")
+        if pdf_reading is not None:
+            if pdf_reading.source_sha256 != document_sha256:
+                raise ValueError("graph evidence reading belongs to a different original")
+            pdf_reading.validate_text(text)
+        return cls(
+            document_id=document_id,
+            document_sha256=document_sha256,
+            text_sha256=hashlib.sha256(text.encode()).hexdigest(),
+            start=start,
+            end=end,
+            quote=text[start:end],
+            basis="reviewed_pdf_transcription" if pdf_reading is not None else "native",
+            page_indices=pdf_reading.cited_pages(start, end) if pdf_reading is not None else (),
+            reading_sha256=pdf_reading.content_digest() if pdf_reading is not None else None,
+        )
+
+    def matches_reading(
+        self,
+        document_sha256: str,
+        text: str,
+        *,
+        pdf_reading: GraphPdfReading | None = None,
+    ) -> bool:
+        try:
+            expected = self.from_reading(
+                self.document_id,
+                document_sha256,
+                text,
+                self.start,
+                self.end,
+                pdf_reading=pdf_reading,
+            )
+        except ValueError:
+            return False
+        return self == expected
 
     @model_validator(mode="after")
     def nonempty_span(self) -> "GraphEvidence":
         if self.end <= self.start:
             raise ValueError("evidence span must be nonempty")
+        reviewed = self.basis == "reviewed_pdf_transcription"
+        if (
+            reviewed != bool(self.page_indices)
+            or reviewed != (self.reading_sha256 is not None)
+            or tuple(sorted(set(self.page_indices))) != self.page_indices
+        ):
+            raise ValueError("graph evidence must distinguish native and reviewed page readings")
         return self
 
 

@@ -140,13 +140,15 @@ def project(
         validate_review(config, proposal, review, document, start, end, intent)
     citation = validate_proposal(config, proposal, document, start, end, intent)
     reference = citation_id(citation)
-    evidence = GraphEvidence(
-        document_id=document_id,
-        document_sha256=document.sha256,
-        text_sha256=citation.text_sha256,
-        start=start,
-        end=end,
-        quote=citation.quote,
+    reading = document.extracted.pdf_transcription
+    graph_reading = reading.graph_reading() if reading is not None else None
+    evidence = GraphEvidence.from_reading(
+        document_id,
+        document.sha256,
+        document.extracted.text,
+        start,
+        end,
+        pdf_reading=graph_reading,
     )
     revision = f"{policy.effective_prompt_revision}@{call.service.model_id}@{call.service.revision}"
     entities: list[SemanticEntity] = []
@@ -180,13 +182,13 @@ def project(
         # Document representation and exact native occurrence, not name alone.
         identity = f"{document_id}:{absolute_start}:{absolute_end}"
         node = graph.node(mention.role, identity, mention.surface, MENTION_REVISION)
-        span = GraphEvidence(
-            document_id=document_id,
-            document_sha256=document.sha256,
-            text_sha256=citation.text_sha256,
-            start=absolute_start,
-            end=absolute_end,
-            quote=mention.surface,
+        span = GraphEvidence.from_reading(
+            document_id,
+            document.sha256,
+            document.extracted.text,
+            absolute_start,
+            absolute_end,
+            pdf_reading=graph_reading,
         )
         entities.append(
             SemanticEntity(key=mention.key, node=node, evidence=span, confidence=mention.confidence)
@@ -738,6 +740,12 @@ def validate_harvest(harvest: Harvest) -> None:
             or node.source_url != document.url
             or node.content_sha256 != document.sha256
             or node.text != document.extracted.text
+            or node.pdf_reading
+            != (
+                document.extracted.pdf_transcription.graph_reading()
+                if document.extracted.pdf_transcription is not None
+                else None
+            )
             or observation.text_sha256
             != hashlib.sha256(document.extracted.text.encode()).hexdigest()
             or counts[key] > policy.max_windows_per_document

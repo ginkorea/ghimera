@@ -93,11 +93,16 @@ Reviewed PDF transcription is now development source: typed rendering/model
 recipes, original-page retention, separate review, collector budget integration,
 preserved native reading and explicitly labelled generated citations. It is
 not yet published or language-quality accepted. Its combined development gate
-passed 1,023 tests under Python 3.11.16 with no failures/skips; see
+passed 1,026 tests under Python 3.11.16 with no failures/skips; see
 PDF_TRANSCRIPTION.md for the distinction between protocol and quality acceptance.
 The subsequent corpus projection fix retains generated reading basis and exact
-source-page indices through storage and retrieval; its 45 focused tests passed,
-but it is not covered by the preceding combined gate.
+source-page indices through storage and retrieval; its 45 focused tests and
+the combined gate passed. A subsequent graph follow-up preserves compact
+page/model-call references, reading-specific representation identity and the
+same evidence basis through semantic extraction, graph replay and planning.
+Its 109-test importer selection passed under Python 3.11.16, with no
+failures/skips; its combined gate remains required. Neither result closes
+Simplified Chinese recognition quality or representative end-to-end acceptance.
 
 1. Discover image candidates from retained HTML/DOM: actual source URL, parent
    document hash, native caption/alt/surrounding text, element locator and declared

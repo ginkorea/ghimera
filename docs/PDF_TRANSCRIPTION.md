@@ -4,10 +4,11 @@ Development source, not a published or accuracy-accepted capability. The
 current public release remains 0.4.4. In particular, Simplified Chinese
 scanned-PDF quality is still unaccepted; protocol fixtures do not change that.
 
-The combined development gate completed under Python 3.11.16 with 1,023 tests
+The combined PDF/corpus development gate completed under Python 3.11.16 with 1,026 tests
 passed, zero failures/skips, plus Ruff, formatting, strict mypy (158 source files)
 and offline lock validation. This verifies the integrated protocol, accounting,
-cleanup and replay behavior; scripted model replies are not OCR-quality evidence.
+cleanup and replay behavior before the graph follow-up below; scripted model
+replies are not OCR-quality evidence.
 
 The collector accepts an explicit `pdf_transcription` recipe beside its
 existing `document_extraction` recipe. Model selection, private service
@@ -73,9 +74,27 @@ evidence. Corpus binding validation rejects a generated reading labelled as
 native or a passage naming different source pages, including after SQLite
 reopen and vector query. Ordinary native passages omit the empty page field,
 preserving their existing wire identities. The downstream corpus change passed
-45 focused tests under Python 3.11.16; a fresh combined gate is still required
-for that change. These persistence tests use scripted model responses, not a
+45 focused tests under Python 3.11.16 and the combined gate above. These
+persistence tests use scripted model responses, not a
 claim of Chinese recognition accuracy.
+
+The graph integration now has a separate development follow-up: document nodes
+retain compact `pdf_reading` references to the ordered page pixels and exact
+transcription/review call records. This avoids duplicating PNG payloads in the
+graph. The reading digest is part of generated representation identity, so the
+same original and text processed by a different recipe is a distinct version.
+Semantic graph spans carry `basis`, exact `page_indices` and `reading_sha256`;
+append/replay refuses a native label or wrong page/reading on a generated node.
+Graph-aware follow-up planning checks spans through that same reading-binding
+contract rather than checking quote text alone.
+Harvest validation checks the compact reading against the retained full PDF
+evidence. Ordinary native node/evidence serialization remains unchanged. This
+follow-up is not included in the preceding test counts. Its five focused
+regressions passed under Python 3.11.16, including durable replay, semantic
+extraction, planning, page boundaries and native wire identity. The broader
+graph, planning, journal, resume and local-input selection passed 109 tests with
+no failures/skips under the same interpreter. Its combined gate is still
+required before publication.
 
 ## Acceptance still required
 

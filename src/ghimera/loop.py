@@ -742,6 +742,9 @@ class GoalLoop:
                 transport=page.transport,
                 local_input=page.local_input,
                 human_browser=page.human_browser,
+                pdf_reading=extracted.pdf_transcription.graph_reading()
+                if extracted.pdf_transcription is not None
+                else None,
             )
         # Score native evidence before the judge. Similarity guides the frontier,
         # but never replaces a document verdict or factual source evidence.
@@ -1016,6 +1019,9 @@ class GoalLoop:
                 transport=source.transport,
                 local_input=source.local_input,
                 human_browser=source.human_browser,
+                pdf_reading=source.extracted.pdf_transcription.graph_reading()
+                if source.extracted.pdf_transcription is not None
+                else None,
             )
             await graph.discovered(link.url, parent)
         return True

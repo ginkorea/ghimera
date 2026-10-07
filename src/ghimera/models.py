@@ -17,7 +17,7 @@ from ghimera.embedding_types import EncodingCall, IntentReferenceEvidence
 from ghimera.extraction_attempts import HtmlExtractionAttempt, validate_chain
 from ghimera.extraction_types import ExtractionEvidence
 from ghimera.graph_planning_types import PlanningGraph
-from ghimera.graph_types import GraphSnapshot
+from ghimera.graph_types import GraphPdfReading, GraphReadingPage, GraphSnapshot
 from ghimera.human_browser_types import (
     AssistanceObservation,
     BrowserSourceEvidence,
@@ -276,6 +276,36 @@ class PdfTranscriptionEvidence(Record):
                 indices.append(page.page.page_index)
             offset = stop + 2
         return tuple(indices)
+
+    def graph_reading(self) -> GraphPdfReading:
+        """Source-bound graph references to the full evidence retained on this reading."""
+        offset = 0
+        pages = []
+        for page in self.pages:
+            end = offset + len(page.proposal.text)
+            pages.append(
+                GraphReadingPage(
+                    page_index=page.page.page_index,
+                    start=offset,
+                    end=end,
+                    text_sha256=hashlib.sha256(page.proposal.text.encode()).hexdigest(),
+                    image_sha256=page.page.image_sha256,
+                    transcription_call_sha256=hashlib.sha256(
+                        page.calls[0].model_dump_json().encode()
+                    ).hexdigest(),
+                    review_call_sha256=hashlib.sha256(
+                        page.calls[1].model_dump_json().encode()
+                    ).hexdigest(),
+                )
+            )
+            offset = end + 2
+        return GraphPdfReading(
+            schema="ghimera.graph-pdf-reading/1",
+            source_sha256=self.source_sha256,
+            text_sha256=hashlib.sha256(self.text.encode()).hexdigest(),
+            config_sha256=self.config.content_digest(),
+            pages=tuple(pages),
+        )
 
     @model_validator(mode="after")
     def complete_source(self) -> "PdfTranscriptionEvidence":
@@ -1099,7 +1129,23 @@ class Harvest(Record):
             config = self.receipt.effective_config.graph
             if config is None or self.graph.config_digest != config.content_digest():
                 raise ValueError("graph must bind the effective configuration")
+            source_readings = {
+                (
+                    source.url,
+                    source.sha256,
+                    hashlib.sha256(source.extracted.text.encode()).hexdigest(),
+                ): source.extracted.pdf_transcription.graph_reading()
+                if source.extracted.pdf_transcription is not None
+                else None
+                for source in self.source_documents
+            }
             for node in self.graph.nodes:
+                if node.role == "document":
+                    key = (node.source_url, node.content_sha256, node.text_sha256)
+                    if key in source_readings and node.pdf_reading != source_readings[key]:
+                        raise ValueError(
+                            "graph document must preserve the actual PDF reading evidence"
+                        )
                 if node.local_input is not None:
                     node.local_input.validate_policy(input_policy)
                     if not any(row.local_input == node.local_input for row in inputs):

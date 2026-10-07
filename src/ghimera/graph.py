@@ -21,6 +21,7 @@ from ghimera.graph_types import (
     GraphEdge,
     GraphEvidence,
     GraphNode,
+    GraphPdfReading,
     GraphSnapshot,
 )
 from ghimera.human_browser_types import BrowserSourceEvidence
@@ -314,10 +315,10 @@ class ResearchGraph:
                     doc is None
                     or doc.role != "document"
                     or doc.text is None
-                    or doc.content_sha256 != evidence.document_sha256
-                    or doc.text_sha256 != evidence.text_sha256
-                    or doc.text[evidence.start : evidence.end] != evidence.quote
-                    or evidence.end > len(doc.text)
+                    or doc.content_sha256 is None
+                    or not evidence.matches_reading(
+                        doc.content_sha256, doc.text, pdf_reading=doc.pdf_reading
+                    )
                 ):
                     raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
             edges[edge.id] = edge
@@ -384,13 +385,19 @@ class ResearchGraph:
         transport: TransportEvidence | None = None,
         local_input: LocalInputEvidence | None = None,
         human_browser: BrowserSourceEvidence | None = None,
+        pdf_reading: GraphPdfReading | None = None,
     ) -> str:
         content_digest = hashlib.sha256(raw).hexdigest()
         text_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         # Extraction changes create a new representation of the same source bytes.
-        identity = f"{len(url)}:{url}:{content_digest}:{text_digest}:{revision}"
-        if human_browser is not None:
-            identity += f":{human_browser.acquisition}:{human_browser.capture_id}"
+        identity = GraphNode.document_identity(
+            url,
+            content_digest,
+            text_digest,
+            revision,
+            human_browser=human_browser,
+            pdf_reading=pdf_reading,
+        )
         kind = next(role.kind for role in self._config.roles if role.name == "document")
         doc = GraphNode(
             id=self._identity("document", identity),
@@ -408,6 +415,7 @@ class ResearchGraph:
             transport=transport,
             local_input=local_input,
             human_browser=human_browser,
+            pdf_reading=pdf_reading,
         )
         source = self.node("source", url, url, self._config.profile_version)
         await self.append(
