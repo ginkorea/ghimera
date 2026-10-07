@@ -154,7 +154,7 @@ def interactive_source():
         thread.join(timeout=3)
 
 
-async def with_browser(tmp_path, origin, operation):
+async def with_browser(tmp_path, origin, operation, *, accept_downloads=None):
     from patchright.async_api import async_playwright
 
     executable = os.environ["CHIMERA_TEST_BROWSER"]
@@ -164,6 +164,7 @@ async def with_browser(tmp_path, origin, operation):
             str(profile),
             executable_path=executable,
             headless=True,
+            accept_downloads=accept_downloads,
             args=[
                 "--remote-debugging-port=0",
                 "--remote-debugging-address=127.0.0.1",

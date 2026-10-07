@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from ghimera.human_browser_types import HumanBrowserEvidence
+from ghimera.human_browser_types import BrowserSourceEvidence
 
 if TYPE_CHECKING:
     from ghimera.models import Harvest
@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 def validate_harvest(harvest: "Harvest") -> None:
     policy = harvest.receipt.effective_config.human_browser
-    captures: dict[str, HumanBrowserEvidence] = {}
+    captures: dict[str, BrowserSourceEvidence] = {}
     observed_ids: set[str] = set()
     content: set[tuple[str, str]] = set()
     for row in harvest.ledger:
@@ -21,7 +21,7 @@ def validate_harvest(harvest: "Harvest") -> None:
                 raise ValueError("a browser capture cannot be charged/replayed twice")
             observed_ids.add(evidence.capture_id)
             captures[evidence.capture_id] = evidence
-            content.add((evidence.final_url, evidence.dom_sha256))
+            content.add((evidence.final_url, evidence.captured_sha256))
         if row.human_assistance:
             if policy is None or len(row.human_assistance) > policy.max_assistance_attempts:
                 raise ValueError("failed assistance requires its configured attempt bound")

@@ -3,7 +3,7 @@
 from ghimera.config import GhimeraConfig
 from ghimera.fetch import FetchRoute
 from ghimera.http import html_barrier
-from ghimera.human_browser_types import AuthorizedBrowserSession, HumanBrowserConfig
+from ghimera.human_browser_types import AuthorizedBrowserSession, BrowserCapture, HumanBrowserConfig
 from ghimera.models import FetchRequest, Page
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.source_session_types import origin_key
@@ -21,6 +21,7 @@ class HumanBrowserRoute(FetchRoute):
     def validate_config(self, config: GhimeraConfig) -> None:
         if config.human_browser != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        self._session.validate_config(self._config)
 
     def handles(self, url: str) -> bool:
         # A selected origin never falls back to a different HTTP session just
@@ -42,7 +43,7 @@ class HumanBrowserRoute(FetchRoute):
             final_url=capture.evidence.final_url,
             status=None,
             content_type=capture.evidence.content_type,
-            body=capture.dom,
+            body=capture.dom if isinstance(capture, BrowserCapture) else capture.body,
             human_browser=capture.evidence,
         )
 

@@ -11,8 +11,9 @@ import hashlib
 import math
 import time
 import uuid
+from abc import ABC, abstractmethod
 from importlib.metadata import PackageNotFoundError, version
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol, final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -23,6 +24,9 @@ from ghimera.human_browser_types import (
     AssistanceObservation,
     BrowserAssistanceRequest,
     BrowserCapture,
+    BrowserDownloadAction,
+    BrowserDownloadCapture,
+    BrowserDownloadEvidence,
     CaptureScope,
     HumanAssistant,
     HumanBrowserConfig,
@@ -31,7 +35,7 @@ from ghimera.human_browser_types import (
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
 if TYPE_CHECKING:
-    from patchright.async_api import Browser, Page, Playwright
+    from patchright.async_api import Browser, Download, Page, Playwright
 
 
 class TargetInfo(BaseModel):
@@ -54,6 +58,21 @@ class DomReply(BaseModel):
     complete: bool = Field(strict=True)
 
 
+class BrowserIdentity(Protocol):
+    @property
+    def version(self) -> str: ...
+
+
+class BrowserVersionReply(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    product: str = Field(min_length=1)
+
+
+class ObservedBrowser(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    version: str
+
+
 class CaptureWork:
     """Mutable observations belong to one capture, never to the browser/session."""
 
@@ -65,7 +84,14 @@ class CaptureWork:
         self.assistance: list[AssistanceObservation] = []
 
 
-class ChromiumHumanSession:
+class HumanBrowserSession(ABC):
+    """Shared capture ordering, scope, budgets, assistance and cancellation."""
+
+    def __init_subclass__(cls) -> None:
+        super().__init_subclass__()
+        if "capture" in cls.__dict__ or "validate_config" in cls.__dict__:
+            raise TypeError("browser session ordering/config validation is final")
+
     def __init__(self, config: HumanBrowserConfig, *, assistant: HumanAssistant | None) -> None:
         # Revalidate: Pydantic model_copy can otherwise bypass the policy boundary.
         config = HumanBrowserConfig.model_validate(config.model_dump())
@@ -84,6 +110,12 @@ class ChromiumHumanSession:
         # One target cannot be navigated/captured by two operations simultaneously.
         self._target_lock = asyncio.Lock()
 
+    @final
+    def validate_config(self, config: HumanBrowserConfig) -> None:
+        if HumanBrowserConfig.model_validate(config.model_dump()) != self.config:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+
+    @final
     async def capture(
         self,
         url: str,
@@ -91,10 +123,12 @@ class ChromiumHumanSession:
         max_bytes: int | None = None,
         timeout_seconds: float | None = None,
         scope: CaptureScope | None = None,
-    ) -> BrowserCapture:
+    ) -> BrowserCapture | BrowserDownloadCapture:
         if not self.config.permits(url) or (scope is not None and not scope.permits(url)):
             raise HumanCaptureFailure(RefusalCode.OUT_OF_SCOPE, 0, ())
         maximum = self.config.max_dom_bytes * (self.config.max_assistance_attempts + 1)
+        if self.config.downloads is not None:
+            maximum += self.config.downloads.max_file_bytes + 1
         if max_bytes is not None:
             if type(max_bytes) is not int or max_bytes <= 0:
                 raise HumanCaptureFailure(RefusalCode.BUDGET_EXHAUSTED, 0, ())
@@ -117,11 +151,20 @@ class ChromiumHumanSession:
                 RefusalCode.FETCH_FAILED, work.bytes_read, tuple(work.assistance)
             ) from None
 
-    async def _capture(self, url: str, work: CaptureWork) -> BrowserCapture:
+    @abstractmethod
+    async def _capture(
+        self, url: str, work: CaptureWork
+    ) -> BrowserCapture | BrowserDownloadCapture: ...
+
+    async def _capture_cdp(
+        self, url: str, work: CaptureWork
+    ) -> BrowserCapture | BrowserDownloadCapture:
         from patchright.async_api import Error, async_playwright
 
         driver: Playwright | None = None
         try:
+            if self.config.adapter != "patchright_cdp" or self.config.control_endpoint is None:
+                raise GhimeraRefused(RefusalCode.SOURCE_SESSION_UNAVAILABLE)
             driver = await async_playwright().start()
             browser = await driver.chromium.connect_over_cdp(
                 self.config.control_endpoint,
@@ -129,51 +172,196 @@ class ChromiumHumanSession:
                 timeout=self.config.timeout_seconds * 1000,
             )
             page = await self._select(browser)
-            await page.goto(
-                url, wait_until="domcontentloaded", timeout=self.config.timeout_seconds * 1000
-            )
-            capture_id = uuid.uuid4().hex
-            while True:
-                dom, final_url, content_type = await self._dom(page, work)
-                barrier = html_barrier(content_type, dom)
-                if barrier is None:
-                    result = BrowserCapture(
-                        dom=dom,
-                        evidence=HumanBrowserEvidence(
-                            schema="ghimera.human-browser-evidence/1",
-                            acquisition="browser_dom",
-                            capture_id=capture_id,
-                            request_url=url,
-                            final_url=final_url,
-                            session_id=self.config.session_id,
-                            target_id=self.config.target_id,
-                            policy_digest=self.config.content_digest(),
-                            adapter_revision=self.config.adapter_revision,
-                            driver_version=self.config.driver_version,
-                            browser_version=browser.version,
-                            lifecycle=self.config.lifecycle,
-                            network_boundary=self.config.network_boundary,
-                            declared_route="direct",
-                            route_verification="operator_declaration_only",
-                            browser_subresource_bytes=None,
-                            browser_subresource_requests=None,
-                            content_type=content_type,
-                            dom_sha256=hashlib.sha256(dom).hexdigest(),
-                            dom_bytes=len(dom),
-                            collector_dom_bytes_read=work.bytes_read,
-                            assistance=tuple(work.assistance),
-                        ),
-                    )
-                    result.validate_policy(self.config)
-                    return result
-                await self._assist(url, final_url, capture_id, barrier, dom, work)
+            return await self._capture_page(browser, page, url, work)
         except (Error, ValidationError, ValueError):
             # Vendor errors may contain source/control URLs and secret headers.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise asyncio.CancelledError from None
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT) from None
         finally:
             if driver is not None:
                 # Stop this transport only, never browser.close/context.close.
                 await self._detach(driver)
+
+    async def _capture_page(
+        self, browser: BrowserIdentity, page: "Page", url: str, work: CaptureWork
+    ) -> BrowserCapture | BrowserDownloadCapture:
+        action = (
+            next((item for item in self.config.downloads.actions if item.source_url == url), None)
+            if self.config.downloads
+            else None
+        )
+        if action is not None:
+            return await self._download(browser, page, url, action, work)
+        await page.goto(
+            url, wait_until="domcontentloaded", timeout=self.config.timeout_seconds * 1000
+        )
+        capture_id = uuid.uuid4().hex
+        while True:
+            dom, final_url, content_type = await self._dom(page, work)
+            barrier = html_barrier(content_type, dom)
+            if barrier is None:
+                result = BrowserCapture(
+                    dom=dom,
+                    evidence=HumanBrowserEvidence(
+                        schema="ghimera.human-browser-evidence/1",
+                        acquisition="browser_dom",
+                        capture_id=capture_id,
+                        request_url=url,
+                        final_url=final_url,
+                        session_id=self.config.session_id,
+                        target_id=self.config.target_id,
+                        policy_digest=self.config.content_digest(),
+                        adapter_revision=self.config.adapter_revision,
+                        driver_version=self.config.driver_version,
+                        browser_version=browser.version,
+                        lifecycle=self.config.lifecycle,
+                        network_boundary=self.config.network_boundary,
+                        declared_route="direct",
+                        route_verification="operator_declaration_only",
+                        browser_subresource_bytes=None,
+                        browser_subresource_requests=None,
+                        content_type=content_type,
+                        dom_sha256=hashlib.sha256(dom).hexdigest(),
+                        dom_bytes=len(dom),
+                        collector_dom_bytes_read=work.bytes_read,
+                        assistance=tuple(work.assistance),
+                    ),
+                )
+                result.validate_policy(self.config)
+                return result
+            await self._assist(url, final_url, capture_id, barrier, dom, work)
+
+    async def _download(
+        self,
+        browser: BrowserIdentity,
+        page: "Page",
+        url: str,
+        action: BrowserDownloadAction,
+        work: CaptureWork,
+    ) -> BrowserDownloadCapture:
+        from patchright.async_api import Error
+
+        from ghimera.browser_download_stream import observe_document_media, read_download
+
+        policy = self.config.downloads
+        if policy is None or (
+            work.scope is not None and not work.scope.permits(action.navigation_url)
+        ):
+            raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+        capture_id = uuid.uuid4().hex
+        initiator_url: str | None = None
+        if action.selector is not None:
+            await page.goto(action.navigation_url, wait_until="domcontentloaded")
+            while True:
+                dom, final_url, content_type = await self._dom(page, work)
+                if (barrier := html_barrier(content_type, dom)) is None:
+                    initiator_url = final_url
+                    break
+                await self._assist(url, final_url, capture_id, barrier, dom, work)
+        download: Download | None = None
+        owned_downloads: list[Download] = []
+
+        def observed(item: "Download") -> None:
+            if item.page == page and item.url == action.source_url:
+                owned_downloads.append(item)
+
+        page.on("download", observed)
+        dom_spend = work.bytes_read
+        try:
+            if work.max_bytes - work.bytes_read <= 1:
+                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            # Register before the action. A refused/cancelled capture is never
+            # retried automatically through another session or by another click.
+            async with page.expect_download(
+                predicate=lambda item: item.url == action.source_url,
+                timeout=self.config.timeout_seconds * 1000,
+            ) as event:
+                if action.selector is not None:
+                    if not self.config.permits(page.url) or (
+                        work.scope is not None and not work.scope.permits(page.url)
+                    ):
+                        raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+                    await page.locator(action.selector).click(
+                        timeout=self.config.timeout_seconds * 1000
+                    )
+                else:
+                    try:
+                        await page.goto(
+                            url, wait_until="commit", timeout=self.config.timeout_seconds * 1000
+                        )
+                    except Error as exc:
+                        # Chromium reports an attachment navigation as aborted.
+                        # The separately awaited event, URL and file prove capture.
+                        if "ERR_ABORTED" not in str(exc) and "Download is starting" not in str(exc):
+                            raise
+            download = await event.value
+            if (
+                download.page != page
+                or not self.config.permits(download.url)
+                or (work.scope is not None and not work.scope.permits(download.url))
+            ):
+                raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+            body = await read_download(
+                download,
+                max_file_bytes=policy.max_file_bytes,
+                chunk_bytes=policy.read_chunk_bytes,
+                spend=work,
+                cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
+            )
+            evidence = BrowserDownloadEvidence(
+                schema="ghimera.browser-download-evidence/1",
+                acquisition="browser_download",
+                capture_id=capture_id,
+                request_url=url,
+                final_url=download.url,
+                navigation_url=action.navigation_url,
+                initiator_url=initiator_url,
+                session_id=self.config.session_id,
+                target_id=self.config.target_id,
+                policy_digest=self.config.content_digest(),
+                adapter_revision=self.config.adapter_revision,
+                download_adapter_revision=policy.adapter_revision,
+                driver_version=self.config.driver_version,
+                browser_version=browser.version,
+                lifecycle=self.config.lifecycle,
+                network_boundary=self.config.network_boundary,
+                declared_route="direct",
+                route_verification="operator_declaration_only",
+                browser_subresource_bytes=None,
+                browser_subresource_requests=None,
+                browser_download_bytes=None,
+                content_type=action.content_type,
+                media_observation=observe_document_media(body, action.content_type),
+                file_sha256=hashlib.sha256(body).hexdigest(),
+                file_bytes=len(body),
+                collector_file_bytes_read=work.bytes_read - dom_spend,
+                collector_dom_bytes_read=dom_spend,
+                assistance=tuple(work.assistance),
+            )
+            result = BrowserDownloadCapture(body=body, evidence=evidence)
+            result.validate_policy(self.config)
+            return result
+        finally:
+            page.remove_listener("download", observed)
+            if download is None and owned_downloads:
+                download = owned_downloads[0]
+            if download is not None:
+                # Only this operation's artifact, never the borrowed context or
+                # any unrelated downloads. Bound cleanup also after cancellation.
+                task = asyncio.create_task(self._discard_download(download))
+                try:
+                    async with asyncio.timeout(self.config.cleanup_timeout_seconds):
+                        await asyncio.shield(task)
+                except (TimeoutError, asyncio.CancelledError):
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise
+
+    async def _discard_download(self, download: "Download") -> None:
+        await download.cancel()
+        await download.delete()
 
     async def _select(self, browser: "Browser") -> "Page":
         cdp = await browser.new_browser_cdp_session()
@@ -334,4 +522,69 @@ class ChromiumHumanSession:
             await asyncio.gather(task, return_exceptions=True)
             raise
         except Error:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT) from None
+
+
+class ChromiumHumanSession(HumanBrowserSession):
+    """Attach to the explicit CDP endpoint for unchanged DOM capture."""
+
+    def __init__(self, config: HumanBrowserConfig, *, assistant: HumanAssistant | None) -> None:
+        super().__init__(config, assistant=assistant)
+        if self.config.adapter != "patchright_cdp":
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+
+    async def _capture(
+        self, url: str, work: CaptureWork
+    ) -> BrowserCapture | BrowserDownloadCapture:
+        return await self._capture_cdp(url, work)
+
+
+class BoundPageHumanSession(HumanBrowserSession):
+    """Use the caller's actual Page/driver connection, without a second attach.
+
+    The caller initializes download behavior, supplies the selected page, and
+    owns its lifecycle. No global browser settings or cookies are changed.
+    Scope, byte limits, assistance and capture serialization share the existing
+    session implementation. The exact target is rechecked before each action.
+    """
+
+    def __init__(
+        self, config: HumanBrowserConfig, *, page: "Page", assistant: HumanAssistant | None
+    ) -> None:
+        super().__init__(config, assistant=assistant)
+        if self.config.adapter != "patchright_page":
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        self._page = page
+
+    async def _capture(
+        self, url: str, work: CaptureWork
+    ) -> BrowserCapture | BrowserDownloadCapture:
+        from patchright.async_api import Error
+
+        try:
+            page = self._page
+            if page.is_closed() or (
+                page.url != "about:blank" and not self.config.permits(page.url)
+            ):
+                raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+            session = await page.context.new_cdp_session(page)
+            try:
+                target = TargetReply.model_validate(await session.send("Target.getTargetInfo"))
+                revision = BrowserVersionReply.model_validate(
+                    await session.send("Browser.getVersion")
+                )
+            finally:
+                await session.detach()
+            if (
+                target.target_info.target_id != self.config.target_id
+                or target.target_info.type != "page"
+            ):
+                raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            return await self._capture_page(
+                ObservedBrowser(version=revision.product), page, url, work
+            )
+        except (Error, ValidationError, ValueError):
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise asyncio.CancelledError from None
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT) from None

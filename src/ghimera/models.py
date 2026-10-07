@@ -17,7 +17,11 @@ from ghimera.extraction_attempts import HtmlExtractionAttempt, validate_chain
 from ghimera.extraction_types import ExtractionEvidence
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.graph_types import GraphSnapshot
-from ghimera.human_browser_types import AssistanceObservation, BrowserCapture, HumanBrowserEvidence
+from ghimera.human_browser_types import (
+    AssistanceObservation,
+    BrowserSourceEvidence,
+    validate_browser_body,
+)
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.model_types import ModelCallEvidence
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
@@ -137,14 +141,16 @@ class Page(Record):
     source_session: SourceSessionUse | None = None
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
-    human_browser: HumanBrowserEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    human_browser: BrowserSourceEvidence | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def rendering_binding(self) -> "Page":
         if (self.status is None) != (self.human_browser is not None):
-            raise ValueError("only explicit browser DOM acquisition has no HTTP status")
+            raise ValueError("only explicit browser acquisition has no HTTP status")
         if self.human_browser is not None:
-            BrowserCapture(dom=self.body, evidence=self.human_browser)
+            validate_browser_body(self.body, self.human_browser)
             if (
                 self.url != self.human_browser.request_url
                 or self.final_url != self.human_browser.final_url
@@ -163,7 +169,7 @@ class Page(Record):
                 )
             ):
                 raise ValueError(
-                    "browser DOM cannot impersonate an HTTP response or isolated render"
+                    "browser acquisition cannot impersonate an HTTP response or isolated render"
                 )
         if self.local_input is not None and (
             self.url != self.local_input.source_id
@@ -275,7 +281,9 @@ class DocumentSource(Record):
     source_session: SourceSessionUse | None = None
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
-    human_browser: HumanBrowserEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    human_browser: BrowserSourceEvidence | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     images: tuple[ImageEvidence, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     def validate_policy(self, config: GhimeraConfig) -> None:
@@ -361,7 +369,7 @@ class DocumentSource(Record):
         if len({image.sha256 for image in self.images}) != len(self.images):
             raise ValueError("duplicate visual bytes must not be retained twice")
         if self.human_browser is not None:
-            BrowserCapture(dom=self.raw, evidence=self.human_browser)
+            validate_browser_body(self.raw, self.human_browser)
             if self.human_browser.final_url != self.url or any(
                 value is not None
                 for value in (
@@ -536,7 +544,9 @@ class LedgerRow(Record):
         default=None, exclude_if=lambda v: v is None
     )
     planning_graph: PlanningGraph | None = Field(default=None, exclude_if=lambda v: v is None)
-    human_browser: HumanBrowserEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    human_browser: BrowserSourceEvidence | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     human_assistance: tuple[AssistanceObservation, ...] = Field(
         default=(), exclude_if=lambda v: not v
     )
@@ -569,9 +579,9 @@ class LedgerRow(Record):
                 self.refusal is not None
                 or self.human_assistance
                 or self.url != self.human_browser.request_url
-                or self.bytes_read != self.human_browser.collector_dom_bytes_read
+                or self.bytes_read != self.human_browser.collector_bytes_read
             ):
-                raise ValueError("successful browser capture must retain its exact DOM spend")
+                raise ValueError("successful browser capture must retain its exact source spend")
             if self.human_assistance and self.refusal is None:
                 raise ValueError("failed browser assistance requires its terminal refusal")
             if self.refusal is None and self.human_browser is None:

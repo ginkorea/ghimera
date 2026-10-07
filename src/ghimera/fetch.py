@@ -225,6 +225,15 @@ class FetchLadder:
         # Browser-owned traffic is separately declared; top-level collection
         # still honors the existing exact-host robots decision and cadence.
         await self._politeness.permits(url, robots_get, ledger)
+        selected = budget.config.human_browser
+        if selected is not None and selected.downloads is not None:
+            action = next(
+                (item for item in selected.downloads.actions if item.source_url == url), None
+            )
+            if action is not None and action.navigation_url != url:
+                if not scope.permits(action.navigation_url):
+                    raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+                await self._politeness.permits(action.navigation_url, robots_get, ledger)
 
     async def _render(
         self,
@@ -369,7 +378,7 @@ class FetchLadder:
                 async with asyncio.timeout(request.timeout_seconds):
                     page = await route.execute(request)
                 bytes_read = (
-                    page.human_browser.collector_dom_bytes_read
+                    page.human_browser.collector_bytes_read
                     if page.human_browser
                     else len(page.body)
                 )

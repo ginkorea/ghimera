@@ -23,7 +23,7 @@ from ghimera.graph_types import (
     GraphNode,
     GraphSnapshot,
 )
-from ghimera.human_browser_types import HumanBrowserEvidence
+from ghimera.human_browser_types import BrowserSourceEvidence
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.transport_types import TransportEvidence
@@ -383,14 +383,14 @@ class ResearchGraph:
         *,
         transport: TransportEvidence | None = None,
         local_input: LocalInputEvidence | None = None,
-        human_browser: HumanBrowserEvidence | None = None,
+        human_browser: BrowserSourceEvidence | None = None,
     ) -> str:
         content_digest = hashlib.sha256(raw).hexdigest()
         text_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         # Extraction changes create a new representation of the same source bytes.
         identity = f"{len(url)}:{url}:{content_digest}:{text_digest}:{revision}"
         if human_browser is not None:
-            identity += f":browser_dom:{human_browser.capture_id}"
+            identity += f":{human_browser.acquisition}:{human_browser.capture_id}"
         kind = next(role.kind for role in self._config.roles if role.name == "document")
         doc = GraphNode(
             id=self._identity("document", identity),

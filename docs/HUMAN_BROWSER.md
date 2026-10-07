@@ -197,9 +197,10 @@ the parent HTTP client's DNS/redirect/robots enforcement or network isolation.
 Direct routing is explicitly **operator-declared, not independently verified**.
 Tor configuration refuses before attachment: browser attachment alone cannot
 prove Tor routing or prevent direct fallback. The existing guarded Tor HTTP
-route remains separate. Native PDF/download capture, passive-driver alternatives
-and transport verification are still required follow-ups, not silent HTML
-substitutes.
+route remains separate. A caller-bound native PDF/DOCX download candidate now
+has controlled same-session acceptance; see [browser downloads](BROWSER_DOWNLOADS.md).
+CDP-only download capture, passive-driver alternatives and transport verification
+remain required follow-ups, not silent HTML substitutes.
 
 ## Collector composition (unreleased)
 

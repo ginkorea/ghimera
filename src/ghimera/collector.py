@@ -21,7 +21,7 @@ from ghimera.fetch import FetchLadder, FetchRoute
 from ghimera.http import CurlRoute
 from ghimera.human_browser import ChromiumHumanSession
 from ghimera.human_browser_route import HumanBrowserRoute
-from ghimera.human_browser_types import HumanAssistant
+from ghimera.human_browser_types import AuthorizedBrowserSession, HumanAssistant
 from ghimera.image_ocr import TesseractOcr
 from ghimera.loop import GoalLoop
 from ghimera.mcp_lead_config import McpLeadConfig
@@ -60,6 +60,7 @@ class Collector:
         source_credentials: Mapping[str, SourceCredentials] | None = None,
         source_resolver: Resolver | None = None,
         human_assistant: HumanAssistant | None = None,
+        human_browser_session: AuthorizedBrowserSession | None = None,
         mcp_client: McpLeadClient | None = None,
         discovery_clients: Mapping[str, McpLeadClient] | None = None,
         ahmia_credential: SecretStr | None = None,
@@ -71,11 +72,23 @@ class Collector:
     ) -> None:
         # Revalidate injected models: model_copy(update=...) can bypass guards.
         config = GhimeraConfig.model_validate(config.model_dump())
-        human_session = (
+        if (
+            human_browser_session is None
+            and config.human_browser is not None
+            and (config.human_browser.adapter == "patchright_page")
+        ):
+            raise GhimeraRefused(RefusalCode.SOURCE_SESSION_UNAVAILABLE)
+        if human_browser_session is not None and human_assistant is not None:
+            raise ValueError("assistance belongs to the injected session; do not bind it twice")
+        human_session = human_browser_session or (
             ChromiumHumanSession(config.human_browser, assistant=human_assistant)
             if config.human_browser is not None
             else None
         )
+        if human_browser_session is not None:
+            if config.human_browser is None:
+                raise ValueError("an injected browser session requires its explicit policy")
+            human_browser_session.validate_config(config.human_browser)
         if human_assistant is not None and config.human_browser is None:
             raise ValueError("human assistance requires an explicit browser recipe")
         if (
@@ -243,6 +256,7 @@ class Collector:
         source_credentials: Mapping[str, SourceCredentials] | None = None,
         source_resolver: Resolver | None = None,
         human_assistant: HumanAssistant | None = None,
+        human_browser_session: AuthorizedBrowserSession | None = None,
         mcp_client: McpLeadClient | None = None,
         discovery_clients: Mapping[str, McpLeadClient] | None = None,
         ahmia_credential: SecretStr | None = None,
@@ -260,6 +274,7 @@ class Collector:
             source_credentials=source_credentials,
             source_resolver=source_resolver,
             human_assistant=human_assistant,
+            human_browser_session=human_browser_session,
             mcp_client=mcp_client,
             discovery_clients=discovery_clients,
             ahmia_credential=ahmia_credential,
