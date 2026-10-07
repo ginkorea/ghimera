@@ -119,7 +119,12 @@ that an entire organization has been exhaustively mapped.
    validated organization graph. See
    [SEMANTIC_VERIFICATION.md](SEMANTIC_VERIFICATION.md) and
    [ORGANIZATION_MODEL_EVIDENCE.md](ORGANIZATION_MODEL_EVIDENCE.md), with the
-   latest results in [ORGANIZATION_INDEPENDENT_EVIDENCE.md](ORGANIZATION_INDEPENDENT_EVIDENCE.md).
+   trial-10 results in [ORGANIZATION_INDEPENDENT_EVIDENCE.md](ORGANIZATION_INDEPENDENT_EVIDENCE.md).
+   A dimensioned follow-up reviewed three unchanged failure windows: responses
+   and graph replay worked, but the native-name false negative and both abstract
+   concept/type errors persisted. Its three retained mention occurrences and
+   zero organizational relationships are not a validated organizational graph.
+   See [ORGANIZATION_FACTORIZED_EVIDENCE.md](ORGANIZATION_FACTORIZED_EVIDENCE.md).
 3. Alias/temporal identity and conflict preservation across real documents.
 4. Graph-driven research over a small explicitly scoped organizational subtree,
    proving that findings change its next research frontier: within-run source

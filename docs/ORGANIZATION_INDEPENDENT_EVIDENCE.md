@@ -116,6 +116,10 @@ role identification, entailment, omissions, alias identity or temporal
 hierarchy. A stricter, explicitly versioned role/entailment review contract
 and repeatable native-source rejection cases are the next quality boundary;
 silently rewriting these results or weakening validators is not a fix.
+The subsequent [dimensioned trial 11](ORGANIZATION_FACTORIZED_EVIDENCE.md)
+successfully exercised the new protocol against three unchanged proposal
+windows, but the present-name false negative and both concept/type errors
+persisted. That recipe remains unaccepted despite its valid responses/replay.
 
 ## Retention and replay
 

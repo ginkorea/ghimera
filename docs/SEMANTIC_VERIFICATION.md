@@ -148,8 +148,14 @@ A fresh read-only replay of the previous real-document trial also passed with
 the changed readers: 15 retained windows, 32 ledger rows and 15 graph batches
 on the same Python 3.11.16 interpreter. No model call was repeated and no
 retained response was rewritten. This verifies legacy compatibility, not the
-new prompt's accuracy. The dimensioned recipe still needs a fresh admitted
-real-model trial against positive/negative native role and relationship cases.
+new prompt's accuracy. The subsequent bounded
+[dimensioned real-model trial](ORGANIZATION_FACTORIZED_EVIDENCE.md) reviewed
+three retained failure windows through one admitted GPU. Responses and fresh
+graph/ledger replay passed, but it still rejected a present native name and
+retained two abstract concepts as organizations. It is a failed quality result,
+not acceptance of the recipe. Positive relationship controls, representative
+role/coverage evaluation and full live composition remain required; explicit
+dimensions alone do not correct a wrong model judgment.
 
 The complete dimensioned-extension `scripts/gate.sh` run completed on 7 October
 2026 UTC (6 October in Hawaii) with that same owned Python 3.11.16 interpreter
