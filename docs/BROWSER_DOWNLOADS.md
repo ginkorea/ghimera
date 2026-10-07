@@ -1,7 +1,7 @@
 # Same-session browser document downloads
 
-Status: combined 0.4.2 gate passed with native controlled acceptance; public
-artifact state is recorded separately in [release acceptance](RELEASE_042.md).
+Status: published in 0.4.2 with a combined gate, native controlled acceptance
+and byte-equal public artifact readback; see [release acceptance](RELEASE_042.md).
 
 The authorized-browser port can return either a DOM snapshot or a document
 download. Both go through the existing FetchLadder, document extraction,

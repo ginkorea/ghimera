@@ -1,8 +1,8 @@
 # Ghimera 0.4.2 release acceptance
 
-Status: **COMBINED GATE AND CANDIDATE ARTIFACT ACCEPTANCE PASSED**.
-Final artifacts, tag, main merge and publication still require the separate
-checks below. Published 0.4.1 identities remain immutable.
+Status: **PUBLISHED AND PUBLIC ARTIFACT READBACK VERIFIED**, 7 October 2026 UTC.
+Combined gate, exact final installed-wheel acceptance and independent public
+byte readback passed. Published 0.4.1 identities remain immutable.
 
 ## Scope
 
@@ -67,6 +67,42 @@ archives against the committed checkout and confirm gated source equality.
 Then verify GitHub main/tag pins, publish to the configured official index and
 independently read back public artifact hashes and original bytes. Publication
 is not inferred from a successful upload command.
+
+## Published identity and final artifact acceptance
+
+- Tagged source: `aa4ecf8c3c5c1c45282b1b715a9b46cdcf2a6e0e`.
+- Immutable annotated `v0.4.2` tag:
+  `f2d22e93eb7b91640387bb752aff485c99340dd0`.
+- [Public release](https://pypi.org/project/ghimera/0.4.2/).
+- Wheel: 333,641 bytes; SHA-256
+  `df3edb1f66522402c40b8dfb500c47d6a5d2b00dc6b612903fbaf211909f6353`.
+- Source archive: 1,014,039 bytes; SHA-256
+  `1a9852a4aab33b12befbd7312d7408ba5767b5043a4b231f2bbeb0be124bc6a7`.
+
+The final archives were built from the committed checkout, inspected against
+tracked file bytes, and passed Twine metadata checks. `git diff` confirmed that
+source, tests, examples, version declaration and lock are unchanged from gated
+`9f0c174`. The final wheel replaced the candidate in the independent Python
+3.11.16 wheel environment above; the API/CLI and both native file archives passed
+the same original-byte, exact-citation, policy and graph readback checks again.
+
+GitHub main fast-forwarded from `e1da314` to the tagged source; a separate
+remote read returned the same main, annotated tag and peeled commit identities.
+Official PyPI version-specific metadata was absent before publication. Twine
+6.2.0 uploaded only these artifacts through the existing named `pypi` profile
+to exactly `https://upload.pypi.org/legacy/`; no credential was logged.
+
+The first immediate metadata read returned HTTP 404 during propagation. The
+same readback was repeated without re-uploading. It returned both exact
+filenames, sizes and SHA-256 values, neither yanked. Both files were then
+downloaded from the metadata's verified-HTTPS `files.pythonhosted.org` URLs,
+without credentials or redirects, and compared byte-for-byte with the checked
+final local files. Private original public bytes and metadata are retained in
+`ghimera-042-release-I8CvdR/public-readback` in the owned operator tree.
+
+This publication record is a later documentation-only commit; it is not
+retroactively embedded into or substituted for the published source archive.
+No existing release tag or artifact moved.
 
 ## What this release does not close
 
