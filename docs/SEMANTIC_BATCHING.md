@@ -74,3 +74,22 @@ because its required executable environment variable was omitted. The complete
 gate supplied the installed browser/isolator explicitly; no test was skipped or
 weakened. These results establish source/protocol composition and regressions,
 not package publication, deployment, actual challenge solving or model quality.
+
+## Real-model diagnostic — 7 October 2026 UTC
+
+Trial 15 reused the unchanged native Chinese election passage and all eight
+original mentions/five relationships. Explicit bounds of four mentions and
+two relationships required six calls including coverage; the worker checked
+that the complete set fit the remaining allowance before starting. The pinned reviewer
+used low reasoning, 2,048 output tokens and a 100-second client deadline.
+
+Two calls actually ran, returning HTTP 200 and nonempty final answers in
+16.708 and 16.773 seconds. The first was structurally valid. The second
+contradicted its own mention-review dimensions and was correctly refused;
+the remaining calls were not made. No partial semantic graph was projected.
+This improves the observed final-answer behavior in this one diagnostic,
+not model accuracy, complete review acceptance or a production speed claim.
+
+The consumer was released and its own startup job observed cancelled.
+Fresh-process replay verified three ledger rows and two durable trace batches,
+with zero semantic windows. See [the detailed evidence](ORGANIZATION_GROUNDED_EVIDENCE.md#trial-15-complete-batch-diagnostic).

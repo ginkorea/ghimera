@@ -152,3 +152,87 @@ is committed to the repository.
 | Trial-14 graph | `a10b9cd09e382c26d068f65b4646aadd785063f28a2a332050db53d894947bd5` |
 | Trial-14 private response container | `e540b40530b994fd128a9157fb36c20dd00369b35c0238c118e0738e6bb9f8d1` |
 | Trial-14 raw HTTP response | `e7e76b96ffbe3be741281e06f191986a82abf42d3e9e63ad7ad3d9704d139f4a` |
+
+## Trial 15: complete-batch diagnostic
+
+Observed 7 October 2026 UTC against development source `b2fcc4a6`.
+This is a failed bounded real-model diagnostic, not a complete Collector run,
+organizational accuracy acceptance, publication or deployment.
+
+The same source and proposal hashes above were verified unchanged. This
+diagnostic selected only the retained election passage 15,000–16,500, with
+all eight original mentions and five original relationships. No new extraction
+was performed, no original assertions were changed, and no failure was retried.
+The explicit verification/4 policy selected at most four mentions or two
+relationships per call, plus a final coverage-only call: six calls required
+and checked against the remaining allowance before any review. Each actual
+call reserved its own budget. The configured allowance was six reviews/six
+judges, a 600-second worker wall budget, low reasoning, 2,048 output tokens
+and a 100-second request deadline. This is a changed diagnostic policy, not
+a controlled ablation establishing which setting caused the result.
+
+A fresh governed catalogue read and admission rechecked the same active,
+unwithheld GPT-oss model/revision documented above. The broker's read-only
+health response reported version 0.4.12; this does not establish the deployed
+forwarder's exact source revision. Worker and admission interpreters/import
+roots were the same Python 3.11.16/3.13.14 environments documented above.
+Collection stayed on the laptop. One test GPU was admitted; consumer
+`0303228457a34623bde780a6c69dc07d` was released and the session's own startup
+`job-6f80f090b062` observed cancelled. No pool, service, model or runtime
+configuration changed.
+
+| Actual selection | Latency, seconds | Prompt/completion tokens | Observation |
+| --- | ---: | ---: | --- |
+| Mentions m1–m4 | 16.708 | 5,274 / 499 | HTTP 200, one matching-model choice, stop, nonempty final answer; structurally valid review |
+| Mentions m5–m8 | 16.773 | 5,274 / 627 | Same completion shape; final JSON failed the explicit review-dimension consistency validator |
+
+The second answer marked m7's overall verdict `supported`, its named-entity
+check `supported`, but its required role check `unsupported`. The unchanged
+`GroundedSemanticReview` validator requires the aggregate to match every
+dimension. Parsing the retained final JSON reproduced exactly that validation
+error. The current adapter records such a validation failure as
+`model_unavailable`; that code does not mean this HTTP service was down or
+that final-answer content was absent. Both calls retained non-secret completion
+shape, usage, latency, hashes and their original selected keys.
+
+The first answer's structural validity also does not prove factual quality:
+its written reasons treated Central Committee and National Congress references
+as generic and demanded an explicit existence claim. That reasoning needs
+comparison against the configured institutional definitions and native passage;
+it must not be accepted as evidence of correct entity rejection merely because
+the JSON validated. Neither changing those judgments nor ignoring a failed
+dimension would be an acceptable way to make the diagnostic green.
+
+The complete review stopped after two actual calls. No relationship or
+coverage call ran, no assembled review was invented, and no entity or
+relationship claims were projected. The worker finished in 33.619 seconds
+and replayed its failure; exit zero means diagnostic collection succeeded,
+not model quality acceptance. A separate read-only process verified three
+ledger rows and two durable graph batches (three research/document trace nodes,
+one trace edge, zero semantic windows), with retained file hashes unchanged.
+Its initial sandboxed invocation timed out awaiting the asyncio thread result;
+the identical read-only replay completed outside that sandbox under explicit
+native approval. It made no network/model calls and changed no evidence.
+
+**Decision:** final-answer delivery improved in this particular bounded batch,
+but complete review and organizational quality remain open. The next semantic
+acceptance work must address role-specific review reasoning and consistent
+aggregate verdicts, then demonstrate supported relationships and concrete
+omissions. Preserve the full source/proposal, strict dimensions and actual-call
+evidence; do not substitute reasoning, manufacture support or silently retry.
+This result does not close any real-provider CAPTCHA acceptance gap.
+
+Private ignored recipe: `gate-work/organization-batched-recipe-15.json`.
+Evidence root: `gate-work/organization-batched-review-15`. Only the bounded
+response containers were retained there; no request headers or credentials
+are committed.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Trial-15 recipe | `f644cc33bade8aec82ea9377c878af91bc912852696edbdf182ea61919bc51f0` |
+| Trial-15 cases | `8456c1f9a2c72e401a83161cfe137595e004d73cf024beb457e5c92160a7c756` |
+| Trial-15 summary | `491b4566ef70b1c098748796680d44860d82f7d1b0ac229567fa4345c1eecd25` |
+| Trial-15 ledger | `2b977f856caba5a8874d3c8d08acd9dff9722b8f7f423ab5d547ce99771eed19` |
+| Trial-15 graph | `c907060e6fbf4651da6d0c0c917013408a81efff40eff016fd5b47a1b0298b7d` |
+| Trial-15 response container 1 | `ddc567a4a55908667651a299e115102fc1d7b746acd8d9582fa6422e4d7af097` |
+| Trial-15 response container 2 | `f533f8c8a147efec89120e0d8e18f8bcb5285c03049a1c3b8d18bc6d865260b7` |
