@@ -98,6 +98,8 @@ def endpoints():
         def do_POST(self):
             value = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             solves.append((self.path, value, dict(self.headers)))
+            if "gateway_release" in controls:
+                controls["gateway_release"].wait(timeout=3)
             wire = {
                 "status": "ok",
                 "version": controls.get("version", "fixture-1"),
@@ -224,8 +226,13 @@ def test_byparr_uses_its_declared_wire_and_preserves_native_evidence(endpoints, 
     if dialect == "byparr_seconds":
         assert payload == dict(cmd="request.get", url=origin + "/first", max_timeout=2)
     else:
+        # Queue/lock time consumes the caller deadline before gateway I/O.
+        assert 1000 <= payload["maxTimeout"] <= 2000
         assert payload == dict(
-            cmd="request.get", url=origin + "/first", maxTimeout=2000, returnOnlyCookies=True
+            cmd="request.get",
+            url=origin + "/first",
+            maxTimeout=payload["maxTimeout"],
+            returnOnlyCookies=True,
         )
     assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
     assert SECRET not in page.model_dump_json()
@@ -428,6 +435,127 @@ def test_cache_expiry_does_not_send_stale_clearance(endpoints, monkeypatch):
     assert selected is not None
     monkeypatch.setattr("ghimera.challenges.time.time", lambda: selected.evidence.expires_at + 1)
     assert sessions.select(origin + "/next") is None
+
+
+def test_concurrent_pages_share_one_clearance_attempt(endpoints):
+    cfg, _, _, origin = setup(endpoints)
+    sessions = ChallengeSessions(cfg.challenges)
+    release = endpoints[4]["gateway_release"] = threading.Event()
+
+    async def run():
+        calls = [
+            asyncio.create_task(sessions.resolve(origin + path, timeout_seconds=2, max_bytes=4000))
+            for path in ("/one", "/two", "/three")
+        ]
+        while not endpoints[3]:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        release.set()
+        return await asyncio.gather(*calls)
+
+    results = asyncio.run(run())
+    assert len(endpoints[3]) == 1
+    assert results[0][0] == results[1][0] == results[2][0]
+    assert sum(read > 0 for _, read in results) == 1
+    assert SECRET not in "".join(evidence.model_dump_json() for evidence, _ in results)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_waiting_page_deadline_or_cancellation_does_not_cancel_the_solver(endpoints, cancel):
+    from ghimera.challenges import ChallengeCancelled, ChallengeFailure
+
+    cfg, _, _, origin = setup(endpoints)
+    sessions = ChallengeSessions(cfg.challenges)
+    release = endpoints[4]["gateway_release"] = threading.Event()
+
+    async def run():
+        owner = asyncio.create_task(
+            sessions.resolve(origin + "/owner", timeout_seconds=2, max_bytes=4000)
+        )
+        while not endpoints[3]:
+            await asyncio.sleep(0.01)
+        waiter = asyncio.create_task(
+            sessions.resolve(
+                origin + "/waiter", timeout_seconds=1 if cancel else 0.03, max_bytes=4000
+            )
+        )
+        if cancel:
+            await asyncio.sleep(0.01)
+            waiter.cancel()
+        with pytest.raises(ChallengeCancelled if cancel else ChallengeFailure) as caught:
+            await waiter
+        assert caught.value.bytes_read == 0
+        assert not owner.done()
+        release.set()
+        return await owner
+
+    evidence, read = asyncio.run(run())
+    assert read > 0 and evidence.origin == origin and len(endpoints[3]) == 1
+
+
+def test_failed_old_fetch_cannot_discard_a_new_clearance(endpoints):
+    cfg, _, _, origin = setup(endpoints)
+    sessions = ChallengeSessions(cfg.challenges)
+
+    async def run():
+        await sessions.resolve(origin + "/one", timeout_seconds=1, max_bytes=4000)
+        old = sessions.select(origin)
+        sessions.discard(origin)
+        await sessions.resolve(origin + "/two", timeout_seconds=1, max_bytes=4000)
+        current = sessions.select(origin)
+        assert old is not None and current is not None and current is not old
+        sessions.discard(origin, expected=old)
+        assert sessions.select(origin) is current
+        sessions.discard(origin, expected=current)
+        assert sessions.select(origin) is None
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_failed_or_cancelled_solver_releases_waiters_for_a_fresh_attempt(
+    endpoints, monkeypatch, cancel
+):
+    from ghimera.challenges import ChallengeFailure
+
+    cfg, _, _, origin = setup(endpoints)
+    sessions = ChallengeSessions(cfg.challenges)
+    original = sessions._resolve
+
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def controlled(url, *, timeout_seconds, max_bytes):
+            calls.append(timeout_seconds)
+            if len(calls) == 1:
+                entered.set()
+                await release.wait()
+                raise ChallengeFailure(0)
+            return await original(url, timeout_seconds=timeout_seconds, max_bytes=max_bytes)
+
+        monkeypatch.setattr(sessions, "_resolve", controlled)
+        owner = asyncio.create_task(
+            sessions.resolve(origin + "/owner", timeout_seconds=2, max_bytes=4000)
+        )
+        await entered.wait()
+        waiter = asyncio.create_task(
+            sessions.resolve(origin + "/waiter", timeout_seconds=1, max_bytes=4000)
+        )
+        await asyncio.sleep(0.03)
+        if cancel:
+            owner.cancel()
+        else:
+            release.set()
+        with pytest.raises(ChallengeFailure if not cancel else asyncio.CancelledError):
+            await owner
+        evidence, read = await waiter
+        assert 0 < calls[1] < 0.98
+        assert evidence.origin == origin and read > 0
+        assert sessions.select(origin) is not None
+
+    asyncio.run(run())
+    assert len(endpoints[3]) == 1
 
 
 def test_challenged_robots_file_can_be_read_without_overriding_its_disallow(endpoints):

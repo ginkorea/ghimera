@@ -38,6 +38,20 @@ redirects cannot carry the cookie. Clearing is refused for source URLs with
 configured account credentials; this adapter never sends those credentials to
 a solver or combines its cookies with an entitled account's session.
 
+Concurrent pages on one route share a single in-flight recovery per exact
+origin. Waiting consumes each caller's deadline; a timed-out or cancelled
+waiter does not cancel the active solver. The active call's own failure or
+cancellation releases the origin so another caller can retry within its run
+budget. Different origins have independent gates. Gates are bounded by the
+configured origin set and owned by the route's event loop, not a global pool.
+
+An already-acquired clearance can satisfy a waiting recovery with zero new
+gateway bytes, but the caller still records a budgeted recovery attempt and
+must refetch and verify its source content. An older fetch failure invalidates
+only the specific clearance it used, never a replacement acquired meanwhile.
+Cache eviction and expiry still apply. No detached solver task, disk cookie
+store or cross-worker token transfer is introduced.
+
 ## Gateway deployment is a separate network boundary
 
 Use a locally installed, version-pinned FlareSolverr or Byparr service bound only to
@@ -174,3 +188,15 @@ profile passed on 6 October 2026: **472 passed, zero failed, zero skipped**,
 local browser. Lint/formatting passed for 127 files and strict typing for 89
 source files. No live gateway was listening on the configured local solver
 ports during that check; this does not close remote challenge acceptance.
+
+The concurrent-clearance update was validated using
+`/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16), importing this
+worktree's `src/ghimera`: **86 passed, zero failed, zero skipped**, in 108.08
+seconds across `test_challenges.py`, `test_http_fetch.py`,
+`test_source_sessions.py` and `test_browser_redirects.py`. Changed-file lint
+and formatting passed, and strict typing passed for the two changed source
+modules. The concurrency witness failed before the change (three gateway
+requests instead of one). The green run used loopback HTTP fixtures and the
+isolated local Chromium fixture, not a real remote CAPTCHA or installed
+FlareSolverr/Byparr. This was a focused regression run, not a fresh full-package
+gate or publication.

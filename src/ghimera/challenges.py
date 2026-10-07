@@ -72,6 +72,9 @@ class ChallengeSessions:
     def __init__(self, policy: ChallengeConfig) -> None:
         self.policy = ChallengeConfig.model_validate(policy.model_dump())
         self._sessions: OrderedDict[str, Clearance] = OrderedDict()
+        # State belongs to this route/event loop, not a crawler-wide registry.
+        # The configured origin set bounds locks even after cache eviction.
+        self._gates = {origin: asyncio.Lock() for origin in self.policy.allowed_origins}
 
     def select(self, url: str) -> Clearance | None:
         origin = exact_origin(url)
@@ -83,10 +86,41 @@ class ChallengeSessions:
             self._sessions.move_to_end(origin)
         return selected
 
-    def discard(self, url: str) -> None:
-        self._sessions.pop(exact_origin(url), None)
+    def discard(self, url: str, *, expected: Clearance | None = None) -> None:
+        origin = exact_origin(url)
+        if expected is None or self._sessions.get(origin) is expected:
+            self._sessions.pop(origin, None)
 
     async def resolve(
+        self, url: str, *, timeout_seconds: float, max_bytes: int
+    ) -> tuple[ChallengeEvidence, int]:
+        origin = exact_origin(url)
+        timeout = min(timeout_seconds, self.policy.timeout_seconds)
+        gate = self._gates.get(origin)
+        if gate is None or not math.isfinite(timeout_seconds) or timeout <= 0 or max_bytes <= 0:
+            raise ChallengeFailure(0)
+        started = time.monotonic()
+        try:
+            async with asyncio.timeout(timeout):
+                await gate.acquire()
+        except TimeoutError:
+            raise ChallengeFailure(0) from None
+        except asyncio.CancelledError:
+            raise ChallengeCancelled(0) from None
+        try:
+            remaining = timeout - (time.monotonic() - started)
+            if remaining <= 0:
+                raise ChallengeFailure(0)
+            cached = self.select(url)
+            if cached is not None:
+                # No new gateway bytes were read. The caller still records its
+                # bounded recovery attempt and verifies a native source refetch.
+                return cached.evidence, 0
+            return await self._resolve(url, timeout_seconds=remaining, max_bytes=max_bytes)
+        finally:
+            gate.release()
+
+    async def _resolve(
         self, url: str, *, timeout_seconds: float, max_bytes: int
     ) -> tuple[ChallengeEvidence, int]:
         # Import shared libcurl buffer primitives at invocation to avoid the

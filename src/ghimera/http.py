@@ -227,7 +227,9 @@ class CurlRoute(FetchRoute):
             )
             if clearance is not None and page_barrier(result) is not None:
                 if self._challenges is not None:
-                    self._challenges.discard(request.url)
+                    # A late failure using old clearance must not invalidate a
+                    # replacement acquired by another page in the meantime.
+                    self._challenges.discard(request.url, expected=clearance)
             return result
         except CurlError as exc:
             code = (
