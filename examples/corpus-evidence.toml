@@ -1,0 +1,37 @@
+# Non-active retained-snapshot context. Replace corpus identities and the exact
+# query model binding from an explicitly opened EvidenceCorpus. No source fetch
+# occurs; no source acquisition time or current-intent acceptance is inferred.
+schema = "ghimera.corpus-evidence-config/1"
+corpus_id = "00000000000000000000000000000000"
+corpus_config_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+max_query_chars = 1200
+max_passage_hits = 20
+max_documents = 10
+max_original_bytes = 1048576
+max_response_bytes = 16777216
+minimum_cosine = 0.25
+languages = []
+timeout_seconds = 30.0
+source_mode = "retained_snapshot"
+
+[query_encoder]
+schema = "chimera.embedding-service/1"
+endpoint = "http://127.0.0.1:18095/v1/embeddings"
+approved_addresses = ["127.0.0.1"]
+allow_plaintext = true
+allow_plaintext_credentials = false
+authorization = "none"
+model_id = "configure-reviewed-multilingual-encoder"
+revision = "replace-with-immutable-revision"
+served_model = "local-encoder"
+timeout_seconds = 30.0
+max_request_bytes = 1048576
+max_response_bytes = 2097152
+max_header_bytes = 16384
+require_usage = true
+max_input_chars = 20000
+dimensions = 1024
+request_dimensions = false
+max_batch_texts = 16
+max_text_chars = 1400
+text_prefix = ""

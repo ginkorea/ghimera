@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 
+from ghimera.corpus_bindings import validate_query
 from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.corpus_types import BoundCorpusDocument, CorpusQuery, CorpusRecord
 from ghimera.models import Document
@@ -67,16 +68,16 @@ class CorpusSearchWire(CorpusRecord):
 
     def validate_policy(self, policy: CorpusSearchConfig, query_text: str) -> None:
         query = self.query
-        call = query.encoding_call
-        encoded = policy.query_encoder.text_prefix + query_text
+        validate_query(
+            query,
+            query_text,
+            corpus_id=policy.corpus_id,
+            config_sha256=policy.corpus_config_sha256,
+            query_encoder=policy.query_encoder,
+        )
         if (
             self.binding_revision != policy.identity[1]
             or self.query_text != query_text
-            or query.corpus_id != policy.corpus_id
-            or query.config_sha256 != policy.corpus_config_sha256
-            or call.service != policy.query_encoder
-            or call.input_sha256 != (hashlib.sha256(encoded.encode()).hexdigest(),)
-            or call.input_chars != len(encoded)
             or len(query_text) > policy.max_query_chars
             or not query_text.strip()
             or len(query.hits) > policy.max_passage_hits

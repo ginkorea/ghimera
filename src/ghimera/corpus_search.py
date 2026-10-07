@@ -3,6 +3,7 @@
 import asyncio
 
 from ghimera.corpus import EvidenceCorpus
+from ghimera.corpus_bindings import validate_reader
 from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.corpus_search_wire import CorpusLeadOmission, CorpusSearchWire, corpus_source_url
 from ghimera.corpus_types import BoundCorpusDocument
@@ -46,16 +47,15 @@ class CorpusLeadSearch(GroundedSearch):
 
     def _check(self) -> None:
         corpus, policy = self._corpus, self.policy
-        corpus.check_ready()
-        if (
-            corpus.identity != policy.corpus_id
-            or corpus.config.identity != policy.corpus_config_sha256
-            or corpus.config.query_encoder != policy.query_encoder
-            or policy.max_query_chars > corpus.config.max_query_chars
-            or policy.max_passage_hits > corpus.config.max_top_k
-            or policy.minimum_cosine < corpus.config.minimum_cosine
-        ):
-            raise ValueError("corpus search requires its exact admitted corpus, model and bounds")
+        validate_reader(
+            corpus,
+            corpus_id=policy.corpus_id,
+            config_sha256=policy.corpus_config_sha256,
+            query_encoder=policy.query_encoder,
+            max_query_chars=policy.max_query_chars,
+            max_passage_hits=policy.max_passage_hits,
+            minimum_cosine=policy.minimum_cosine,
+        )
 
     @property
     def identity(self) -> tuple[str, str]:

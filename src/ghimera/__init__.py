@@ -5,6 +5,8 @@ from ghimera.config import GhimeraConfig
 from ghimera.continuation import CheckpointReceipt, ResearchSuspended
 from ghimera.corpus import EvidenceCorpus
 from ghimera.corpus_config import CorpusConfig
+from ghimera.corpus_evidence import CorpusEvidenceBundle, CorpusEvidenceReader
+from ghimera.corpus_evidence_config import CorpusEvidenceConfig
 from ghimera.corpus_search import CorpusLeadSearch
 from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.delivery_collector import (
@@ -53,6 +55,9 @@ __all__ = [
     "ResearchSuspended",
     "EvidenceCorpus",
     "CorpusConfig",
+    "CorpusEvidenceConfig",
+    "CorpusEvidenceBundle",
+    "CorpusEvidenceReader",
     "CorpusLeadSearch",
     "CorpusSearchConfig",
     "PersistentCollector",
