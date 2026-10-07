@@ -125,3 +125,12 @@ not model accuracy, complete review acceptance or a production speed claim.
 The consumer was released and its own startup job observed cancelled.
 Fresh-process replay verified three ledger rows and two durable trace batches,
 with zero semantic windows. See [the detailed evidence](ORGANIZATION_GROUNDED_EVIDENCE.md#trial-15-complete-batch-diagnostic).
+
+Trial 16 explicitly selected `assigned_role_checks` on full-gated source
+`fa95756`, retaining the same inputs, original proposals, model and bounds.
+Both mention batches were structurally valid; the third call falsely asserted
+dates on undated original relationships and contradicted its own dimensional
+verdicts. Validation refused the complete review, without projecting partial
+semantic claims. The consumer was released and its own startup job cancelled.
+This narrows the next schema correction, not entity/relation accuracy or full
+acceptance. See [trial 16](ORGANIZATION_GROUNDED_EVIDENCE.md#trial-16-assigned-role-review-diagnostic).

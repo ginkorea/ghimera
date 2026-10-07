@@ -236,3 +236,75 @@ are committed.
 | Trial-15 graph | `c907060e6fbf4651da6d0c0c917013408a81efff40eff016fd5b47a1b0298b7d` |
 | Trial-15 response container 1 | `ddc567a4a55908667651a299e115102fc1d7b746acd8d9582fa6422e4d7af097` |
 | Trial-15 response container 2 | `f533f8c8a147efec89120e0d8e18f8bcb5285c03049a1c3b8d18bc6d865260b7` |
+
+## Trial 16: assigned-role review diagnostic
+
+Observed 7 October 2026 UTC against full-gated source `fa95756`.
+The explicit `assigned_role_checks` option selected review prompt revision 5;
+all source bytes, original proposals, ontology definitions, thresholds, model
+pin, generation settings, partition limits and budgets stayed as in trial 15.
+The source/proposal hashes above were rechecked unchanged. No extraction or
+automatic retry ran. This is a bounded review diagnostic, not an actual full
+Collector run or a validated organization graph.
+
+The source gate used the owned Python 3.11.16 interpreter/import root above:
+631 passed, zero failed or skipped in 534.41 seconds, with lint/formatting and
+strict typing green. The live worker used that same interpreter; admission used
+the inspected Python 3.13.14 SDK/import root documented above. A fresh governed
+read and admission rechecked the same active, unwithheld model/revision. Broker
+health reported 0.4.12 at build `08d2bccd8f529dc4311da479a1d39898eb5170fa`;
+no service or model configuration changed. One test GPU was admitted, consumer
+`6a247787cfb34b7191635f77f5bad0cb` released, and its own startup
+`job-5a839a186d7a` observed cancelled.
+
+| Actual selection | Latency, seconds | Prompt/completion tokens | Observation |
+| --- | ---: | ---: | --- |
+| Mentions m1–m4 | 22.308 | 5,511 / 791 | Structurally valid dimensional review |
+| Mentions m5–m8 | 24.443 | 5,511 / 797 | Structurally valid dimensional review |
+| Relationships 0–1 | 14.832 | 5,491 / 498 | Final JSON failed relation-dimension consistency |
+
+All three returned HTTP 200, one matching-model choice, stop and nonempty final
+content. Both mention batches supplied all original selected keys with consistent
+dimensions. This does not establish entity accuracy: the reasons accepted the
+generic party-organization phrase as a specific body and a secretariat as a
+position, requiring further native-source/type evaluation. Increased support
+counts are not themselves an improvement in quality.
+
+For both selected relationships, original `valid_from` and `valid_to` are null.
+The returned JSON nevertheless set `validity.asserted=true`, with an ambiguous
+date assessment, while setting the overall relation verdict to supported.
+Read-only parsing reproduced `relation summary must match asserted review
+dimensions`. Even a consistent ambiguous verdict would not repair the false
+asserted-date flag: the existing grounded validator separately compares it to
+the unchanged original dates. The answer also described composition-based
+direction as an implication, not proof of the configured directing predicate;
+structural repair alone would not prove correct entailment.
+
+The complete review stopped after three actual calls in 61.792 seconds. No
+remaining relationship or coverage call was made and no assembled review or
+semantic graph claim was fabricated. Fresh-process read-only replay verified
+four ledger rows and two durable trace batches: three research/document nodes,
+one trace edge, zero semantic windows. Retained file hashes remained unchanged.
+Diagnostic exit zero records this failure correctly; it is not quality success.
+
+**Next bounded action:** constrain the deterministic date-assertion input state
+in model-facing schemas, keyed to each selected original relationship, without
+inventing or changing dates. Preserve old prompt/schema behavior through an
+explicit versioned profile. Continue to assess entailment/direction independently,
+and do not coerce contradictory verdicts, weaken native validators or substitute
+reasoning for final evidence. Complete review and real organizational quality
+remain open, as do actual CAPTCHA-provider and the broader capability acceptance.
+
+Private ignored recipe: `gate-work/organization-assigned-role-recipe-16.json`.
+Evidence root: `gate-work/organization-assigned-role-review-16`.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Trial-16 recipe | `d23753eda5a681daf43e47a42347f7261fd243abc91e07323da28df2577b6da7` |
+| Trial-16 cases | `8456c1f9a2c72e401a83161cfe137595e004d73cf024beb457e5c92160a7c756` |
+| Trial-16 summary | `c6e5bee529730f6157c703dc6ea5ca8792079dca2063b8953f02f89ad70006e2` |
+| Trial-16 ledger | `20b9a12db74b90a2d9ac999523294db0f83a0afeff01b87a47309dd9f9815c2d` |
+| Trial-16 graph | `bf51d2fc78056657236e7316234b3ce50bddc0537cf88835181c5429d366b884` |
+| Trial-16 response container 1 | `bebef4458760735a5552e0c22d4065a4214685415eb8d9054507a1b26c77d999` |
+| Trial-16 response container 2 | `5f42312775b906d2ff0993e126da34352451a24de1ba2c24a174d1e29a0748e2` |
+| Trial-16 response container 3 | `0ebc13fa22ff4e1e5611b3d9c54fcd91ffeaf2a1345496405eeedd4c2b74cd11` |
