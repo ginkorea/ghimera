@@ -33,6 +33,7 @@ from ghimera.semantic_types import (
 )
 from ghimera.source_session_types import SourceSessionUse
 from ghimera.transport_types import TransportEvidence
+from ghimera.visual_types import ImageEvidence
 
 NonEmpty = Annotated[str, Field(min_length=1)]
 NonNegative = Annotated[int, Field(strict=True, ge=0)]
@@ -275,8 +276,21 @@ class DocumentSource(Record):
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     human_browser: HumanBrowserEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    images: tuple[ImageEvidence, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     def validate_policy(self, config: GhimeraConfig) -> None:
+        if self.images:
+            if config.visuals is None:
+                raise ValueError("retained images require the effective visual recipe")
+            visual_digest = hashlib.sha256(config.visuals.model_dump_json().encode()).hexdigest()
+            if len(self.images) > config.visuals.max_images_per_page or any(
+                image.config_sha256 != visual_digest
+                or len(image.raw) > config.visuals.max_image_bytes
+                or image.ocr.width * image.ocr.height > config.visuals.max_pixels
+                or not set(image.ocr.language_pack_sha256) <= set(config.visuals.languages)
+                for image in self.images
+            ):
+                raise ValueError("visual evidence must bind its exact policy and limits")
         if self.human_browser is not None:
             self.human_browser.validate_policy(config.human_browser)
         if self.local_input is not None:
@@ -317,6 +331,13 @@ class DocumentSource(Record):
 
     @model_validator(mode="after")
     def source_binding(self) -> "DocumentSource":
+        if any(
+            image.candidate.parent_url != self.url or image.candidate.parent_sha256 != self.sha256
+            for image in self.images
+        ):
+            raise ValueError("retained visuals must bind their original parent")
+        if len({image.sha256 for image in self.images}) != len(self.images):
+            raise ValueError("duplicate visual bytes must not be retained twice")
         if self.human_browser is not None:
             BrowserCapture(dom=self.raw, evidence=self.human_browser)
             if self.human_browser.final_url != self.url or any(
@@ -446,6 +467,8 @@ class LedgerRow(Record):
         "local_input",
         "semantic",
         "semantic_review",
+        "visual",
+        "visual_model",
     ]
     url: str | None = None
     route: str | None = None
@@ -794,6 +817,7 @@ class Harvest(Record):
                 "review",
                 "semantic",
                 "semantic_review",
+                "visual_model",
             }
             for row in self.ledger
         ):

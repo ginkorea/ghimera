@@ -41,6 +41,8 @@ from ghimera.scoring import Scorer
 from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, SemanticStage
 from ghimera.semantic_recovery import SemanticRecoveryStopped
 from ghimera.session_state import SessionState
+from ghimera.visual_stage import VisualStage
+from ghimera.visual_types import ImageEvidence
 
 CollectionStop = StopReason | Literal["round_limit"]
 
@@ -156,6 +158,7 @@ class GoalLoop:
         semantic_extractor: SemanticExtractor | None = None,
         semantic_reviewer: SemanticReviewer | None = None,
         graph_sink: GraphSink | None = None,
+        visual_stage: VisualStage | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._config = config
@@ -166,6 +169,11 @@ class GoalLoop:
         scorer.validate_config(config)
         self._judge = judge
         self._graph_sink = graph_sink
+        self._visuals = visual_stage
+        if (config.visuals is None) != (visual_stage is None) or (
+            visual_stage is not None and visual_stage.config != config.visuals
+        ):
+            raise ValueError("visual recipe and bound stage must be supplied together")
         if (config.semantics is not None) != (semantic_extractor is not None):
             raise ValueError("semantic policy and extractor must be supplied together")
         if semantic_extractor is None and semantic_reviewer is not None:
@@ -559,6 +567,17 @@ class GoalLoop:
                 break
         if verdict is not None and verdict.decision == "accept":
             digest = hashlib.sha256(page.body).hexdigest()
+            images: tuple[ImageEvidence, ...] = ()
+            if self._visuals is not None and active_scope is not None:
+                images = await self._visuals.collect(
+                    goal=goal,
+                    parent=page,
+                    scope=active_scope,
+                    fetcher=self._fetcher,
+                    budget=budget,
+                    ledger=ledger,
+                    language_hint=extracted.language,
+                )
             candidate = Document(
                 url=page.final_url,
                 sha256=digest,
@@ -571,6 +590,7 @@ class GoalLoop:
                 challenge_use=page.challenge_use,
                 local_input=page.local_input,
                 human_browser=page.human_browser,
+                images=images,
             )
             content = session._content
             matched = content.match(candidate) if content is not None else None

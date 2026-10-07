@@ -19,6 +19,7 @@ from ghimera.http import CurlRoute
 from ghimera.human_browser import ChromiumHumanSession
 from ghimera.human_browser_route import HumanBrowserRoute
 from ghimera.human_browser_types import HumanAssistant
+from ghimera.image_ocr import TesseractOcr
 from ghimera.loop import GoalLoop
 from ghimera.mcp_lead_config import McpLeadConfig
 from ghimera.mcp_leads import McpLeadClient, McpLeadSearch
@@ -33,6 +34,8 @@ from ghimera.searxng import SearxHtmlSearch, SearxSearch
 from ghimera.semantic_scoring import EmbeddingScorer
 from ghimera.source_sessions import SourceCredentials
 from ghimera.transport import Resolver
+from ghimera.visual_model import LocalVisionReader
+from ghimera.visual_stage import VisualStage
 
 HTML_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 
@@ -58,6 +61,8 @@ class Collector:
         discovery_clients: Mapping[str, McpLeadClient] | None = None,
         ahmia_credential: SecretStr | None = None,
         discovery_credentials: Mapping[str, SecretStr] | None = None,
+        vision_credential: SecretStr | None = None,
+        visual_reviewer_credential: SecretStr | None = None,
     ) -> None:
         # Revalidate injected models: model_copy(update=...) can bypass guards.
         config = GhimeraConfig.model_validate(config.model_dump())
@@ -159,12 +164,29 @@ class Collector:
         if config.document_extraction is not None:
             extractor = DocumentExtractionSuite(html=extractor, documents=DocumentExtractor(config))
         renderer = IsolatedBrowserRenderer(config) if config.browser is not None else None
+        visuals = None
+        if config.visuals is not None:
+            visuals = VisualStage(
+                config.visuals,
+                ocr=TesseractOcr(config.visuals),
+                judge=models.judge,
+                vision=LocalVisionReader(
+                    config.visuals,
+                    vision_credential=vision_credential,
+                    reviewer_credential=visual_reviewer_credential,
+                )
+                if config.visuals.vision is not None
+                else None,
+            )
+        elif vision_credential is not None or visual_reviewer_credential is not None:
+            raise ValueError("visual credentials require a visual service recipe")
         collection = GoalLoop(
             config=config,
             fetcher=FetchLadder(routes, renderer=renderer),
             extractor=extractor,
             scorer=scorer,
             judge=models.judge,
+            visual_stage=visuals,
             semantic_extractor=models.service(config.semantics.model_role)
             if config.semantics is not None
             else None,

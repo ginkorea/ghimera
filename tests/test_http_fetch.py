@@ -63,6 +63,11 @@ def site():
                 headers["Location"] = "/loop"
             elif self.path == "/flaky" and counts[self.path] == 1:
                 status, body = 503, b"retry later"
+            elif self.path in {"/limited", "/always-limited"} and (
+                self.path == "/always-limited" or counts[self.path] == 1
+            ):
+                status, body = 429, b"please wait"
+                headers["Retry-After"] = "1"
             elif self.path == "/forbidden":
                 status, body = 403, b"denied"
             elif self.path == "/challenge":
@@ -165,6 +170,47 @@ def fetch(site, path, **updates):
     ladder, scope, budget, ledger, origin = state(site, **updates)
     page = asyncio.run(ladder.fetch(origin + path, scope, budget, ledger))
     return page, budget, ledger
+
+
+def pacing_state(site, **updates):
+    _, _, previous, _, _ = state(site)
+    raw = previous.config.model_dump(by_alias=True)
+    raw["cadence"] = {
+        "schema": "ghimera.cadence/1",
+        "jitter_seconds": 0.01,
+        "throttle_statuses": [429, 503],
+        "throttle_base_seconds": 0.02,
+        "throttle_multiplier": 2.0,
+        "max_backoff_seconds": 0.1,
+        "respect_retry_after": True,
+    }
+    raw.update(updates)
+    return state(site, **raw)
+
+
+def test_real_http_throttle_retries_after_server_wait_with_exact_spend(site):
+    ladder, scope, budget, ledger, origin = pacing_state(site)
+    result = asyncio.run(ladder.fetch(origin + "/limited", scope, budget, ledger))
+    assert result.status == 200
+    starts = [stamp for path, stamp in site[2] if path == "/limited"]
+    assert len(starts) == 2
+    assert starts[1] - starts[0] >= 0.99
+    assert budget.fetches == 3
+    assert sum(row.bytes_read for row in ledger.snapshot()) == budget.bytes_read
+    assert [row.status for row in ledger.snapshot() if row.event == "fetch"] == [200, 429, 200]
+
+
+def test_real_http_exhausted_throttle_does_not_fall_back_to_another_route(site):
+    from ghimera.doubles import FakeRoute
+
+    original, scope, budget, ledger, origin = pacing_state(site, retry_budget=0)
+    fallback = FakeRoute()
+    ladder = FetchLadder(original._routes + (fallback,))
+    with pytest.raises(GhimeraRefused, match="fetch_failed"):
+        asyncio.run(ladder.fetch(origin + "/always-limited", scope, budget, ledger))
+    assert site[1]["/always-limited"] == 1
+    assert not fallback.requests
+    assert ledger.snapshot()[-1].status == 429
 
 
 def test_real_http_robots_and_every_request_counted(site):

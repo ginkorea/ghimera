@@ -1,0 +1,11 @@
+# Append this optional root section to a complete collector configuration.
+# These are sample operator choices, not source constants or automatic defaults.
+# The existing per_host_delay_seconds is a floor; lower concurrency if needed.
+[cadence]
+schema = "ghimera.cadence/1"
+jitter_seconds = 1.5
+throttle_statuses = [429, 503]
+throttle_base_seconds = 5.0
+throttle_multiplier = 2.0
+max_backoff_seconds = 120.0
+respect_retry_after = true

@@ -1234,6 +1234,9 @@ html = [
     { name = "lingua-language-detector" },
     { name = "scrapling" },
 ]
+images = [
+    { name = "pillow" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1252,11 +1255,12 @@ requires-dist = [
     { name = "lingua-language-detector", marker = "extra == 'documents'", specifier = "==2.1.1" },
     { name = "lingua-language-detector", marker = "extra == 'html'", specifier = "==2.1.1" },
     { name = "patchright", marker = "extra == 'browser'", specifier = "==1.63.0" },
+    { name = "pillow", marker = "extra == 'images'", specifier = "==12.3.0" },
     { name = "protego", specifier = "==0.7.0" },
     { name = "pydantic", specifier = "==2.13.5" },
     { name = "scrapling", marker = "extra == 'html'", specifier = "==0.4.2" },
 ]
-provides-extras = ["browser", "html", "documents"]
+provides-extras = ["browser", "html", "documents", "images"]
 
 [package.metadata.requires-dev]
 dev = [

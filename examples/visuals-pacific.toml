@@ -1,0 +1,48 @@
+# Non-active fragment, parsed as VisualConfig. Replace interpreter/storage paths
+# and install every declared pack into the explicitly selected offline directory.
+# This does not install a model or activate a served vision endpoint.
+schema = "ghimera.visual/1"
+max_candidates_per_page = 40
+max_images_per_page = 4
+max_image_bytes = 8388608
+max_pixels = 20000000
+min_width = 200
+min_height = 120
+max_ocr_chars = 20000
+max_ocr_spans = 4000
+min_word_confidence = 30.0
+excluded_tokens = ["logo", "favicon", "avatar", "icon", "sprite", "tracking", "pixel", "advert", "banner-ad"]
+candidate_terms = ["infographic", "chart", "diagram", "map", "organization", "組織", "组织", "図", "図表", "도표", "mapa"]
+allowed_hosts = []
+image_types = ["image/png", "image/jpeg", "image/webp"]
+tesseract = "/opt/ghimera/bin/tesseract"
+tessdata_directory = "/var/lib/ghimera/models/tessdata"
+languages = ["eng", "chi_sim", "chi_tra", "jpn", "kor", "fil", "ind", "msa", "vie", "tha", "khm", "lao", "mya", "mri"]
+fallback_languages = ["eng", "chi_sim", "chi_tra", "jpn", "kor"]
+worker_python = "/opt/ghimera/venv/bin/python"
+work_directory = "/var/lib/ghimera/work/visuals"
+max_workers = 2
+cpu_threads = 2
+timeout_seconds = 60.0
+cleanup_timeout_seconds = 5.0
+max_output_bytes = 120000000
+max_diagnostic_bytes = 16384
+page_segmentation = 11
+
+[language_routes]
+en = ["eng"]
+zh = ["chi_sim", "chi_tra", "eng"]
+"zh-Hans" = ["chi_sim", "eng"]
+"zh-Hant" = ["chi_tra", "eng"]
+ja = ["jpn", "eng"]
+ko = ["kor", "eng"]
+tl = ["fil", "eng"]
+fil = ["fil", "eng"]
+id = ["ind", "eng"]
+ms = ["msa", "eng"]
+vi = ["vie", "eng"]
+th = ["tha", "eng"]
+km = ["khm", "eng"]
+lo = ["lao", "eng"]
+my = ["mya", "eng"]
+mi = ["mri", "eng"]

@@ -4,6 +4,18 @@
 
 ## 0.4.0 — 2026-10-07
 
+- Typed browsing-cadence recipe with nonnegative spacing jitter, shared-origin
+  exponential throttle backoff and `Retry-After`. Cooldown waits do not consume
+  a global request slot; exhausted throttles cannot escalate to another route.
+- Selective HTML infographic admission, bounded offline raster decode and local
+  Tesseract OCR with native language routing, pack/executable hashes and region
+  provenance. Optional local vision proposals require a separately configured
+  source-bound review. Only accepted images enter document sidecars; rejected
+  images are evicted from conditional cache and no image vectors are generated.
+  Pacific pack examples are explicit configuration, not multilingual quality
+  claims. Embedded PDF figures and visual graph/answer/index integration remain
+  tracked gaps.
+
 - Configurable MCP discovery with compatible `web_search` lead envelopes;
   multi-provider open-web/onion routing, concurrent fan-out or ordered fallback,
   per-provider budgets and bounded discovery switching after research stalls.

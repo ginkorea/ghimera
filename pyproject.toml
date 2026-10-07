@@ -26,6 +26,7 @@ ghimera = "ghimera.command:main"
 browser = ["patchright==1.63.0"]
 html = ["scrapling==0.4.2", "crawl4ai==0.9.4", "lingua-language-detector==2.1.1"]
 documents = ["docling-slim[convert-core,format-docx,format-pdf]==2.134.0", "docling-core==2.99.0", "lingua-language-detector==2.1.1"]
+images = ["Pillow==12.3.0"]
 
 [dependency-groups]
 dev = ["pytest==9.1.1", "ruff==0.16.10", "mypy==2.4.0", "jsonschema==4.26.0"]

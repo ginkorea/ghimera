@@ -104,6 +104,15 @@ class FetchLadder:
     async def fetch(self, url: str, scope: Scope, budget: RunBudget, ledger: Ledger) -> Page:
         return await self._fetch(url, scope, budget, ledger, allow_render=True)
 
+    async def fetch_image(self, url: str, scope: Scope, budget: RunBudget, ledger: Ledger) -> Page:
+        """Passive image HTTP uses ordinary guards, but cannot escalate to a browser."""
+        return await self._fetch(url, scope, budget, ledger, allow_render=False)
+
+    def discard_cached(self, *urls: str) -> None:
+        """Release transient resource bytes after relevance acceptance/refusal."""
+        for url in urls:
+            self._cache.pop(url, None)
+
     def resource_fetcher(self, scope: Scope, budget: RunBudget, ledger: Ledger) -> ResourceFetcher:
         """Bind single-hop HTTP to the same run's policy, cache and accounting.
 
@@ -317,7 +326,9 @@ class FetchLadder:
         async with asyncio.timeout(timeout):
             if (route.uses_http or route.captures_browser_dom) and self._politeness is not None:
                 async with self._politeness.slot(url):
-                    return await self._execute(route, url, budget, ledger, headers, scope)
+                    page = await self._execute(route, url, budget, ledger, headers, scope)
+                    self._politeness.observe_response(page)
+                    return page
             return await self._execute(route, url, budget, ledger, headers, scope)
 
     async def _execute(
@@ -499,24 +510,37 @@ class FetchLadder:
         for retry in range(budget.config.retry_budget + 1):
             try:
                 page = await self._attempt(route, url, budget, ledger, headers)
+                throttled = (
+                    budget.config.cadence is not None
+                    and page.status in budget.config.cadence.throttle_statuses
+                )
                 if (
-                    page_barrier(page) == RefusalCode.CHALLENGE_NOT_SOLVED
+                    not throttled
+                    and page_barrier(page) == RefusalCode.CHALLENGE_NOT_SOLVED
                     and budget.config.challenges is not None
                 ):
                     await self._clear_challenge(route, page, budget, ledger)
                     # Refetch original bytes through ordinary DNS/TLS/robots guards.
                     page = await self._attempt(route, url, budget, ledger)
-                if barrier := page_barrier(page):
+                if not throttled and (barrier := page_barrier(page)):
                     raise GhimeraRefused(barrier)
                 if page.status is None:
                     raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-                if page.status < 500:
+                if page.status < 500 and not throttled:
                     break
             except GhimeraRefused as exc:
                 if exc.code != RefusalCode.FETCH_FAILED:
                     raise
                 page = None
             if retry == budget.config.retry_budget:
+                if (
+                    page is not None
+                    and page.status is not None
+                    and budget.config.cadence is not None
+                    and page.status in budget.config.cadence.throttle_statuses
+                ):
+                    # A throttle cannot be bypassed through an expensive route.
+                    raise HttpStatusRefused(page.status)
                 raise GhimeraRefused(RefusalCode.FETCH_FAILED)
             ledger.append(
                 LedgerRow(

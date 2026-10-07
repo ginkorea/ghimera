@@ -6,6 +6,15 @@ cd "$(dirname "$0")/.."
 # Refuse before a long suite rather than producing dozens of missing-env reds.
 : "${CHIMERA_TEST_BROWSER:?Set CHIMERA_TEST_BROWSER to the installed Chromium executable}"
 : "${CHIMERA_TEST_ISOLATOR:?Set CHIMERA_TEST_ISOLATOR to the installed browser isolator}"
+: "${GHIMERA_TEST_TESSERACT:?Set GHIMERA_TEST_TESSERACT to the installed OCR executable}"
+: "${GHIMERA_TEST_TESSDATA:?Set GHIMERA_TEST_TESSDATA to the installed English OCR pack directory}"
+: "${GHIMERA_TEST_FONT:?Set GHIMERA_TEST_FONT to the fixture TrueType font}"
+for gate_fixture_file in "$GHIMERA_TEST_TESSERACT" "$GHIMERA_TEST_FONT" "$GHIMERA_TEST_TESSDATA/eng.traineddata"; do
+  if [[ "$gate_fixture_file" != /* || ! -f "$gate_fixture_file" ]]; then
+    printf 'Invalid OCR gate fixture: %s\n' "$gate_fixture_file" >&2
+    exit 2
+  fi
+done
 for gate_fixture_executable in "$CHIMERA_TEST_BROWSER" "$CHIMERA_TEST_ISOLATOR"; do
   if [[ "$gate_fixture_executable" != /* || ! -f "$gate_fixture_executable" || ! -x "$gate_fixture_executable" ]]; then
     printf 'Invalid gate fixture executable: %s\n' "$gate_fixture_executable" >&2

@@ -55,6 +55,15 @@ self-hosted model services, extraction policies and graph profile.
   profiles, language detection, DOCX tables and native PDF text preserve raw
   bytes beside extracted native-language text. Full PDF/OCR and Marker
   acceptance remain open.
+- **Selective visual evidence.** Configured infographic admission filters logos
+  before download, bounds raster decoding and runs offline language-routed OCR.
+  Optional local vision interpretation requires a separate image-bound review.
+  Accepted originals and OCR regions remain beside native text; rejected images
+  are not retained or vectorized. See [visuals and Pacific OCR](docs/VISUALS.md).
+- **Configurable browsing cadence.** Nonnegative jitter adds to origin/robots
+  spacing, while `429`/configured throttle responses and `Retry-After` impose
+  shared-origin cooldown without blocking unrelated origins. See
+  [browsing cadence](docs/BROWSING_CADENCE.md).
 - **Relevance and deduplication.** An injected self-hosted encoder scores
   native text/windows and observed links against pinned reference vectors.
   Keyword/semantic ranking, encoding budgets, canonical URL handling, SHA-256

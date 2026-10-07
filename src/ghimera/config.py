@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.ahmia_config import AhmiaConfig
 from ghimera.browser_config import BrowserConfig
+from ghimera.cadence_config import CadenceConfig
 from ghimera.challenge_config import ChallengeConfig
 from ghimera.continuation_config import ContinuationConfig
 from ghimera.dedup_config import DedupConfig
@@ -29,6 +30,7 @@ from ghimera.search_config import SearxConfig
 from ghimera.semantic_types import SemanticConfig
 from ghimera.source_session_types import SourceSessionPolicy, validate_sessions
 from ghimera.transport_types import TransportConfig
+from ghimera.visual_config import VisualConfig
 
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 PositiveFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]
@@ -126,6 +128,8 @@ class GhimeraConfig(BaseModel):
     egress_feature: Literal["crawl_egress"]
     model_policy: Literal["self_hosted_only"]
     http: HttpPolicy | None = None
+    cadence: CadenceConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+    visuals: VisualConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     graph: GraphConfig | None = None
     journal: JournalConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     transport: TransportConfig | None = None
@@ -154,6 +158,26 @@ class GhimeraConfig(BaseModel):
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
+        if self.visuals is not None:
+            if self.http is None or self.http.max_response_bytes > self.visuals.max_image_bytes:
+                raise ValueError(
+                    "visual reads require HTTP with a response bound within the image budget"
+                )
+            if any(
+                host != host.lower() or "/" in host or ":" in host or "." not in host
+                for host in self.visuals.allowed_hosts
+            ):
+                raise ValueError("visual CDN hosts must be explicit lowercase exact host names")
+            if self.browser is not None and (
+                "image" in self.browser.resource_types
+                or "media" in self.browser.resource_types
+                or any(mime.startswith("image/") for mime in self.browser.resource_content_types)
+            ):
+                raise ValueError(
+                    "selective visuals require browser image/media retention to be disabled"
+                )
+        if self.cadence is not None and self.http is None:
+            raise ValueError("browsing cadence requires the shared HTTP scheduler")
         if self.discovery is not None and (self.search is not None or self.research is None):
             raise ValueError("discovery requires research and replaces the single search binding")
         if self.human_browser is not None and self.transport is not None:
