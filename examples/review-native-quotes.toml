@@ -1,0 +1,11 @@
+# Nonactive semantics.verification block; merge into your own validated recipe.
+# The reviewer must explicitly declare response_format = "json_schema".
+# Relation omission evidence selects an exact native quote supplied by the client.
+# This changes no extractor, model, runtime, allocation or global spend limit.
+schema = "ghimera.semantic-verification/4"
+prompt_profile = "native_quote_checks"
+model_role = "reviewer"
+max_calls_per_run = 256
+max_mentions_per_call = 4
+max_relations_per_call = 2
+max_coverage_findings = 4

@@ -375,3 +375,63 @@ Evidence root: `gate-work/organization-proposal-date-review-17`.
 | Trial-17 graph | `f4e43f14e740d536afc9719d82baf1b5e18cc70387007c57fc01f5e98faa2b2d` |
 | Trial-17 response container 1 | `6a01a672d3c8e580a79f9f7cc38e5bf1183279caa43c5b47ba685b1210aa73d1` |
 | Trial-17 response container 2 | `db38ce7f526ba51f94f7c402bca29baca41b9fa8e167dd5f053faf697de705f2` |
+
+## Trials 18–19 — independent dimensions, complete coverage refused
+
+These bounded real-model diagnostics used source `8eaef24`, the unchanged
+native Chinese passage, all eight original mention keys and five original
+relationship indices, and pinned `openai/gpt-oss-20b` revision
+`6cee5e81ee83917806bbde320786a8fb61efebee`. The worker ran with
+`/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16) on the laptop;
+broker-admitted serving reported `taipan-edge-01`. This was retained-proposal
+review, not a complete Collector run or representative organization-chart
+accuracy evaluation. No new extractor call was made.
+
+The explicit `independent_dimension_checks` profile requested independent
+judgments without redundant generated overall verdicts. Each diagnostic made
+exactly six review calls: two mention batches, three original-index relationship
+batches, and whole-proposal coverage. Both diagnostics retained five structurally
+valid item batches. That is protocol validity, not evidence of correct factual
+judgments, calibrated entity roles or complete coverage.
+
+| Diagnostic | Response allowance | Complete review result | Worker elapsed |
+| --- | --- | --- | --- |
+| 18 | 2,048 tokens | Coverage finished at the cap (`length`) with truncated JSON; `model_unavailable` | 50.216 seconds |
+| 19 | 4,096 tokens | Coverage returned final JSON but invalid omission evidence; `semantic_extraction_failed` | 54.136 seconds |
+
+The only operational change between the two private recipes was the declared
+response allowance. Source, ontology, original proposals, six-call limit,
+coverage scope and finding bound stayed unchanged. Trial 19's coverage response
+used single-endpoint evidence surfaces for relations whose source and target
+both had to occur inside the cited excerpt. The native grounding validator
+correctly refused it. The model's reasons also asserted relationships whose
+factual correctness was not established; they were never projected as facts.
+Increasing output allowance closed truncation in that run, not semantic quality.
+
+Both complete reviews produced zero semantic windows, zero projected mentions
+and zero projected relationships. Diagnostic exit zero records completion of an
+observed refusal, not analytical acceptance. The parent released each owned
+consumer and observed its own startup job cancelled: `job-054c7da0f0ef` for 18
+and `job-1bafb19693cf` for 19. No model-host configuration changed.
+
+A fresh read-only replay with the owned Python 3.11.16 interpreter independently
+validated each diagnostic's seven ledger rows, six actual review-response body
+hashes, five exact retained dimension payloads and two durable trace batches.
+Each ledger has one refused semantic extraction observation, not an empty
+semantic-row tuple. An earlier replay script mistakenly expected an empty tuple
+and failed; correcting that script expectation did not change any source
+validator or retained evidence. Original files remained unchanged.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Trial-18 ledger | `5ad36f636b53ab1cdac79c139c9f8a25e2fbc451a8b2ba619dcbf2dfcb4ac63c` |
+| Trial-18 summary | `94fad0b53c147db05e3793914fafcc3e0bab0dfeecded89d1ca7adefeeb97ccd` |
+| Trial-19 ledger | `d8161dcc76134ded95786a4480cdaad9066821b95dc01d74eee27b83241f3fa6` |
+| Trial-19 summary | `39ce7c18fcf3fd253ec24ae3c4524273df097780313cb678a96a0f7273b986c2` |
+
+The next source change is the explicit `native_quote_checks` wire described in
+[semantic batching](SEMANTIC_BATCHING.md#source-owned-quote-choices): omission
+evidence selects a client-owned exact excerpt by ID instead of regenerating its
+text. It retains all checks and original scope. These failed older-wire responses
+are not rewritten as accepted new-wire answers. The new profile needs its own
+real-model and complete Collector acceptance; the overall capability remains open.

@@ -152,6 +152,52 @@ deployment, complete Collector acceptance or model accuracy.
 
 ## Retained evidence and replay
 
+### Source-owned quote choices
+
+The opt-in `native_quote_checks` profile uses prompt revision
+`ghimera-semantic-verification/8` and model-facing `ghimera.semantic-review/6`.
+It retains independent item checks and client-derived summaries, but relationship
+omission evidence selects a `quote_id` from the exact native templates supplied
+in that call. The model does not regenerate that evidence quotation. The safe
+nonactive configuration is [review-native-quotes.toml](../examples/review-native-quotes.toml).
+It requires an explicitly bound JSON-schema reviewer and the same batching,
+coverage, context and spending boundaries. Existing profiles remain unchanged.
+
+The client offers exact native clauses plus the whole original window, so
+cross-clause relationships and every source character remain in scope. Quote
+IDs bind the citation, original offsets and unchanged text. Repeated clauses
+retain distinct original occurrences. Unknown IDs, references outside the call,
+endpoint occurrences outside the selected excerpt, duplicate proposed relations,
+altered source tables and missing provenance still refuse. A source quote does
+not establish that the proposed relationship is true: omission findings remain
+research leads, not newly accepted graph claims.
+
+`quote_response` retains the original typed `/6` payload and the source table
+beside the actual model-call evidence. Replay recomputes the table from the
+original native context and checks the resolved `/3` observation against that
+payload. Resolution is the declared wire transformation, not answer repair,
+automatic retry or a fabricated additional model call. Partial reviews still
+project nothing. The real-model coverage failure that motivated this profile
+remains refused; the new wire must receive its own real-model acceptance.
+
+The complete `scripts/gate.sh` for this change on 7 October 2026 UTC used
+`/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16), importing this
+checkout's `src/ghimera`. It passed **671 tests, zero failed, zero skipped**, in
+543.00 seconds. Offline lock validation resolved the unchanged 137 packages;
+lint/formatting passed for 145 files and strict typing for 96 source files.
+The prior focused native run passed 82 checks in 6.83 seconds with the same
+interpreter. The original quote-selector contract failed at collection before
+implementation. Tests cover unknown IDs, wrong clauses, repeated occurrences,
+duplicate proposed relations, exact whole-table replay, retained payload
+integrity, configuration/provider validation and unchanged older profiles.
+
+Sandboxed broader fixture runs stalled in existing async file-sink checks and
+were intentionally stopped or timed out; they are not counted as acceptance.
+The native focused run first found a test mutating a Python tuple as if it were
+a JSON list; the test now uses JSON serialization for that corruption probe.
+No source validator was relaxed. The full gate used local fixture servers and
+the installed isolated Chromium, not a real model, GPU or CAPTCHA provider.
+
 Older-profile actual responses remain `ghimera.semantic-review/3` observations, with explicit
 `ghimera.review-selection/1` metadata in each ledger row. The assembled
 `ghimera.semantic-review/4` contains every actual part and the complete assessed

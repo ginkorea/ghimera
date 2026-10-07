@@ -28,6 +28,11 @@ def validate_grounded_review(
     quote: str,
     reference: str,
 ) -> None:
+    if review.quote_response is not None:
+        from ghimera.semantic_quotes import native_quote_templates
+
+        if review.quote_response.templates != native_quote_templates(quote, reference):
+            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
     verification = policy.verification
     if (
         verification is None

@@ -27,7 +27,7 @@ from ghimera.config import GhimeraConfig
 from ghimera.evidence_context import ContextSelector, EvidenceContext, native_citation
 from ghimera.graph_planning import validate_context
 from ghimera.graph_planning_types import PlanningGraph
-from ghimera.model_citations import ModelCitationResolver, referenced_output
+from ghimera.model_citations import ModelCitationResolver, citation_id, referenced_output
 from ghimera.model_config import ModelServiceConfig
 from ghimera.model_http import (
     ModelHttpPort,
@@ -62,6 +62,8 @@ from ghimera.semantic_types import (
     FactorizedSemanticReview,
     GroundedSemanticReview,
     IndependentSemanticReview,
+    NativeQuotedSemanticReview,
+    NativeQuoteTemplate,
     ReviewSelection,
     SemanticConfig,
     SemanticProposal,
@@ -81,6 +83,7 @@ T = TypeVar(
     SemanticProposal,
     SemanticReview,
     IndependentSemanticReview,
+    NativeQuotedSemanticReview,
 )
 PROMPT_REVISION = "chimera-research-prompts/1"
 CITATION_PROMPT_REVISION = "chimera-research-prompts/2"
@@ -289,6 +292,19 @@ INDEPENDENT_REVIEW_INSTRUCTIONS = (
     "rejected items or the finding cap. Obey max_coverage_findings."
 )
 
+NATIVE_QUOTE_REVIEW_INSTRUCTIONS = (
+    INDEPENDENT_REVIEW_INSTRUCTIONS.replace(
+        "Return ghimera.semantic-review/5", "Return ghimera.semantic-review/6"
+    )
+    + " For a missing relationship, evidence contains ONLY quote_id selected from "
+    "native_quote_templates. Select the exact native excerpt that contains BOTH "
+    "chosen source and target occurrences and supports the asserted predicate. "
+    "Do not copy or generate an evidence surface or citation. Clause choices aid "
+    "precision; the full original window remains available for cross-clause support. "
+    "A quote ID proves provenance, NOT relationship entailment or omission. "
+    "Unknown IDs, wrong occurrences and already-proposed relationships refuse."
+)
+
 
 class WireMessage(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
@@ -376,6 +392,7 @@ class PromptInput(Record):
     semantic_recipe: SemanticConfig | None = None
     semantic_proposal: SemanticProposal | None = None
     semantic_review_selection: ReviewSelection | None = None
+    native_quote_templates: tuple[NativeQuoteTemplate, ...] | None = None
     proposal_digest: str | None = None
     graph_context: PlanningGraph | None = None
 
@@ -529,11 +546,13 @@ class SelfHostedModel:
                     schema,
                     prompt.semantic_review_selection,
                     semantic.verification.max_coverage_findings,
-                    dimensions_only=output is IndependentSemanticReview,
+                    dimensions_only=output
+                    in {IndependentSemanticReview, NativeQuotedSemanticReview},
                 )
                 if semantic.verification.prompt_profile in {
                     "proposal_date_checks",
                     "independent_dimension_checks",
+                    "native_quote_checks",
                 }:
                     from ghimera.semantic_batching import bind_proposal_dates
 
@@ -543,8 +562,15 @@ class SelfHostedModel:
                         schema,
                         prompt.semantic_proposal,
                         prompt.semantic_review_selection,
-                        dimensions_only=output is IndependentSemanticReview,
+                        dimensions_only=output
+                        in {IndependentSemanticReview, NativeQuotedSemanticReview},
                     )
+                if output is NativeQuotedSemanticReview:
+                    from ghimera.semantic_quotes import bind_quote_schema
+
+                    if prompt.native_quote_templates is None:
+                        raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                    bind_quote_schema(schema, prompt.native_quote_templates)
             response_format: dict[str, JsonValue] = (
                 {"type": "json_object"}
                 if service.response_format == "json_object"
@@ -584,7 +610,16 @@ class SelfHostedModel:
                     and semantic.verification is not None
                     and semantic.verification.schema_version
                     in {"ghimera.semantic-verification/3", "ghimera.semantic-verification/4"}
-                    and semantic.verification.prompt_profile != "independent_dimension_checks"
+                    and semantic.verification.prompt_profile
+                    not in {"independent_dimension_checks", "native_quote_checks"}
+                    else ""
+                )
+                + (
+                    NATIVE_QUOTE_REVIEW_INSTRUCTIONS
+                    if prompt.task == "semantic_review"
+                    and semantic is not None
+                    and semantic.verification is not None
+                    and semantic.verification.prompt_profile == "native_quote_checks"
                     else ""
                 )
                 + (
@@ -871,6 +906,7 @@ class SelfHostedModel:
         selection: ReviewSelection,
     ) -> GroundedSemanticReview:
         from ghimera.semantic_batching import derive_independent_review, validate_selection
+        from ghimera.semantic_quotes import derive_quote_review, native_quote_templates
         from ghimera.semantic_verification import (
             review_service,
             validate_proposal,
@@ -890,6 +926,14 @@ class SelfHostedModel:
                 update={"max_documents": 1, "max_windows_per_document": 1}
             )
         )
+        templates = (
+            native_quote_templates(
+                document.extracted.text[start:end],
+                citation_id(native_citation(document, start, end)),
+            )
+            if policy.verification.prompt_profile == "native_quote_checks"
+            else None
+        )
         prompt = PromptInput(
             task="semantic_review",
             intent=intent,
@@ -897,18 +941,23 @@ class SelfHostedModel:
             semantic_proposal=proposal,
             proposal_digest=proposal.content_digest(),
             semantic_review_selection=selection,
+            native_quote_templates=templates,
             evidence=selector.build(
                 intent, (document,), required=(native_citation(document, start, end),)
             ),
         )
-        observed: SemanticReview | IndependentSemanticReview = (
-            await self._invoke(prompt, IndependentSemanticReview)
+        observed: SemanticReview | IndependentSemanticReview | NativeQuotedSemanticReview = (
+            await self._invoke(prompt, NativeQuotedSemanticReview)
+            if policy.verification.prompt_profile == "native_quote_checks"
+            else await self._invoke(prompt, IndependentSemanticReview)
             if policy.verification.prompt_profile == "independent_dimension_checks"
             else await self._invoke(prompt, GroundedSemanticReview)
         )
         try:
             result = (
-                derive_independent_review(observed)
+                derive_quote_review(observed, templates)
+                if isinstance(observed, NativeQuotedSemanticReview) and templates is not None
+                else derive_independent_review(observed)
                 if isinstance(observed, IndependentSemanticReview)
                 else observed
             )

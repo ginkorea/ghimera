@@ -34,6 +34,7 @@ BATCHED_REVIEW_REVISION = "ghimera-semantic-verification/4"
 ASSIGNED_ROLE_REVIEW_REVISION = "ghimera-semantic-verification/5"
 PROPOSAL_DATE_REVIEW_REVISION = "ghimera-semantic-verification/6"
 INDEPENDENT_REVIEW_REVISION = "ghimera-semantic-verification/7"
+NATIVE_QUOTE_REVIEW_REVISION = "ghimera-semantic-verification/8"
 SEMANTIC_PROFILES = MappingProxyType(
     {
         "ghimera.semantics/1": (None, SEMANTIC_PROMPT_REVISION),
@@ -68,7 +69,12 @@ class SemanticVerificationConfig(GraphRecord):
     max_mentions_per_call: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
     max_relations_per_call: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
     prompt_profile: (
-        Literal["assigned_role_checks", "proposal_date_checks", "independent_dimension_checks"]
+        Literal[
+            "assigned_role_checks",
+            "proposal_date_checks",
+            "independent_dimension_checks",
+            "native_quote_checks",
+        ]
         | None
     ) = Field(default=None, exclude_if=lambda v: v is None)
 
@@ -91,6 +97,8 @@ class SemanticVerificationConfig(GraphRecord):
     @property
     def effective_prompt_revision(self) -> str:
         if self.schema_version == "ghimera.semantic-verification/4":
+            if self.prompt_profile == "native_quote_checks":
+                return NATIVE_QUOTE_REVIEW_REVISION
             if self.prompt_profile == "independent_dimension_checks":
                 return INDEPENDENT_REVIEW_REVISION
             if self.prompt_profile == "proposal_date_checks":
@@ -403,6 +411,62 @@ class IndependentSemanticReview(GraphRecord):
     model_call: ModelCallEvidence | None = None
 
 
+class NativeQuoteTemplate(GraphRecord):
+    """Client-owned exact source slice, not a model-authored quotation."""
+
+    quote_id: Digest
+    citation_id: CitationId
+    start: Count
+    end: Positive
+    quote: Text
+    occurrence: Count
+
+    @model_validator(mode="after")
+    def exact(self) -> "NativeQuoteTemplate":
+        from ghimera.semantic_quotes import quote_identifier
+
+        if (
+            self.end - self.start != len(self.quote)
+            or not self.quote.strip()
+            or self.quote_id != quote_identifier(self.citation_id, self.start, self.end, self.quote)
+        ):
+            raise ValueError("native quote template must bind its exact source slice")
+        return self
+
+
+class NativeQuoteReference(GraphRecord):
+    quote_id: Digest
+
+
+class QuotedOmittedRelation(GraphRecord):
+    kind: Literal["relation"]
+    rule: Name
+    source: NativeReviewWitness
+    target: NativeReviewWitness
+    evidence: NativeQuoteReference
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
+class NativeQuotedSemanticReview(GraphRecord):
+    """Independent checks; relationship omission evidence selects a source quote."""
+
+    schema_version: Literal["ghimera.semantic-review/6"] = Field(alias="schema")
+    proposal_digest: Digest
+    mentions: tuple[IndependentMentionAssessment, ...]
+    relations: tuple[IndependentRelationAssessment, ...]
+    coverage: Literal["adequate", "incomplete", "uncertain"]
+    coverage_reason: Annotated[str, Field(min_length=1, max_length=4096)]
+    coverage_findings: tuple[
+        Annotated[OmittedMention | QuotedOmittedRelation, Field(discriminator="kind")], ...
+    ]
+    model_call: ModelCallEvidence | None = None
+
+
+class NativeQuoteReviewEvidence(GraphRecord):
+    response: NativeQuotedSemanticReview
+    templates: Annotated[tuple[NativeQuoteTemplate, ...], Field(min_length=1)]
+
+
 class GroundedSemanticReview(SemanticReview):
     schema_version: Literal["ghimera.semantic-review/3"] = Field(alias="schema")
     mentions: tuple[FactorizedMentionAssessment, ...]
@@ -411,6 +475,9 @@ class GroundedSemanticReview(SemanticReview):
     # Client-owned provenance, never requested from a model. Absent for every
     # old profile, preserving its JSON schema, serialization and prompt identity.
     dimension_response: SkipJsonSchema[IndependentSemanticReview | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    quote_response: SkipJsonSchema[NativeQuoteReviewEvidence | None] = Field(
         default=None, exclude_if=lambda v: v is None
     )
 
@@ -429,13 +496,27 @@ class GroundedSemanticReview(SemanticReview):
             self.coverage_findings
         ):
             raise ValueError("coverage witnesses must be distinct")
-        observed = self.dimension_response
+        if self.dimension_response is not None and self.quote_response is not None:
+            raise ValueError("only one actual model-facing review payload may be retained")
+        observed: IndependentSemanticReview | NativeQuotedSemanticReview | None = (
+            self.dimension_response
+        )
+        findings = self.coverage_findings
+        if self.quote_response is not None:
+            from ghimera.semantic_quotes import resolve_quote_findings
+
+            observed = self.quote_response.response
+            findings = resolve_quote_findings(observed, self.quote_response.templates)
         if observed is not None and (
             observed.model_call is not None
             or observed.proposal_digest != self.proposal_digest
             or observed.coverage != self.coverage
             or observed.coverage_reason != self.coverage_reason
-            or observed.coverage_findings != self.coverage_findings
+            or (
+                self.dimension_response is not None
+                and self.dimension_response.coverage_findings != self.coverage_findings
+            )
+            or findings != self.coverage_findings
             or tuple((item.key, item.reason, item.checks) for item in observed.mentions)
             != tuple((item.key, item.reason, item.checks) for item in self.mentions)
             or tuple((item.index, item.reason, item.checks) for item in observed.relations)
@@ -541,12 +622,17 @@ def review_profile_matches(
     if isinstance(review, BatchedSemanticReview):
         return verification.schema_version == "ghimera.semantic-verification/4"
     if isinstance(review, GroundedSemanticReview):
-        return (verification.prompt_profile == "independent_dimension_checks") == (
-            review.dimension_response is not None
-        ) and verification.schema_version in {
-            "ghimera.semantic-verification/3",
-            "ghimera.semantic-verification/4",
-        }
+        return (
+            (verification.prompt_profile == "native_quote_checks")
+            == (review.quote_response is not None)
+            and (verification.prompt_profile == "independent_dimension_checks")
+            == (review.dimension_response is not None)
+            and verification.schema_version
+            in {
+                "ghimera.semantic-verification/3",
+                "ghimera.semantic-verification/4",
+            }
+        )
     if isinstance(review, FactorizedSemanticReview):
         return verification.schema_version == "ghimera.semantic-verification/2"
     return verification.schema_version == "ghimera.semantic-verification/1"

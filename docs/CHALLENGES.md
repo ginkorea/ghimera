@@ -3,6 +3,42 @@
 This is source added after the published ghimera 0.3.0 artifacts. It is not yet
 a released upgrade or a claim of acceptance against production CAPTCHA sites.
 
+## Integration status and activation
+
+Use the existing Patchright renderer for ordinary JavaScript pages. Select one
+local gateway explicitly for challenge recovery; do not swap drivers or try a
+succession of unverified solvers automatically. The configured provider is an
+interchangeable recovery port, not a promise that every CAPTCHA is solvable.
+
+| Capability | Development source | Live acceptance |
+|---|---|---|
+| Isolated Patchright rendering | Implemented | Local isolated-browser fixture verified |
+| FlareSolverr recovery | Implemented, version-pinned policy | Real gateway/site acceptance open |
+| Byparr 2.x Camoufox gateway | Implemented, explicit seconds dialect | Real gateway/site acceptance open |
+| Byparr 3.x gateway | Implemented, explicit millisecond dialect | Real gateway/site acceptance open |
+| Private exact-origin clearance cache | Implemented, bounded and concurrent | Local HTTP integration verified |
+| Nodriver, Buster/audio solving | Not integrated | Open |
+| Same-browser human-assisted recovery | Not integrated | Open |
+
+Activation requires a separately installed gateway on the collection host,
+loopback-only binding, pinned executable/image provenance, restricted egress
+and private logs. Then append the matching example's `[challenges]` section to
+the collector recipe, set the intended exact source origins and budgets, and
+validate the complete configuration. Omitting that section disables recovery.
+Verify recovery against an authorized representative source before describing
+the deployment as accepted. Do not install a collector gateway on an inference
+host or replace browser/session isolation with shared pool cookies.
+
+A focused recheck on 7 October 2026 UTC passed **40 tests, zero failed, zero
+skipped**, in 32.70 seconds using
+`/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16), importing this
+checkout's `src/ghimera`. The run covered `tests/test_challenges.py` with the
+installed Chromium fixture and `bwrap` network isolation. An earlier invocation
+omitted `CHIMERA_TEST_BROWSER` and failed its browser setup; the complete rerun
+supplied both documented browser settings. These are local fixture results,
+not a full-package rerun, installed-provider acceptance or remote CAPTCHA
+accuracy. No new source implementation was needed for this recheck.
+
 ## Implemented mechanism and explicit switch
 
 The existing isolated Patchright renderer remains the ordinary JavaScript
