@@ -1,0 +1,28 @@
+# Non-active single-provider fragment. Supply the other Collector recipes too.
+# The index and its permitted corpus are operated separately; no hosted-site scrape.
+[search]
+schema = "ghimera.ahmia/1"
+endpoint = "https://index.private.invalid/tor-snapshot/_search"
+approved_addresses = ["10.0.0.10"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "none"
+timeout_seconds = 10.0
+max_request_bytes = 16384
+max_response_bytes = 131072
+max_header_bytes = 8192
+index_name = "tor-snapshot"
+index_revision = "operator-declared-snapshot-1"
+query_operator = "and"
+max_results = 20
+snippet_chars = 512
+age_policy = "bounded_age"
+max_observation_age_seconds = 604800
+
+[[search.query_fields]]
+name = "title"
+boost = 2.0
+
+[[search.query_fields]]
+name = "content"
+boost = 1.0

@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from ghimera.ahmia_wire import AhmiaHitEvidence
 from ghimera.mcp_lead_config import McpLeadConfig
 from ghimera.refusals import FetchFailure, RefusalCode
 from ghimera.research_types import SearchHit, SearchRequest, SearchResponse
@@ -162,6 +163,9 @@ class McpLeadSearch(GroundedSearch):
                         url=url,
                         title=_text(row, self._provider.title_field),
                         snippet=_text(row, self._provider.snippet_field),
+                        index_evidence=AhmiaHitEvidence.model_validate(row["index_evidence"])
+                        if "index_evidence" in row
+                        else None,
                     )
                 )
         except (ValidationError, ValueError, KeyError):

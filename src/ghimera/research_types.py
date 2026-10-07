@@ -4,8 +4,10 @@ import hashlib
 import json
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 
+from ghimera.ahmia_config import AhmiaConfig
+from ghimera.ahmia_wire import AhmiaHitEvidence, decode_ahmia
 from ghimera.discovery_config import DiscoveryProgress
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.local_input_types import LocalDocumentSeed
@@ -144,6 +146,7 @@ class SearchHit(ResearchRecord):
     url: Text
     title: str
     snippet: str
+    index_evidence: AhmiaHitEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 class SearchRequest(ResearchRecord):
@@ -157,6 +160,7 @@ class SearchResponse(ResearchRecord):
     raw: bytes
     hits: tuple[SearchHit, ...]
     transport: TransportEvidence | None = None
+    index_retrieved_at: AwareDatetime | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 class SearchObservation(ResearchRecord):
@@ -229,8 +233,10 @@ class ResearchResult(ResearchRecord):
     @model_validator(mode="after")
     def retained_discovery(self) -> "ResearchResult":
         if self.schema_version == "chimera.research-result/1":
-            if self.harvest.receipt.effective_config.discovery is not None:
-                raise ValueError("multi-provider results require retained discovery responses")
+            if self.harvest.receipt.effective_config.discovery is not None or isinstance(
+                self.harvest.receipt.effective_config.search, AhmiaConfig
+            ):
+                raise ValueError("bound discovery results require retained discovery responses")
             if self.search_observations:
                 raise ValueError("legacy results do not claim retained search responses")
             return self
@@ -259,6 +265,12 @@ class ResearchResult(ResearchRecord):
             and (self.search_provider, self.search_revision) != discovery.identity
         ):
             raise ValueError("discovery result requires its original strategy identity")
+        single_binding = self.harvest.receipt.effective_config.search
+        if (
+            isinstance(single_binding, AhmiaConfig)
+            and (self.search_provider, self.search_revision) != single_binding.identity
+        ):
+            raise ValueError("Ahmia result requires its recorded index binding identity")
         if discovery is not None and any(
             row.route not in {f"search:{name}@{revision}" for name, revision in identities}
             for row in attempts
@@ -281,6 +293,43 @@ class ResearchResult(ResearchRecord):
                 or row.transport != response.transport
             ):
                 raise ValueError("retained search response must bind its recorded fetch")
+            binding = (
+                next(
+                    (
+                        p.binding
+                        for p in discovery.providers
+                        if p.identity == (observation.provider, observation.provider_revision)
+                    ),
+                    None,
+                )
+                if discovery is not None
+                else self.harvest.receipt.effective_config.search
+            )
+            if isinstance(binding, AhmiaConfig):
+                if any(hit.index_evidence is None for hit in response.hits):
+                    raise ValueError("retained Ahmia hits require their index observations")
+                # The original response and binding, not a model, own normalized leads.
+                if response.index_retrieved_at is None:
+                    raise ValueError(
+                        "Ahmia response requires its retrieval timestamp, even when empty"
+                    )
+                native = decode_ahmia(
+                    response.raw,
+                    binding,
+                    limit=policy.results_per_query,
+                    retrieved_at=response.index_retrieved_at,
+                )
+                expected = tuple(
+                    SearchHit(
+                        url=lead.url,
+                        title=lead.title,
+                        snippet=lead.snippet,
+                        index_evidence=lead.index_evidence,
+                    )
+                    for lead in native
+                )
+                if expected != response.hits:
+                    raise ValueError("retained Ahmia hits must match the native index response")
         if discovery is not None:
             for provider in discovery.providers:
                 provider_rows = tuple(

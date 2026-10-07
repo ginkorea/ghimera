@@ -5,6 +5,8 @@ from pathlib import Path
 
 from pydantic import SecretStr
 
+from ghimera.ahmia import AhmiaIndexSearch
+from ghimera.ahmia_config import AhmiaConfig
 from ghimera.browser import IsolatedBrowserRenderer
 from ghimera.config import GhimeraConfig
 from ghimera.discovery import DiscoveryProviders
@@ -54,6 +56,8 @@ class Collector:
         human_assistant: HumanAssistant | None = None,
         mcp_client: McpLeadClient | None = None,
         discovery_clients: Mapping[str, McpLeadClient] | None = None,
+        ahmia_credential: SecretStr | None = None,
+        discovery_credentials: Mapping[str, SecretStr] | None = None,
     ) -> None:
         # Revalidate injected models: model_copy(update=...) can bypass guards.
         config = GhimeraConfig.model_validate(config.model_dump())
@@ -85,6 +89,10 @@ class Collector:
                 "research content types require matching configured extraction adapters"
             )
         search: GroundedSearch | DiscoveryProviders
+        if ahmia_credential is not None and not isinstance(config.search, AhmiaConfig):
+            raise ValueError("single Ahmia credentials require an Ahmia search binding")
+        if discovery_credentials is not None and config.discovery is None:
+            raise ValueError("discovery credentials require a discovery recipe")
         if config.discovery is not None:
             if mcp_client is not None:
                 raise ValueError("discovery uses explicit provider-keyed MCP clients")
@@ -94,11 +102,25 @@ class Collector:
             }
             if set(clients) != expected:
                 raise ValueError("every discovery MCP binding requires exactly its provider client")
+            credentials = dict(discovery_credentials or {})
+            expected_credentials = {
+                p.id
+                for p in config.discovery.providers
+                if isinstance(p.binding, AhmiaConfig) and p.binding.authorization != "none"
+            }
+            if set(credentials) != expected_credentials:
+                raise ValueError(
+                    "every private discovery binding requires exactly its own credential"
+                )
             adapters: dict[str, GroundedSearch] = {}
             for provider in config.discovery.providers:
                 binding = provider.binding
                 if isinstance(binding, McpLeadConfig):
                     adapters[provider.id] = McpLeadSearch(binding, clients[provider.id])
+                elif isinstance(binding, AhmiaConfig):
+                    adapters[provider.id] = AhmiaIndexSearch(
+                        binding, credential=credentials.get(provider.id), resolver=source_resolver
+                    )
                 else:
                     provider_type = (
                         SearxHtmlSearch if binding.response_format == "html" else SearxSearch
@@ -107,6 +129,12 @@ class Collector:
             search = DiscoveryProviders(config.discovery, adapters)
         elif discovery_clients is not None:
             raise ValueError("discovery clients require a discovery recipe")
+        elif isinstance(config.search, AhmiaConfig):
+            if mcp_client is not None:
+                raise ValueError("Ahmia index search does not borrow an MCP credential/client")
+            search = AhmiaIndexSearch(
+                config.search, credential=ahmia_credential, resolver=source_resolver
+            )
         elif isinstance(config.search, McpLeadConfig):
             if mcp_client is None:
                 raise ValueError("MCP discovery requires an explicitly bound MCP client")
@@ -168,6 +196,8 @@ class Collector:
         human_assistant: HumanAssistant | None = None,
         mcp_client: McpLeadClient | None = None,
         discovery_clients: Mapping[str, McpLeadClient] | None = None,
+        ahmia_credential: SecretStr | None = None,
+        discovery_credentials: Mapping[str, SecretStr] | None = None,
     ) -> "Collector":
         return cls(
             GhimeraConfig.from_toml(path, max_bytes=max_config_bytes),
@@ -179,6 +209,8 @@ class Collector:
             human_assistant=human_assistant,
             mcp_client=mcp_client,
             discovery_clients=discovery_clients,
+            ahmia_credential=ahmia_credential,
+            discovery_credentials=discovery_credentials,
         )
 
     @property

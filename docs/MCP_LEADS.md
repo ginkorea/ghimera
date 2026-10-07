@@ -97,6 +97,9 @@ does not provide Ahmia's existing corpus.
 Initial provider federation and deterministic stagnation switching now compose
 through [the configured routing boundary](DISCOVERY_ROUTING.md). An onion-index MCP
 server remains follow-on work, not a feature implied by this client adapter.
+The [native Ahmia adapter](AHMIA_INTEGRATION.md) now supplies an
+application-callable `onion_search` payload in development source, including
+typed index provenance; it does not start or deploy that server.
 See [discovery design](GROUNDED_DISCOVERY.md). Provider-specific result-use terms
 still apply through MCP; Google-grounded results do not become unrestricted
 crawl seeds by changing transport.

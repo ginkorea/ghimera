@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghimera.ahmia_config import AhmiaConfig
 from ghimera.browser_config import BrowserConfig
 from ghimera.challenge_config import ChallengeConfig
 from ghimera.continuation_config import ContinuationConfig
@@ -138,7 +139,7 @@ class GhimeraConfig(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     scoring: ScoringConfig | None = None
-    search: SearxConfig | McpLeadConfig | None = Field(
+    search: SearxConfig | McpLeadConfig | AhmiaConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     discovery: DiscoveryConfig | None = Field(default=None, exclude_if=lambda value: value is None)

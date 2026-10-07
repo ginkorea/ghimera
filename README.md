@@ -28,6 +28,10 @@ self-hosted model services, extraction policies and graph profile.
   Continuation retains spent budgets and each provider's original response.
   See [discovery routing](docs/DISCOVERY_ROUTING.md). An onion-index service
   is not bundled.
+- **Ahmia index leads (development source).** Query an explicitly configured,
+  operator-owned index, or expose its lead payload through an application-owned
+  `onion_search` MCP tool. Retain index provenance and fetch original documents
+  separately through Tor. See [Ahmia integration](docs/AHMIA_INTEGRATION.md).
 - **Human-proxy browser interaction (development source).** An explicitly
   configured CLI can pause while you act in the selected browser, then resume
   native capture with request-bound terminal input. See

@@ -130,11 +130,15 @@ weakening that guard. A subsequent run of discovery routing, search archive and
 conformance, intent research, continuation, references, MCP leads and Tor transport
 returned **99 passed** in 29.71 seconds with that same long `TMPDIR`, interpreter
 and source tree. Ruff and formatting passed afterward. A corrected full-suite
-run remains required before merge; this is not a full-gate-green claim.
+run then returned **769 passed in 652.91 seconds**, no skips reported, with the
+same interpreter and source tree; offline lock verification, Ruff, formatting
+and strict mypy over 108 source files passed. That closes the routing checkpoint's
+source gate, not a later adapter's gate or real-provider acceptance.
 
 The owner selected self-hosted Ahmia for the onion-index integration. Its bounded
 implementation and live acceptance requirements are tracked in
-[Ahmia integration](AHMIA_INTEGRATION.md); that backend is not yet implemented.
+[Ahmia integration](AHMIA_INTEGRATION.md). Its read-only native index adapter is
+now development source; provisioning and real-index acceptance remain separate.
 
 Remaining broader requirements are unchanged: real allowed-provider federation,
 representative onion-index health/coverage, minimized-query and language strategies,
