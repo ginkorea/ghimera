@@ -37,8 +37,13 @@ version-2 gap view and adds unresolved identity/dispute questions described in
 groups retain the original source-local IDs. They are candidates for research,
 not canonical entities or evidence-preserving merge/split decisions. Predicate
 exclusivity, unknown-time handling and question/pair bounds are configuration.
+Version 3 also offers an explicit `selection="identity_first"` to admit complete
+identity/dispute evidence bundles before gaps and background observations.
+The [non-active identity-first recipe](../examples/graph-planning-identity-first.toml)
+keeps the same explicit resource ceilings; no legacy selection changes implicitly.
 
-Newest acknowledged relationships are considered first. Each admitted relation
+With `selection="newest_first"`, coverage gaps precede the newest acknowledged
+relationships. Each admitted relation
 keeps both source-local endpoints and complete native quotations. Remaining
 space can hold observed mentions whose relationships are still unknown. A limit
 can omit a complete item but never shorten its quotation, fabricate a smaller

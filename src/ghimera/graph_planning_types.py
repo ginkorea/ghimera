@@ -29,7 +29,7 @@ class GraphPlanningConfig(GraphRecord):
     ] = Field(alias="schema")
     entity_roles: Annotated[tuple[Name, ...], Field(min_length=1)]
     relation_rules: tuple[Name, ...]
-    selection: Literal["newest_first"]
+    selection: Literal["newest_first", "identity_first"]
     max_entities: Positive
     max_relations: Positive
     max_evidence_chars: Positive
@@ -43,6 +43,8 @@ class GraphPlanningConfig(GraphRecord):
             raise ValueError("graph-planning/2 and /3 require an explicit positive gap limit")
         if (self.schema_version == "ghimera.graph-planning/3") != (self.identity is not None):
             raise ValueError("graph-planning/3 requires its explicit identity policy")
+        if self.selection == "identity_first" and self.identity is None:
+            raise ValueError("identity-first selection requires graph-planning/3")
         if self.identity is not None and not set(
             self.identity.alias_rules + self.identity.exclusive_relations
         ) <= set(self.relation_rules):

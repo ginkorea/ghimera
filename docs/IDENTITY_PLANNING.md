@@ -21,6 +21,32 @@ deterministic projection using existing source-local graph records; it creates
 no second graph store, global registry or additional inference phase. The
 planner uses its existing model binding and budgets.
 
+### Selecting questions before recent unrelated observations
+
+The legacy `selection="newest_first"` keeps gaps, recent relations and then
+recent mentions in that order. Version 3 additionally accepts the explicit
+`selection="identity_first"`; see [the non-active recipe](../examples/graph-planning-identity-first.toml).
+It builds bounded candidates over the eligible population and considers their
+complete evidence bundles before gaps and newest-first background observations.
+Bundles with fewer original nodes come first; ties prefer the newest observed
+member, then fewer claims and deterministic original IDs. This order allocates
+the existing context budget; it does not increase any limit or add model calls.
+
+`IdentitySelection` owns that population's candidate closure and ordering.
+`build_context` still owns serialized-size, quote, entity, relation and gap
+admission. An admitted identity bundle keeps every candidate member and alias
+claim; a dispute bundle keeps both competing claims and all original endpoints.
+Fallback observations touching one of these bounded candidates require its
+complete bundle too, rather than bypassing the limit by selecting a fragment.
+Candidates omitted by the identity policy's own group/member/pair limits are
+not globally reconstructed by this selector. The emitted identity view remains
+scoped to selected observations, with outer omissions retained; neither mode
+promises a complete population or guarantees a particular question will fit.
+
+The changed selection is an explicit policy-digest change. Old recipes and
+their historical replay do not silently adopt it. Selection is not identity
+resolution, and recency means acknowledgement order, not an inferred event date.
+
 ## Candidate identities
 
 `exact_surface_and_role` groups exact native labels of the same declared role
@@ -108,6 +134,20 @@ not a live inference service or external challenge site. A first sandboxed
 focused run timed out at asynchronous fixture work; it was not counted as
 passing. Native bounded runs supplied the completed checks.
 
+The subsequent full gate including explicit identity-first selection used the
+same owned `/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16) and this
+checkout's source: **567 passed, zero failed, zero skipped**, in 525.80 seconds.
+Offline lock validation resolved 137 packages; lint, formatting (135 files) and
+strict typing (93 source files) passed. Selection tests cover original-candidate
+closure, alias claim retention, both competing claims, gap admission without
+losing earlier selected evidence, explicit configuration/digest changes, legacy
+behavior and composed research/journal replay under both modes. The new mode
+initially refused as unsupported (five focused failures, one configuration
+refusal check passed); after implementation the combined selection, identity,
+legacy planning and semantic-review checks passed 60 tests in 3.67 seconds under
+that same interpreter. Neither fixture checks nor this gate used live inference
+or an external challenge site.
+
 Read-only replay of the retained native Chinese-PDF diagnostic used
 `/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16), importing this
 checkout. All 32 original ledger rows and the retained source bytes/text
@@ -119,19 +159,24 @@ The trial's known role/entailment errors remain unchanged.
 
 The actual bounded planning view exposed a selection trade-off:
 
-| Configured gap limit | Selected mentions | Selected relations | Omitted mentions | Omitted relations | Selected identity groups |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 8 | 9 | 3 | 45 | 9 | 0 |
-| 2 | 17 | 3 | 37 | 9 | 0 |
+| Selection | Configured gap limit | Selected mentions | Selected relations | Omitted mentions | Omitted relations | Selected identity groups |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| newest_first | 8 | 9 | 3 | 45 | 9 | 0 |
+| newest_first | 2 | 17 | 3 | 37 | 9 | 0 |
+| identity_first | 8 | 14 | 1 | 40 | 11 | 4 |
 
-Both recipes retained the example's 24,000-character context ceiling; their
-serialized views used 23,579 and 23,566 characters respectively. No claims were
+All recipes retained the example's 24,000-character context ceiling; their
+serialized views used 23,579, 23,566 and 23,952 characters respectively. No claims were
 added to make a group appear. Newest-first selection and gap priority can omit
-every repeated-name group even when the full population has candidates. A
-configured identity-first selection policy remains a needed optimization,
-not an unrecorded change to legacy recipes or a completeness claim. The private
+every repeated-name group even when the full population has candidates.
+The explicit identity-first mode now exposes all four retained candidate groups
+on this diagnostic, retaining eight of fifteen coverage gaps and one of twelve
+relationship assertions. The trade-off is visible rather than an accuracy or
+completeness claim. The fresh comparison revalidated the unchanged 32 original
+rows/source/text under the owned Python 3.11.16 interpreter with zero new model
+calls; known extraction errors remain. The private
 read-only diagnostic is `gate-work/identity-retained-replay.py`; it accepts an
-explicit `--max-gaps` comparison and checks that source/ledger hashes did not
+explicit `--selection` and `--max-gaps` comparison and checks that source/ledger hashes did not
 change. This replay establishes compatibility, not accuracy acceptance.
 
 Still required: evidence-bound identity decisions and reversible merge/split

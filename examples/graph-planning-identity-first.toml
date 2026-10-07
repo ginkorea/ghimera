@@ -1,0 +1,24 @@
+# Non-active planning view. Bind roles and relations to an explicit extraction
+# ontology before using it; this does not configure or call a model by itself.
+[research.graph_context]
+schema = "ghimera.graph-planning/3"
+entity_roles = ["person", "organization", "position"]
+relation_rules = ["reports_to", "holds_position", "member_of", "alias_of"]
+selection = "identity_first"
+max_entities = 24
+max_relations = 16
+max_gaps = 8
+max_evidence_chars = 6000
+max_context_chars = 24000
+
+[research.graph_context.identity]
+schema = "ghimera.identity-planning/1"
+candidate_strategy = "exact_surface_and_role"
+alias_rules = ["alias_of"]
+# Do not infer exclusivity from a relation's name.
+exclusive_relations = []
+unknown_time_policy = "report_possible"
+max_groups = 8
+max_members_per_group = 8
+max_disputes = 8
+max_pair_checks = 64

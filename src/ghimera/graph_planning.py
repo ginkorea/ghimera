@@ -19,6 +19,7 @@ from ghimera.graph_planning_types import (
 )
 from ghimera.graph_types import GraphEdge, GraphRecord
 from ghimera.identity_planning import build_identity_view
+from ghimera.identity_selection import IdentitySelection, SelectionUnit
 from ghimera.models import Document, LedgerRow
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
@@ -108,6 +109,14 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
     )
     digest = population.content_digest()
     total_chars = evidence_size(population.entities, population.relations)
+    selector = (
+        IdentitySelection(
+            policy.identity, tuple(item.node for item in population.entities), population.relations
+        )
+        if policy.selection == "identity_first" and policy.identity is not None
+        else None
+    )
+    by_edge = {edge.id: edge for edge in population.relations}
 
     selected_gaps: list[PlanningGap] = []
 
@@ -154,26 +163,44 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
     current = view((), ())
     if not fits(current):
         raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+
+    def expand(unit: SelectionUnit) -> tuple[dict[str, PlanningEntity], list[GraphEdge]]:
+        combined = SelectionUnit(
+            tuple(dict.fromkeys((*selected, *unit.node_ids))),
+            tuple(dict.fromkeys((*(edge.id for edge in edges), *unit.relation_ids))),
+        )
+        if selector is not None:
+            combined = selector.close(combined)
+        return (
+            {identity: entities[identity] for identity in combined.node_ids},
+            [by_edge[identity] for identity in combined.relation_ids],
+        )
+
+    if selector is not None:
+        for unit in selector.questions():
+            expanded, claims = expand(unit)
+            candidate = view(tuple(expanded.values()), tuple(claims))
+            if fits(candidate):
+                selected, edges, current = expanded, claims, candidate
     for gap in reversed(population.gaps):
-        candidate = view((), (), (*selected_gaps, gap))
+        candidate = view(tuple(selected.values()), tuple(edges), (*selected_gaps, gap))
         if fits(candidate):
             selected_gaps.append(gap)
             current = candidate
     # Relations keep both endpoints and complete evidence; never clip a quote.
     for edge in reversed(population.relations):
-        expanded = dict(selected)
-        for identity in (edge.source, edge.target):
-            expanded[identity] = entities[identity]
-        candidate = view(tuple(expanded.values()), (*edges, edge))
+        expanded, claims = expand(SelectionUnit((edge.source, edge.target), (edge.id,)))
+        candidate = view(tuple(expanded.values()), tuple(claims))
         if fits(candidate):
-            selected, edges, current = expanded, [*edges, edge], candidate
+            selected, edges, current = expanded, claims, candidate
     # Isolated observed mentions also help the planner identify relationship gaps.
     for planning_entity in reversed(population.entities):
         if planning_entity.node.id in selected:
             continue
-        candidate = view((*selected.values(), planning_entity), tuple(edges))
+        expanded, claims = expand(SelectionUnit((planning_entity.node.id,), ()))
+        candidate = view(tuple(expanded.values()), tuple(claims))
         if fits(candidate):
-            selected[planning_entity.node.id], current = planning_entity, candidate
+            selected, edges, current = expanded, claims, candidate
     return current
 
 

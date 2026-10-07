@@ -375,8 +375,11 @@ class TwoSources(SearchFixture):
         )
 
 
-def test_identity_question_drives_followup_and_replays_from_the_journal(tmp_path):
-    cfg = with_journal(identity_config(tmp_path), tmp_path)
+@pytest.mark.parametrize("selection", ["newest_first", "identity_first"])
+def test_identity_question_drives_followup_and_replays_from_the_journal(tmp_path, selection):
+    raw_cfg = identity_config(tmp_path).model_dump(mode="json", by_alias=True)
+    raw_cfg["research"]["graph_context"]["selection"] = selection
+    cfg = with_journal(GhimeraConfig.model_validate(raw_cfg), tmp_path)
     planner, search = IdentityPlanner(), TwoSources()
     collector = GoalLoop(
         config=cfg,
