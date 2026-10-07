@@ -1,6 +1,6 @@
 # Ghimera 0.4.4 release acceptance
 
-Status: **GATED SOURCE; FINAL RELEASE ARTIFACTS AND PUBLICATION PENDING**.
+Status: **PUBLISHED; ORIGINAL PUBLIC ARTIFACT BYTES VERIFIED**.
 No existing tag or public artifact is changed.
 
 ## Scope and complete gate
@@ -61,3 +61,34 @@ answer integration, remote delivery/retention and unattended service deployment,
 incremental connectors and representative multilingual/onion model-quality
 acceptance. Required-term Chinese OCR success is not full transcription support;
 Qwen-VL remains a researched candidate, not an installed or accepted recognizer.
+
+## Recorded publication
+
+GitHub main fast-forwarded from `b7aefd1` to release source
+`8cc8e980db7f1e2efd0542fae9893b1e6b91a301`. New annotated tag `v0.4.4` is
+`5ead79b67217ae3e8d7587472b646471c2299a7d`, peeling to that release source.
+Independent remote reads confirmed both. The owner's dirty checkout and its
+local main were not changed; all previous published identities stayed fixed.
+
+Final wheel and sdist were built offline from clean committed release source.
+Tracked-byte inspection compared 152 wheel source members and 392 sdist members;
+no untracked content, private stores, weights or Git metadata entered either.
+Twine 6.2.0 metadata validation passed under the private tool Python 3.11.16.
+The final wheel was installed offline into the independent wheel environment
+above and passed API/both CLIs plus all five guarded and three legacy native
+archive readbacks again, with imports from installed site-packages.
+
+| Original public artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `ghimera-0.4.4-py3-none-any.whl` | 353,208 | `84576c90d5d04ea6d6c060801ef7933c143e766259c0ca330ca83131e2ff8c2f` |
+| `ghimera-0.4.4.tar.gz` | 1,056,036 | `6a1a3967bf60917df9d23237ee23e1fef60cc263aefc20bff0d5b5f68891c0ed` |
+
+Only those exact files were uploaded through the named official PyPI profile.
+Unauthenticated metadata readback at `pypi.org` and original file readback at
+`files.pythonhosted.org`, normal TLS and redirects refused, proved exact identity,
+sizes, SHA-256, no yanks and byte equality. The readback used private tool Python
+3.11.16 and retained its script under `ghimera-guarded-collection-3Jm4VF`.
+Public release: https://pypi.org/project/ghimera/0.4.4/.
+
+This publication record is a later documentation-only commit. It does not
+rewrite the immutable release tag, files or their earlier acceptance record.

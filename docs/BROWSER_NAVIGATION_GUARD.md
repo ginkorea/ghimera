@@ -11,7 +11,8 @@ through its existing FetchLadder and caller-bound Page session. Redirected HTML,
 PDF/DOCX attachments, inline originals and mapped download landing pages retain
 their native before-contact chain through extraction, citations, graph, journal
 and archive readback. The combined source gate and independent candidate-wheel
-acceptance passed; see [release status](RELEASE_044.md) for final artifact publication.
+acceptance passed; original public 0.4.4 artifact bytes were verified; see
+[release status](RELEASE_044.md).
 Representative publisher, Tor-browser and model-quality acceptance remain
 separate requirements.
 
