@@ -1,7 +1,6 @@
 # Ghimera 0.4.3 release acceptance
 
-Status: **FULL GATE AND INSTALLED CANDIDATE ACCEPTANCE PASSED**;
-tag, final artifacts and public readback must be recorded separately.
+Status: **PUBLISHED AND ORIGINAL PUBLIC ARTIFACT BYTES VERIFIED**.
 Existing release tags and artifacts remain immutable.
 
 ## Scope
@@ -62,6 +61,34 @@ and fast-forward the remote main, without altering the owner's dirty checkout.
 Upload only those checked files to the named official PyPI destination. Read
 back public metadata and both original artifact files over verified HTTPS and
 compare them byte-for-byte. Upload success alone is not publication acceptance.
+
+## Recorded publication
+
+The new annotated tag `v0.4.3` is
+`10109ee9a9fc9235cb19bc7affe33ad6d8bcb992`, pointing at source
+`a3c104c078de4fb7f41661e5a17f7a91c41e7dd4`. GitHub main fast-forwarded to
+that source; independent remote reads confirmed both identities. The original
+owner checkout and its local edits were not changed. Code, tests, examples,
+version and lock match the fully gated `5c07057`; later changes were documentation.
+
+The final files were rebuilt offline, checked against tracked archive contents,
+and passed Twine metadata validation. The final wheel was reinstalled into the
+independent Python 3.11.16 wheel environment above; API/CLI and all three native
+archive readbacks passed again. The documentation-only README/identity checks
+passed five tests in 1.36 seconds under the source-gate Python 3.11.16, no skips.
+
+| Original public artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `ghimera-0.4.3-py3-none-any.whl` | 337,464 | `9984cce2b590927f1a35f1b540adb3f63592ce6f4816c00ce2ff40d53d24078b` |
+| `ghimera-0.4.3.tar.gz` | 1,024,059 | `f7881c81289f00ad51d0f4cd182a7e75391e293b6667e28e084aa98ffcafbe0d` |
+
+Only those files were uploaded through the named official PyPI profile.
+Unauthenticated, TLS-verified, redirect-refusing readback of official metadata
+and the original `files.pythonhosted.org` bytes proved exact names, sizes,
+digests, no yanks and byte equality with local artifacts. Readback used Python
+3.11.16 in the private tool environment; publication evidence and original
+downloads remain under the owned `ghimera-043-release-R1PMMC` operator tree.
+Public release: https://pypi.org/project/ghimera/0.4.3/.
 
 ## Still open
 
