@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.4.2 — candidate
+## 0.4.2 — 2026-10-07
 
 - Caller-bound Chromium PDF/DOCX downloads reuse the existing bounded native
   extraction, scoring, citation, graph, journal and archive path. The original
@@ -18,7 +18,10 @@
   require the caller's actual Page/driver connection. Browser egress/storage
   quota is operator-owned and unobserved network bytes are never reported as zero.
 
-Combined release gate, installed artifact acceptance and publication are pending.
+The complete release gate passed 943 tests with no failures or skips; the
+independently installed candidate reads the native PDF/DOCX archives and exact
+citations. Final artifact and publication evidence is recorded in
+[release acceptance](docs/RELEASE_042.md).
 Inline PDFs, redirected file URLs, autonomous publisher-specific download
 controls, pagination, verified browser Tor networking and representative
 publisher/multilingual quality remain explicit infrastructure requirements.

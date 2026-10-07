@@ -1,7 +1,8 @@
-# Ghimera 0.4.2 release candidate
+# Ghimera 0.4.2 release acceptance
 
-Status: source candidate. No tag, main merge, artifact build or publication is
-claimed by this record. Published 0.4.1 identities remain immutable.
+Status: **COMBINED GATE AND CANDIDATE ARTIFACT ACCEPTANCE PASSED**.
+Final artifacts, tag, main merge and publication still require the separate
+checks below. Published 0.4.1 identities remain immutable.
 
 ## Scope
 
@@ -26,12 +27,46 @@ Source commits before the version amendment:
   in 17.74 seconds**. Neither result skipped tests; neither is a combined
   release gate. Strict mypy passed across 145 source files.
 
-The version metadata now names 0.4.2, so its exact combined source needs a new
-full `scripts/gate.sh` result. Then build the exact wheel/sdist, verify installation
-from the wheel in an independent environment, verify the GitHub main/tag pins,
-publish to the configured official package index and independently read back
-public artifact hashes/bytes. Record each step separately rather than inferring
-publication from a successful upload command.
+## Combined release gate
+
+The frozen versioned source `9f0c174` passed the complete `scripts/gate.sh`:
+**943 passed in 845.28 seconds**, exit zero, no failures or skips. Interpreter:
+`/tmp/chimera-c0-20261006/.venv/bin/python`, Python 3.11.16, importing
+`/tmp/ghimera-delivery-outbox-20261007/src/ghimera`. The standalone interpreter
+resolves no platform SDK; platform doctor/floor do not apply. Ruff check and
+formatting passed (217 files); strict mypy passed (145 source files); the offline
+dependency lock checked 142 packages. Source, tests, examples and metadata were
+unchanged throughout the run. Gate work:
+`/home/gompert/data/workspace/TAIPAN/.codex-tmp/ghimera-042-combined-gate`.
+
+## Candidate artifact acceptance
+
+The candidate wheel/sdist were built from `9f0c174` while that gate ran.
+Inspection checked packaged source/docs/examples against tracked bytes and
+refused duplicated/unsafe archive paths, symlinks, worktree data, credentials
+and model weights. The candidate wheel installed in its own environment:
+`/home/gompert/data/workspace/TAIPAN/.codex-tmp/ghimera-042-release-I8CvdR/wheel-env/bin/python`,
+Python 3.11.16. Its imports resolved installed `site-packages`, not source or an
+editable path. The declared browser extra reports Patchright 1.63.0.
+
+The installed API and command ran. Both retained controlled native browser
+PDF/DOCX archives reopened through the installed evidence reader, preserving
+original file hashes/bytes, parsed text, exact citations, session/policy and
+graph bindings. The navigation-format example validated without an attachment
+URL list. This readback made no browser, source or model request and is not
+independent publisher or model-quality evidence. Private evidence:
+`ghimera-042-release-I8CvdR/CANDIDATE_EVIDENCE.md` in the owned operator tree.
+
+The documentation update after the full gate changes no source, tests, examples,
+version declaration or dependency lock. Its README/identity regression passed
+5 tests in 1.31 seconds without skips, using the same Python 3.11.16 interpreter
+and source checkout above. Because README content enters package metadata, rebuild the final
+wheel/sdist and reinstall/check the exact final wheel, rather than assigning the
+candidate artifacts new identities. Before publication, inspect both final
+archives against the committed checkout and confirm gated source equality.
+Then verify GitHub main/tag pins, publish to the configured official index and
+independently read back public artifact hashes and original bytes. Publication
+is not inferred from a successful upload command.
 
 ## What this release does not close
 

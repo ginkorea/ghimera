@@ -4,7 +4,7 @@ Intent-driven web research: discover sources, collect native-language documents,
 follow evidence gaps, and return a source-cited answer—or an explicit partial
 result when the evidence or budget is insufficient.
 
-**v0.4.0 adds human-assisted collection, resumable research and routed discovery.**
+**v0.4.2 adds same-session PDF/DOCX downloads and discovered attachments.**
 The repository, distribution and import use `ghimera`.
 It succeeds the `go-spider` distribution and `chimera` implementation. It is not
 backward-compatible with v0.1.0's `spider_core` API or `spider` CLI. Python
@@ -118,7 +118,7 @@ Tor routing and representative-publisher acceptance remain open. A bounded
 English/Traditional Chinese public-document capture is recorded in
 [publisher evidence](docs/C1_HUMAN_PUBLIC_EVIDENCE.md). See
 [human-assisted collection](docs/HUMAN_BROWSER.md).
-The 0.4.2 development candidate also captures actual PDF/DOCX downloads through
+Version 0.4.2 also captures actual PDF/DOCX downloads through
 the caller's selected `BoundPageHumanSession`, injected into `Collector`.
 An explicit format policy lets scored native links supply previously unknown
 file URLs; the collector does not need a hard-coded attachment list. Original

@@ -1,6 +1,7 @@
 # Same-session browser document downloads
 
-Status: full-gated source candidate with native controlled acceptance; not published.
+Status: combined 0.4.2 gate passed with native controlled acceptance; public
+artifact state is recorded separately in [release acceptance](RELEASE_042.md).
 
 The authorized-browser port can return either a DOM snapshot or a document
 download. Both go through the existing FetchLadder, document extraction,
@@ -173,3 +174,10 @@ passed. No merge or publication is claimed.
 The initial extension check exposed a missing run ID in its graph-enabled test
 harness; that check did not reach collection. The corrected passing run supplied
 the required identity rather than weakening graph behavior.
+
+The combined versioned candidate `9f0c174` subsequently passed the full
+`scripts/gate.sh`: **943 passed in 845.28 seconds**, zero failures/skips, under
+Python 3.11.16 at `/tmp/chimera-c0-20261006/.venv/bin/python`, importing
+`/tmp/ghimera-delivery-outbox-20261007/src/ghimera`. Source/tests/examples were
+frozen throughout; Ruff/format and strict mypy passed. This supersedes the
+extension's missing combined gate, not its still-open publisher/quality rows.
