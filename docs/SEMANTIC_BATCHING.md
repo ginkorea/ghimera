@@ -63,6 +63,45 @@ fingerprint remained unchanged after the fix. A broader sandboxed focused run
 timed out in fixture I/O and is not counted as a pass. This full source gate
 does not establish live quality, publication or deployment.
 
+## Optional original-date schema binding
+
+`prompt_profile = "proposal_date_checks"` is a separate explicit option under
+verification/4. It retains the assigned-role questions and selects request
+revision `ghimera-semantic-verification/6`. Existing recipes without a profile
+remain revision 4; `assigned_role_checks` remains revision 5 with its unchanged
+request schema. See [the nonactive example](../examples/review-proposal-dates.toml).
+
+This profile requires the selected reviewer binding to declare
+`response_format = "json_schema"`; JSON-object-only bindings refuse at the
+configuration boundary. Each selected original global relation index receives
+its own schema branch. If both original dates are null, the branch requires
+`validity.asserted = false` and `assessment = null`. If either original date is
+present, it requires `asserted = true` and an independent, non-null date
+assessment. This encodes an input fact, not whether that date is correct.
+Entailment and direction retain their independent verdicts and reasons.
+
+The schema does not rewrite dates, reduce the original proposal, change batch
+selection, force a supported verdict, repair a response or relax native
+validation. Even if a provider ignores its grammar, existing source/date and
+aggregate checks still refuse mismatched answers. Mention-only and coverage
+calls acquire no irrelevant relation branches. No provider, endpoint, runtime,
+GPU allocation, retry or budget is selected by this option. Standard JSON-schema
+checks establish the generated schema's shape, not a serving engine's actual
+grammar support or model quality; those require bounded live acceptance.
+
+The full `scripts/gate.sh` for this profile on 7 October 2026 UTC used
+`/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16), importing this
+checkout's `src/ghimera`. It passed **646 tests, zero failed, zero skipped**, in
+536.71 seconds. Lint and formatting passed for 142 files; strict typing passed
+for 95 source files. Offline lock validation resolved 137 packages; the existing
+JSON-schema validator is now an explicit pinned development dependency, not
+a runtime dependency. The first contract failed before implementation. The
+focused date/role run passed 22 tests in 2.41 seconds in the same environment;
+a broader sandboxed related run timed out in fixture I/O and is not counted as
+a pass. The full gate used installed isolated Chromium and local fixture
+servers, not a live model or real CAPTCHA service. Source/protocol validation
+does not establish publication, deployment or model accuracy.
+
 ## Retained evidence and replay
 
 Actual responses remain `ghimera.semantic-review/3` observations, with explicit

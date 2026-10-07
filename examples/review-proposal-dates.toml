@@ -1,0 +1,10 @@
+# Nonactive semantics.verification block; merge into your own validated recipe.
+# The selected model binding must declare response_format = "json_schema".
+# Bounds are caller-owned, not an implicit increase to the overall run budget.
+schema = "ghimera.semantic-verification/4"
+prompt_profile = "proposal_date_checks"
+model_role = "reviewer"
+max_calls_per_run = 256
+max_mentions_per_call = 4
+max_relations_per_call = 2
+max_coverage_findings = 4

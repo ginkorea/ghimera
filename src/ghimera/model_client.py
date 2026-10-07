@@ -247,6 +247,15 @@ ASSIGNED_ROLE_REVIEW_INSTRUCTIONS = (
     "otherwise supported. Do not repair the proposed role or rewrite its assertions."
 )
 
+PROPOSAL_DATE_REVIEW_INSTRUCTIONS = (
+    " The response schema binds date assertion state to each ORIGINAL global "
+    "relation index. Preserve its fixed asserted value: unasserted means "
+    "assessment=null, not an ambiguous missing-date judgment. For an asserted "
+    "original date, independently assess source support; its presence is not "
+    "evidence that the date is correct. Entailment and direction remain separate "
+    "source-grounded judgments regardless of date state."
+)
+
 
 class WireMessage(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
@@ -488,6 +497,14 @@ class SelfHostedModel:
                     prompt.semantic_review_selection,
                     semantic.verification.max_coverage_findings,
                 )
+                if semantic.verification.prompt_profile == "proposal_date_checks":
+                    from ghimera.semantic_batching import bind_proposal_dates
+
+                    if prompt.semantic_proposal is None:
+                        raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                    bind_proposal_dates(
+                        schema, prompt.semantic_proposal, prompt.semantic_review_selection
+                    )
             response_format: dict[str, JsonValue] = (
                 {"type": "json_object"}
                 if service.response_format == "json_object"
@@ -542,7 +559,16 @@ class SelfHostedModel:
                     if prompt.task == "semantic_review"
                     and semantic is not None
                     and semantic.verification is not None
-                    and semantic.verification.prompt_profile == "assigned_role_checks"
+                    and semantic.verification.prompt_profile
+                    in {"assigned_role_checks", "proposal_date_checks"}
+                    else ""
+                )
+                + (
+                    PROPOSAL_DATE_REVIEW_INSTRUCTIONS
+                    if prompt.task == "semantic_review"
+                    and semantic is not None
+                    and semantic.verification is not None
+                    and semantic.verification.prompt_profile == "proposal_date_checks"
                     else ""
                 )
                 + (

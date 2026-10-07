@@ -1,5 +1,7 @@
 """Partition all original assessments and assemble actual observations, never retries."""
 
+from copy import deepcopy
+
 from pydantic import JsonValue
 
 from ghimera.refusals import GhimeraRefused, RefusalCode
@@ -120,3 +122,53 @@ def bound_review_schema(
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if values:
             field["enum"] = values
+
+
+def _schema_object(parent: dict[str, JsonValue], key: str) -> dict[str, JsonValue]:
+    value = parent.get(key)
+    if not isinstance(value, dict):
+        raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+    return value
+
+
+def bind_proposal_dates(
+    schema: dict[str, JsonValue], proposal: SemanticProposal, selection: ReviewSelection
+) -> None:
+    """Bind input facts per global index, never a verdict or a rewritten proposal.
+
+    Only the explicit proposal-date profile uses this generated request schema.
+    Output records and their strict replay/grounding checks remain unchanged.
+    """
+    if not selection.relation_indices:
+        return
+    if any(index >= len(proposal.relations) for index in selection.relation_indices):
+        raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+    properties = _schema_object(schema, "properties")
+    definitions = _schema_object(schema, "$defs")
+    relations = _schema_object(properties, "relations")
+    relation_template = _schema_object(definitions, "GroundedRelationAssessment")
+    check_template = _schema_object(definitions, "GroundedRelationChecks")
+    date_template = _schema_object(definitions, "DateAssertionCheck")
+    _schema_object(definitions, "SemanticCheck")
+    variants: list[JsonValue] = []
+    for index in selection.relation_indices:
+        original = proposal.relations[index]
+        asserted = original.valid_from is not None or original.valid_to is not None
+        relation, checks, validity = (
+            deepcopy(relation_template),
+            deepcopy(check_template),
+            deepcopy(date_template),
+        )
+        relation_fields = _schema_object(relation, "properties")
+        index_field = _schema_object(relation_fields, "index")
+        index_field.pop("enum", None)
+        index_field["const"] = index
+        validity_fields = _schema_object(validity, "properties")
+        _schema_object(validity_fields, "asserted")["const"] = asserted
+        validity_fields["assessment"] = (
+            {"$ref": "#/$defs/SemanticCheck"} if asserted else {"type": "null"}
+        )
+        _schema_object(checks, "properties")["validity"] = validity
+        relation_fields["checks"] = checks
+        variants.append(relation)
+    relations["items"] = variants[0] if len(variants) == 1 else {"anyOf": variants}
