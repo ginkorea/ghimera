@@ -58,6 +58,21 @@ class SemanticExtractor(Protocol):
     ) -> SemanticProposal: ...
 
 
+@runtime_checkable
+class SemanticReviewPreflight(Protocol):
+    """Optional local preparation capability; never a source/model request."""
+
+    async def prepare_semantic_review(
+        self,
+        intent: str,
+        document: Document,
+        start: int,
+        end: int,
+        policy: SemanticConfig,
+        proposal: SemanticProposal,
+    ) -> None: ...
+
+
 class SemanticReviewer(Protocol):
     @property
     def model(self) -> ModelIdentity: ...
@@ -407,6 +422,10 @@ class SemanticStage:
                 budget.config.judge_budget - budget.judge_calls,
             ):
                 raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            if isinstance(self._reviewer, SemanticReviewPreflight):
+                await self._reviewer.prepare_semantic_review(
+                    intent, document, start, end, policy, proposal
+                )
             parts: list[ReviewPart] = []
             for selection in selections:
                 review = await self._review_once(
@@ -416,6 +435,10 @@ class SemanticStage:
                     raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
                 parts.append(ReviewPart(selection=selection, review=review))
             return assemble_review(proposal, tuple(parts))
+        if isinstance(self._reviewer, SemanticReviewPreflight):
+            await self._reviewer.prepare_semantic_review(
+                intent, document, start, end, policy, proposal
+            )
         return await self._review_once(
             intent, document, start, end, policy, proposal, budget, ledger
         )

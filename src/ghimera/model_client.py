@@ -837,6 +837,30 @@ class SelfHostedModel:
             SemanticProposal,
         )
 
+    async def prepare_semantic_review(
+        self,
+        intent: str,
+        document: Document,
+        start: int,
+        end: int,
+        policy: SemanticConfig,
+        proposal: SemanticProposal,
+    ) -> None:
+        """Check all request sizes locally before the stage reserves review work."""
+        from ghimera.model_preflight import preflight_semantic_review
+        from ghimera.semantic_verification import review_service
+
+        if self._service != review_service(self._config):
+            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+        try:
+            await preflight_semantic_review(
+                self._config, intent, document, start, end, policy, proposal
+            )
+        except ModelFailure as exc:
+            # Preparation is not a model attempt. Do not manufacture call
+            # telemetry or let the stage charge it as an actual review.
+            raise GhimeraRefused(exc.code) from None
+
     async def semantic_review(
         self,
         intent: str,

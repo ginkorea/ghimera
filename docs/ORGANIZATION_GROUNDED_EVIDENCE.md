@@ -1,4 +1,4 @@
-# Grounded review diagnostics: trials 13 and 14
+# Grounded review diagnostics
 
 Observed 7 October 2026 UTC against development source `e39487f`.
 These are failed, bounded real-model diagnostics, not organizational extraction
@@ -435,3 +435,77 @@ evidence selects a client-owned exact excerpt by ID instead of regenerating its
 text. It retains all checks and original scope. These failed older-wire responses
 are not rewritten as accepted new-wire answers. The new profile needs its own
 real-model and complete Collector acceptance; the overall capability remains open.
+
+## Trials 20–21: native quote wire and complete-request preparation
+
+These are retained-proposal diagnostics on 7 October 2026 UTC, not full
+Collector or organizational quality acceptance. They use the unchanged native
+Chinese PDF, original extraction proposal and ontology from trial 12, selecting
+the same 15,000–16,500 passage. The source bytes remain
+`0b75acd4280e0b331ac479996411b0dd652350f8fce903d117fcb942028167cc`.
+The worker is `/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16),
+importing this checkout's `src/ghimera`; the SDK parent uses
+`/home/gompert/.venvs/taipan/bin/python` (Python 3.13.14), whose floor check
+passed and whose `taipan` import resolved to the TAIPAN workspace source.
+
+Trial 20 selected `native_quote_checks` but inherited a service allowance of
+30,000 input characters. Its first complete request contained 44,816 characters
+including system instructions and grammar. It refused `budget_exhausted`
+before HTTP; no review-response file, response bytes or model usage exists.
+Its original diagnostic summary labels the reserved attempt
+`actual_review_calls=1`; that counter is **incorrect**, not a transport call.
+The original artifact remains unchanged. The subsequent helper separates
+`reserved_review_calls` and actual transport posts, and preflights every request
+before the parent discovers credentials or asks the broker for a GPU.
+
+Trial 21 explicitly configures 60,000 input characters and a 32,768-token
+served context instead of changing source/runtime limits. All six complete
+requests fit offline: 44,584–46,568 input characters and 68,009–71,873 request
+bytes. No source, proposal, ontology or quote alternative was truncated. A
+negative check of the old recipe refused before network or GPU admission.
+
+The fresh SDK read returned `model.openai--gpt-oss-20b` as active/unwithheld,
+`openai/gpt-oss-20b` at revision
+`6cee5e81ee83917806bbde320786a8fb61efebee`, and the configured `taipan/vllm`
+runtime. The broker admitted only the owned startup `job-893f7a0d0160`.
+Consumer `2d57ef9f5c734c9391176eed5c35195c` became ready on `taipan-edge-01`.
+After the diagnostic, the parent released that consumer and observed the
+startup job **cancelled**. No model-host or pipeline configuration was changed.
+
+All six actual responses were HTTP 200, `finish_reason=stop`, and valid
+`ghimera.semantic-review/6` JSON. Measured provider usage was 19,406–19,953
+prompt tokens per response; these figures are not a throughput benchmark.
+The first five item assessments passed the protocol checks. The final coverage
+answer selected the complete original window, so both endpoints were retained,
+but claimed four relationships already in the unchanged proposal as omissions.
+Each finding independently fails the existing duplicate-proposal check. They
+were not silently removed, repaired, projected or retried.
+
+The complete batch therefore refused `semantic_extraction_failed`: zero
+successful windows, zero projected mentions, zero projected relationships.
+The diagnostic took 51.40 seconds after model readiness, not including startup.
+Original-file hashes and graph disk replay were verified. The result closes
+neither real-model quality nor complete Collector acceptance. Another blind
+prompt revision/retry is not the next acceptance claim; reviewer quality and
+representative full-composition evidence remain open.
+
+| Original retained artifact | SHA-256 |
+| --- | --- |
+| Trial-20 ledger | `ff42c9c5eb801e30480da92b36c9d898eb37942fcf8f1067deba25044e462758` |
+| Trial-20 summary | `49c8291f42d42ae152a812fdcafc7ae3c5c2cf6ca97834561fe88a36b659760b` |
+| Trial-21 ledger | `04162ddc14d95d4ed7837304f3a0a4383d7d3ea6b1685cf1478de2438e1084cd` |
+| Trial-21 summary | `34a8503fc566bb9d829d93631859674c6bf992c46cc1d9b89b37426424a38663` |
+
+The reusable offline preparation API and the self-hosted stage's automatic
+prepare-before-review behavior are described in
+[semantic batching](SEMANTIC_BATCHING.md#offline-request-preparation).
+Preparation does not manufacture model responses or prove factual accuracy.
+
+The complete package gate for the preparation source completed with **679
+passed, zero failed, zero skipped** in 547.71 seconds. It used
+`/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16), importing this
+checkout's `src/ghimera/__init__.py`. Offline lock verification (137 packages),
+Ruff lint/format checks (147 files) and strict mypy (97 source files) passed.
+The configured isolated Chromium and local protocol fixtures were exercised;
+this gate made no new real-model or remote source request. This result proves
+the preparation contract and regressions, not full Collector quality acceptance.

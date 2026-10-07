@@ -31,6 +31,29 @@ request; an HTTP failure, invalid response, timeout or cancellation retains
 previous observations and the current attempted call, with no automatic retry.
 No semantic graph claims are projected from a partial batch.
 
+### Offline request preparation
+
+`ghimera.model_preflight.preflight_semantic_review` returns immutable request
+footprints for **every** review partition, including coverage. It uses the
+actual configured `SelfHostedModel` serializer and its source/proposal/schema
+validation. Original context and proposals are unchanged. Character and byte
+limits include the system prompt and output grammar, not just the source text.
+A larger later partition refuses the complete preflight instead of treating an
+earlier fitting request as sufficient.
+
+Preparation has no credential parameter, network call, model answer, spend
+reservation or graph write. Its inspection transport stops at the serialized
+request boundary; it does not manufacture an unavailable or successful model
+response. Returned sizes/digests are local preparation metadata, not call
+telemetry, a tokenizer measurement, context-capacity proof or factual acceptance.
+An application can call it before admitting model work for a retained proposal.
+
+The ordinary `SemanticStage` also invokes the self-hosted reviewer's preparation
+capability before reserving or issuing reviews. Alternate reviewer ports retain
+their contract; they can implement `SemanticReviewPreflight` for the same
+prepare-before-spend behavior. No provider/model fallback or deployment limit is
+introduced. Limits remain the explicit typed service/research configuration.
+
 ### Opt-in assigned-role questions
 
 The non-active [assigned-role example](../examples/review-assigned-role.toml)
