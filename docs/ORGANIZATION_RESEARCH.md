@@ -125,6 +125,14 @@ that an entire organization has been exhaustively mapped.
    concept/type errors persisted. Its three retained mention occurrences and
    zero organizational relationships are not a validated organizational graph.
    See [ORGANIZATION_FACTORIZED_EVIDENCE.md](ORGANIZATION_FACTORIZED_EVIDENCE.md).
+   A subsequent bilingual-ontology diagnostic made three new extraction calls
+   and selected an explicit election passage. The present-name review improved
+   and the earlier abstract-concept outputs disappeared, but extraction still
+   invented absent titles and omitted a present institution; the positive
+   relationship review reached its request deadline. Two successful projections
+   retained one mention and zero organizational relationships. This is mixed
+   diagnostic evidence, not quality acceptance; see
+   [ORGANIZATION_BILINGUAL_EVIDENCE.md](ORGANIZATION_BILINGUAL_EVIDENCE.md).
 3. Alias/temporal identity and conflict preservation across real documents:
    source now includes an explicit identity-aware planning view with same-name
    and asserted-alias hypotheses, potentially competing dated claims and
