@@ -1,7 +1,8 @@
 # Configurable local challenge recovery
 
-This is source added after the published ghimera 0.3.0 artifacts. It is not yet
-a released upgrade or a claim of acceptance against production CAPTCHA sites.
+These configured integrations shipped on the ghimera 0.4.0 line after the
+immutable 0.3.0 artifacts. Release status is distinct from acceptance against
+representative production CAPTCHA sites, which remains open.
 
 ## Integration status and activation
 
@@ -18,7 +19,7 @@ interchangeable recovery port, not a promise that every CAPTCHA is solvable.
 | Byparr 3.x gateway | Implemented, explicit millisecond dialect | Real gateway/site acceptance open |
 | Private exact-origin clearance cache | Implemented, bounded and concurrent | Local HTTP integration verified |
 | Nodriver, Buster/audio solving | Not integrated | Open |
-| Same-browser human-assisted recovery | Not integrated | Open |
+| Same-browser human-assisted recovery | Implemented through the separate caller-bound browser port; see HUMAN_BROWSER.md | Controlled same-session continuation and bounded public DOM capture verified; real entitled login/challenge acceptance remains open |
 
 Activation requires a separately installed gateway on the collection host,
 loopback-only binding, pinned executable/image provenance, restricted egress

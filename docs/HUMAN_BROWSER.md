@@ -1,9 +1,10 @@
 # Human-assisted, same-browser collection
 
-Status: **same-target Chromium capture and Collector composition implemented in
-development source**. Native extraction, graph/archive readers and completed-round
-resume retain its distinct DOM evidence. Full-package verification and real
-publisher acceptance are separate; this does not close the full collector row.
+Status: **same-target Chromium capture and Collector composition shipped on the
+0.4.0 line**. Native extraction, graph/archive readers and completed-round
+resume retain its distinct DOM evidence. Later browser-file releases are recorded
+in RELEASE_042.md and RELEASE_043.md. Representative publisher acceptance remains
+separate; this does not close the full collector row.
 The existing authorized HTTP sessions and local
 challenge gateways remain separate, working mechanisms. Their cookies are not
 silently imported into this mechanism.
@@ -202,7 +203,7 @@ has controlled same-session acceptance; see [browser downloads](BROWSER_DOWNLOAD
 CDP-only download capture, passive-driver alternatives and transport verification
 remain required follow-ups, not silent HTML substitutes.
 
-## Collector composition (unreleased)
+## Collector composition
 
 `Collector(config, human_assistant=application_port)` and its `from_toml`
 equivalent accept the explicit application-owned assistance port. A configured

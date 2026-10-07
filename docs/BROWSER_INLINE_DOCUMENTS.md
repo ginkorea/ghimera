@@ -1,8 +1,9 @@
 # Inline documents in the caller's browser
 
-Status: source candidate after native browser/collection regressions; not yet
-full-gated or published. The immutable 0.4.2 release includes native downloads,
-not this inline-response path.
+Status: 0.4.3 source full-gated, with installed-wheel readback and a bounded
+public sample capture; publication is recorded separately in
+[release acceptance](RELEASE_043.md). The immutable 0.4.2 release includes native
+downloads, not this inline-response path.
 
 ## Configuration and ownership
 
@@ -101,7 +102,25 @@ The subsequent final policy/provenance checks passed **12 tests in 30.76
 seconds**, with no failures or skips, on the same Python 3.11.16 interpreter and
 owned source import above. They include the non-active inline example and
 refusal of altered original bytes, response status, response header, document
-URL, spend and stripped inline policy. The full versioned package gate must be
-recorded separately before publication. Representative entitled publishers,
+URL, spend and stripped inline policy. The frozen versioned source `5c07057`
+then passed the full package gate: **950 tests in 869.41 seconds**, with no
+failures or skips, on that same Python 3.11.16 interpreter and source import.
+Ruff/format passed; strict mypy passed 146 source files. The separately installed
+wheel reopened all three native browser archives and their exact citations,
+originals, actual response/policy and graph bindings without source/model calls.
+
+The installed candidate also captured the public W3C sample
+<https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf> through
+the normal FetchLadder, honoring robots. It returned `browser_response`, 13,264
+original bytes, SHA-256
+`3df79d34abbca99308e79cb94461c1893582604d68329a41fd4bec1885e6adb4`.
+The ledger reconciled two charged fetch operations and 17,108 collector bytes;
+browser navigation/subresource traffic remains unknown, not part of that total.
+The interpreter was the independently installed Python 3.11.16 wheel environment
+under the owned `ghimera-043-release-R1PMMC` operator directory. It used no
+credentials, assistance or inference. A public sample is not a representative
+publisher, entitled-session or research-quality benchmark.
+
+Representative entitled publishers,
 onion-browser networking, pagination, cross-origin/redirected files and native
 Pacific OCR/research quality remain open in the infrastructure PRD.

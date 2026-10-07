@@ -35,7 +35,7 @@ initial adapter admission; changed bytes refuse subsequent work.
 
 1. Passive HTML inspection captures `img` URLs (`data-src` then `src`), alt/title,
    a following figure caption, element index and declared dimensions. No page
-   execution or image download occurs during inspection. The unreleased explicit
+   execution or image download occurs during inspection. The explicit
    responsive policy below also admits bounded `srcset` and `<picture>` choices.
 2. Configured exclusion tokens, presentation attributes, dimensions, candidate
    terms, host/port scope and per-page limits admit likely useful figures.
@@ -63,13 +63,13 @@ initial adapter admission; changed bytes refuse subsequent work.
    `Document.images`. Rejected bytes are removed from the conditional fetch
    cache and worker files are cleaned. This path creates no image vectors; an
    index consumer must admit only these accepted records, never all page images.
-   The unreleased [native evidence corpus](EVIDENCE_CORPUS.md) does this for OCR
+   The [native evidence corpus](EVIDENCE_CORPUS.md), shipped in 0.4.1, does this for OCR
    and reviewed visual text, retaining original-image region anchors.
 
 Original HTML/PDF preservation may include inline or embedded images. This
 feature does not rewrite the original source to erase those bytes.
 
-## Explicit responsive intake — unreleased
+## Explicit responsive intake — shipped in 0.4.1
 
 Set `VisualConfig.responsive` from the non-active fragment
 [`examples/responsive-images.toml`](../examples/responsive-images.toml).
@@ -138,8 +138,8 @@ Current limits are explicit: embedded PDF figure crops, standalone image seed
 dispatch, automatic graph promotion and
 answer citation rendering for visual regions are not built. Existing scanned
 PDF OCR remains the configured document adapter, not this raster enrichment
-path. The responsive and durable-corpus source candidates are unreleased;
-service wiring and representative corpus acceptance remain open PRD rows. Representative
+path. Responsive intake and the durable corpus shipped in 0.4.1; see RELEASE_041.md.
+Service wiring and representative corpus acceptance remain open PRD rows. Representative
 multilingual infographic/diagram accuracy and a real served-vision run remain
 acceptance requirements; protocol fixtures cannot close them.
 
@@ -156,4 +156,5 @@ density/lazy/picture selection, malformed URLs, exact archive replay, unchanged
 legacy wire shape, every primary Pacific OCR route, and actual English Tesseract
 execution followed by SQLite/FAISS retrieval of the retained OCR/image anchors.
 The model wire uses credential-free loopback replies, not a real semantic model.
-Full responsive-candidate gate and publication remain pending.
+The later combined release gate and public artifact readback are recorded in
+RELEASE_041.md; they do not change the quality limits of this focused observation.

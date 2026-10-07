@@ -1,14 +1,16 @@
 # Changelog
 
-## 0.4.3 — release candidate
+## 0.4.3 — 2026-10-07
 
 - Explicit, bounded inline-document body collection in the caller's existing
   browser session. An admitted inline navigation permits one separate same-origin
   browser request, with redirects refused. Original bytes and actual response
   observations use a distinct evidence type through the existing parser/citation/
   graph/journal/archive path; cookies are never exported. Native regressions
-  passed, including provenance replay; combined gate/publication and
-  representative quality remain open until their acceptance is recorded.
+  passed, including provenance replay. The full gate passed 950 tests with
+  no failures or skips; installed-wheel readback and a robots-aware public
+  W3C sample capture passed. Publication evidence and the limits of these
+  observations are recorded in [release acceptance](docs/RELEASE_043.md).
 
 ## 0.4.2 — 2026-10-07
 
