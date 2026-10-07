@@ -1,7 +1,8 @@
 # Pacific scanned-PDF candidate — 7 October 2026
 
-Status: **source candidate; quality acceptance failed; not published**. Public
-Ghimera 0.4.0 is unchanged. This candidate does not close the infrastructure PRD.
+Status: **source published in 0.4.1; quality acceptance remains failed**.
+Public Ghimera 0.4.0 is immutable. The [combined release](RELEASE_041.md)
+does not close the infrastructure PRD or the Simplified Chinese failure below.
 
 ## Scope
 

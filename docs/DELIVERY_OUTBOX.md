@@ -1,6 +1,7 @@
 # Durable result delivery
 
-Status: unreleased source candidate. This closes neither the collector's
+Status: published in 0.4.1; full release evidence is in [RELEASE_041.md](RELEASE_041.md).
+This closes neither the collector's
 operation-level crash frontier nor deployment of a remote publication service.
 The outbox preserves completed results between collection and destination
 availability; it does not acquire source entitlement or certify model accuracy.

@@ -1,6 +1,6 @@
 # Bounded concurrent collection
 
-Status: **full-gated source candidate**, not yet published. This closes part
+Status: **published in 0.4.1**, with [combined release evidence](RELEASE_041.md). This closes part
 of the infrastructure execution gap, not durable operation-level recovery or
 representative language/model quality.
 

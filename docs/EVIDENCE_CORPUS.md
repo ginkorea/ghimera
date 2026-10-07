@@ -1,7 +1,8 @@
 # Durable native evidence corpus
 
 Status: native corpus source at `7733285` and the subsequent automatic collector
-handoff at `3b21a7a` passed their respective full gates. Both are unreleased. This
+handoff at `3b21a7a` passed their respective full gates. Both are published in
+0.4.1; see [combined release evidence](RELEASE_041.md). This
 does not close the infrastructure PRD's language/model quality, operation
 recovery, service, refresh or delivery-outbox requirements.
 
@@ -55,7 +56,7 @@ Relocating the private directory does not itself change the recipe identity.
 
 ### Corpus-backed research discovery
 
-The unreleased `CorpusLeadSearch` implements the existing `GroundedSearch`
+The 0.4.1 `CorpusLeadSearch` implements the existing `GroundedSearch`
 request port, preserving its final spend/ledger template. Configure a
 `CorpusSearchConfig` (`ghimera.corpus-search/1`) using the opened store's
 `identity`, `config.identity` and exact `config.query_encoder`; the non-active

@@ -1,9 +1,10 @@
 # ghimera 0.4.1 release acceptance
 
-Status: **SOURCE AND INSTALLED ARTIFACT VERIFIED**, not yet published. Package
-metadata and the lock name 0.4.1. The combined full gate and independent wheel
-checks passed; public publication/readback are still required. Existing 0.4.0
-artifacts/tags remain immutable.
+Status: **PUBLISHED AND PUBLIC ARTIFACT READBACK VERIFIED**, 7 October 2026 UTC.
+Package metadata and the lock name 0.4.1. The full gate, independent installed
+wheel checks and public byte-for-byte readback passed. Existing 0.4.0
+artifacts/tags remain immutable. This incremental release does not close the
+remaining infrastructure or multilingual-quality requirements.
 
 ## Scope
 
@@ -116,6 +117,41 @@ environment. Exercise the public API and command, native corpus readback and
 delivery/restart behavior. Record hashes, push a new immutable tag, upload those
 same files, and compare downloaded public bytes. Publication remains unproven
 until those observations exist.
+
+## Published identity and readback
+
+- Immutable annotated `v0.4.1` tag: `1c2e57cd2b85193f74ea6de2f3c7268a7fef2f08`.
+- Tagged source: `61d96d27b6e1738883373cca33293cfc2a9376b2`. Its only change
+  from full-gated `7de2be3` is the release evidence document above. Code, tests,
+  examples and package metadata are unchanged.
+- [Public release](https://pypi.org/project/ghimera/0.4.1/).
+- Wheel: 327,446 bytes, SHA-256
+  `bfcbe84e62fbfe7dc500dee062440ae38d9d2aac924177b3bdcf75cba0556506`.
+- Source archive: 994,962 bytes, SHA-256
+  `323884868fe2306ed3b449c6ab3603040b34f0550a77acd9d70d7bdc5f725d2c`.
+
+Official version-specific PyPI metadata returned both exact filenames/sizes/
+hashes, neither yanked. Both public files were downloaded separately from the
+metadata's verified-HTTPS `files.pythonhosted.org` URLs, without credentials
+or redirect following; `cmp` proved each byte-identical to its checked local
+artifact. The wheel also remains byte-identical to the independently installed
+and accepted artifact. GitHub independently returned the same main/tagged
+source and annotated tag identity. No published tag or existing release moved.
+
+The first upload invocation used both a named repository and an explicit URL;
+Twine 6.2.0's URL path discarded the named profile credentials and refused
+before artifact transfer. Inspection of its installed resolver identified the
+cause. Repeating with only the existing named `pypi` profile, whose destination
+was independently checked as exactly `https://upload.pypi.org/legacy/`,
+published both artifacts. No credential/configuration changed and secret
+values were not logged. This record is added after readback, not retroactively
+embedded into or substituted for the already-published source archive.
+
+The documentation/readback follow-up changed no production code, tests,
+examples or metadata. Its README/release identity regression passed 5 tests
+in 1.32 seconds, no failures/skips, under Python 3.11.16 at
+`/tmp/chimera-c0-20261006/.venv/bin/python`, importing the same explicit
+`/tmp/ghimera-delivery-outbox-20261007/src/ghimera` checkout.
 
 ## Remaining infrastructure work
 
