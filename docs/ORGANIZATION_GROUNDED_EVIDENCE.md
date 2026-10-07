@@ -308,3 +308,70 @@ Evidence root: `gate-work/organization-assigned-role-review-16`.
 | Trial-16 response container 1 | `bebef4458760735a5552e0c22d4065a4214685415eb8d9054507a1b26c77d999` |
 | Trial-16 response container 2 | `5f42312775b906d2ff0993e126da34352451a24de1ba2c24a174d1e29a0748e2` |
 | Trial-16 response container 3 | `0ebc13fa22ff4e1e5611b3d9c54fcd91ffeaf2a1345496405eeedd4c2b74cd11` |
+
+## Trial 17: original-date schema diagnostic
+
+Observed 7 October 2026 UTC on full-gated source `c0a4c98`. The explicit
+`proposal_date_checks` option selected request revision 6, retaining the same
+source, original proposals, ontology, model pin, generation settings and six-call
+bounds as trial 16. It binds original date assertion state per selected global
+relation index and requires JSON-schema responses. It does not repair answers or
+weaken grounding/aggregate checks. The full source gate is recorded in
+[SEMANTIC_BATCHING.md](SEMANTIC_BATCHING.md#optional-original-date-schema-binding):
+646 passed, zero failed or skipped, in 536.71 seconds on the owned Python 3.11.16
+interpreter importing this checkout's `src/ghimera`.
+
+The admission interpreter was `/home/gompert/.venvs/taipan/bin/python`, Python
+3.13.14, importing `/home/gompert/data/workspace/TAIPAN/src/taipan`; its floor
+check passed. Fresh catalogue inspection returned the same active, unwithheld
+model/revision. Broker health reported 0.4.12 at
+`08d2bccd8f529dc4311da479a1d39898eb5170fa`. One GPU was admitted: consumer
+`321d199aa34c45018554df0722abbde8` was released and its own startup job
+`job-f6cf3189ed1e` observed cancelled. No host, model or runtime configuration
+changed; the worker stayed on the laptop and issued no new extraction calls.
+
+| Actual selection | Latency, seconds | Prompt/completion tokens | Result |
+| --- | ---: | ---: | --- |
+| Mentions m1–m4 | 17.532 | 5,583 / 554 | Structurally valid dimensional review |
+| Mentions m5–m8 | 23.249 | 5,583 / 931 | Final JSON contradicted its mention dimensions |
+
+Both responses were HTTP 200, matching model, stop and nonempty final content.
+The second answer marked all four summaries supported despite an unsupported
+dimension in each. Fresh read-only parsing reproduced `mention summary must
+match every explicit review dimension`. These are not endpoint outages or
+missing final answers, despite the adapter's coarse `model_unavailable` refusal.
+No relationship or coverage call ran, so this diagnostic **did not exercise the
+new per-relation date schema against the serving engine**. The entire review
+was refused after two calls in 40.927 seconds, without partial semantic claims.
+
+The reasons also reveal unresolved quality problems: offices were assessed only
+as institutions, and original m7 was judged against a position definition even
+though its original assigned role is organization. The first batch recognized
+the generic party-organization phrase as ambiguous; that isolated difference
+does not establish better accuracy or calibrated native-language typing.
+
+Fresh-process replay using the owned Python 3.11.16 interpreter verified three
+ledger rows, two durable trace batches, three research/document nodes and one
+trace edge, with zero semantic windows. All retained and original file hashes
+were unchanged. Diagnostic exit zero records the observed refusal, not acceptance.
+
+**Next bounded action:** constrain deterministic aggregate verdict consistency
+in the generated request schema while retaining independent factual dimensions
+and strict native validation. Do not coerce model answers or force factual
+support. Then evaluate the complete original mention/relation/coverage set;
+reviewer role/ontology confusion remains a separate calibration requirement.
+Complete Collector composition, representative organization-chart quality and
+actual CAPTCHA-gateway acceptance remain open.
+
+Private ignored recipe: `gate-work/organization-proposal-dates-recipe-17.json`.
+Evidence root: `gate-work/organization-proposal-date-review-17`.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Trial-17 recipe | `2d9c0210e84f0776d7a1bb84e43788faf265fb54dfe901f0d9be81d009fa785b` |
+| Trial-17 cases | `8456c1f9a2c72e401a83161cfe137595e004d73cf024beb457e5c92160a7c756` |
+| Trial-17 summary | `e112177b2e0d3019e614d042cd5ec05bd728848e44b34de6d9083a689bab6146` |
+| Trial-17 ledger | `e422458a4a474596a6f9f24fbecb7ee37d451f27caf65ed579f885e2fd0d8d34` |
+| Trial-17 graph | `f4e43f14e740d536afc9719d82baf1b5e18cc70387007c57fc01f5e98faa2b2d` |
+| Trial-17 response container 1 | `6a01a672d3c8e580a79f9f7cc38e5bf1183279caa43c5b47ba685b1210aa73d1` |
+| Trial-17 response container 2 | `db38ce7f526ba51f94f7c402bca29baca41b9fa8e167dd5f053faf697de705f2` |

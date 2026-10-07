@@ -173,3 +173,10 @@ verdicts. Validation refused the complete review, without projecting partial
 semantic claims. The consumer was released and its own startup job cancelled.
 This narrows the next schema correction, not entity/relation accuracy or full
 acceptance. See [trial 16](ORGANIZATION_GROUNDED_EVIDENCE.md#trial-16-assigned-role-review-diagnostic).
+
+Trial 17 selected the explicit original-date schema profile on full-gated
+`c0a4c98`. The first mention batch was valid; the second contradicted its own
+dimension verdicts and was refused. No relationship batch ran, so live serving
+acceptance of the new date binding remains unproven. The consumer was released
+and its own startup job cancelled; replay verified unchanged evidence and no
+partial semantic claims. See [trial 17](ORGANIZATION_GROUNDED_EVIDENCE.md#trial-17-original-date-schema-diagnostic).

@@ -208,3 +208,14 @@ passed on 7 October 2026 UTC: **624 passed, zero failed, zero skipped**, in
 140 files and strict typing for 95 source files. The challenge regressions used
 local HTTP servers and the installed isolated Chromium fixture. This is still
 not real-provider or remote-site CAPTCHA acceptance.
+
+A separate read-only local runtime check on 7 October 2026 UTC found no listener
+on the example's loopback port 8191. Docker's executable was present, but its
+native read-only container query failed because `/var/run/docker.sock` was
+absent. A sandboxed Podman query could not obtain its runtime configuration;
+neither check installed a gateway or altered a daemon, runtime directory or
+network policy. These findings explain why that example endpoint cannot yet
+provide real-gateway acceptance; they do not prove that every possible gateway
+or collection host is unavailable. The client/source tests remain distinct
+from a deployed, egress-restricted browser gateway and representative remote
+challenge validation.
