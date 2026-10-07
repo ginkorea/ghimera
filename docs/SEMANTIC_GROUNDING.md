@@ -1,6 +1,12 @@
 # Grounded review and explicit date assertions
 
 Status: development source, not published package or real-model quality acceptance.
+Actual verification/3 diagnostics are retained in
+[ORGANIZATION_GROUNDED_EVIDENCE.md](ORGANIZATION_GROUNDED_EVIDENCE.md).
+They found an HTTP error before the caller deadline, a post-response validation
+failure, and a returned envelope without final-answer content. None supplied
+accepted organizational relationships; these failures remain open, not relabeled
+as unsupported facts or solved by reasoning-channel fallback.
 Select `ghimera.semantic-verification/3` through the existing defined-ontology
 semantic recipe; [the non-active example](../examples/semantics-grounded.toml)
 shows the additional explicit `max_coverage_findings` bound. Missing this bound

@@ -133,6 +133,12 @@ that an entire organization has been exhaustively mapped.
    retained one mention and zero organizational relationships. This is mixed
    diagnostic evidence, not quality acceptance; see
    [ORGANIZATION_BILINGUAL_EVIDENCE.md](ORGANIZATION_BILINGUAL_EVIDENCE.md).
+   Verification/3 checks of the unchanged proposal remain failed: an HTTP error
+   preceded the larger client deadline, a control review failed validation, and
+   a faster low-reasoning response returned no final-answer content. New
+   non-secret completion-shape telemetry identifies that failure without
+   promoting intermediate reasoning into graph evidence. See
+   [ORGANIZATION_GROUNDED_EVIDENCE.md](ORGANIZATION_GROUNDED_EVIDENCE.md).
 3. Alias/temporal identity and conflict preservation across real documents:
    source now includes an explicit identity-aware planning view with same-name
    and asserted-alias hypotheses, potentially competing dated claims and

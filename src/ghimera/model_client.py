@@ -36,7 +36,13 @@ from ghimera.model_http import (
     ModelWireFailure,
     PinnedModelHttp,
 )
-from ghimera.model_types import ModelCallEvidence, ModelTask, TokenUsage
+from ghimera.model_types import (
+    CompletionShape,
+    FinishReason,
+    ModelCallEvidence,
+    ModelTask,
+    TokenUsage,
+)
 from ghimera.models import Document, Extracted, Goal, Grade, ModelIdentity, Record, Verdict
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from ghimera.research_types import (
@@ -226,6 +232,10 @@ class WireMessage(BaseModel):
     role: Literal["assistant"]
     content: str | None
     refusal: str | None = None
+    # Observe presence without narrowing providers' otherwise ignored JSON or
+    # retaining these fields in completion evidence or serialized wire models.
+    reasoning: JsonValue = Field(default=None, exclude=True, repr=False)
+    reasoning_content: JsonValue = Field(default=None, exclude=True, repr=False)
 
 
 class WireChoice(BaseModel):
@@ -241,6 +251,39 @@ class WireCompletion(BaseModel):
     model: str
     choices: tuple[WireChoice, ...]
     usage: TokenUsage | None = None
+
+    def completion_shape(self, expected_model: str) -> CompletionShape:
+        count = len(self.choices)
+        if count != 1:
+            return CompletionShape(
+                schema="ghimera.completion-shape/1",
+                choices=count,
+                model_matches=self.model == expected_model,
+                finish_reason=None,
+                final_content=None,
+                refusal_present=None,
+                reasoning_present=None,
+            )
+        choice = self.choices[0]
+        finish: FinishReason = "other"
+        if choice.finish_reason in {
+            "stop",
+            "length",
+            "content_filter",
+            "tool_calls",
+            "function_call",
+        }:
+            finish = TypeAdapter(FinishReason).validate_python(choice.finish_reason)
+        content = choice.message.content
+        return CompletionShape(
+            schema="ghimera.completion-shape/1",
+            choices=count,
+            model_matches=self.model == expected_model,
+            finish_reason=finish,
+            final_content="missing" if content is None else "empty" if content == "" else "present",
+            refusal_present=choice.message.refusal is not None,
+            reasoning_present=bool(choice.message.reasoning or choice.message.reasoning_content),
+        )
 
 
 class DocumentExcerpt(Record):
@@ -305,6 +348,7 @@ def model_schema(
             "EvidenceContextConfig",
             "LocalGenerationConfig",
             "TokenUsage",
+            "CompletionShape",
         ):
             definitions.pop(name, None)
     return schema
@@ -349,6 +393,7 @@ class SelfHostedModel:
         body = b""
         response = ModelHttpResponse(None, b"", "")
         usage = None
+        completion: CompletionShape | None = None
         context = prompt.evidence
         semantic = prompt.semantic_recipe
         if prompt.task == "semantic_extract" and semantic is None:
@@ -391,6 +436,7 @@ class SelfHostedModel:
                 omitted_chars=sum(item.omitted_chars for item in context.documents)
                 + (prompt.document.omitted_chars if prompt.document is not None else 0),
                 outcome=outcome,
+                completion=completion,
             )
 
         try:
@@ -540,6 +586,7 @@ class SelfHostedModel:
                 raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
             wire = WireCompletion.model_validate_json(response.body)
             usage = wire.usage
+            completion = wire.completion_shape(service.served_model)
             if (
                 wire.model != service.served_model
                 or len(wire.choices) != 1

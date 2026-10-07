@@ -3,6 +3,7 @@
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from ghimera.model_config import ModelServiceConfig
 
@@ -33,6 +34,37 @@ class TokenUsage(BaseModel):
         return self
 
 
+FinishReason = Literal["stop", "length", "content_filter", "tool_calls", "function_call", "other"]
+
+
+class CompletionShape(BaseModel):
+    """Non-secret protocol observations, never model output or reasoning text."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.completion-shape/1"] = Field(alias="schema")
+    choices: Count
+    model_matches: bool
+    finish_reason: FinishReason | None
+    final_content: Literal["missing", "empty", "present"] | None
+    refusal_present: bool | None
+    reasoning_present: bool | None
+
+    @model_validator(mode="after")
+    def single_choice(self) -> "CompletionShape":
+        observed = (
+            self.finish_reason,
+            self.final_content,
+            self.refusal_present,
+            self.reasoning_present,
+        )
+        if self.choices == 1:
+            if any(item is None for item in observed):
+                raise ValueError("one completion choice requires its observed shape")
+        elif any(item is not None for item in observed):
+            raise ValueError("multiple or absent choices have no single completion shape")
+        return self
+
+
 class ModelCallEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.model-call/1"] = Field(alias="schema")
@@ -51,6 +83,11 @@ class ModelCallEvidence(BaseModel):
     omitted_document_ids: tuple[str, ...]
     omitted_chars: Count
     outcome: Literal["success", "refused", "cancelled"]
+    # Client-owned telemetry is validated and replayed, but must not alter the
+    # frozen model-facing JSON schemas of historical extraction/review recipes.
+    completion: SkipJsonSchema[CompletionShape | None] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @property
     def total_tokens(self) -> int | None:
