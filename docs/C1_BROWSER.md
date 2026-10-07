@@ -128,6 +128,10 @@ lifecycle acceptance.
 
 ## What is not closed
 
+Same-browser, human-assisted collection remains unimplemented. Its bounded
+implementation contract is [HUMAN_BROWSER.md](HUMAN_BROWSER.md); it must not
+be mislabeled as this isolated renderer or cookie-replay acceptance.
+
 Camoufox/nodriver fallback, public Tor browser corpus acceptance,
 publisher readiness policies and the 30-publisher C1
 acceptance corpus remain open. The native Docling full-PDF/Marker recipes,
