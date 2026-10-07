@@ -64,6 +64,32 @@ task-owned release `wheel-env`; its Python 3.11.16 import resolves installed
 `site-packages/ghimera`, not a source/editable path. These initial build checks
 are not a full gate, public readback or multilingual quality acceptance.
 
+Independent installed-wheel acceptance passed under Python 3.11.16 at
+`/home/gompert/data/workspace/TAIPAN/.codex-tmp/ghimera-041-release-Rr9eq6/wheel-env/bin/python`.
+The import resolved its `lib64/python3.11/site-packages/ghimera` tree with no
+`PYTHONPATH` or editable checkout. The installed CLI ran; a sealed research
+fixture retained its one document and cited claims; two original corpus
+documents reopened with their exact native identities, using the actual pinned
+compiled FAISS backend admission. A completed result was queued, reopened,
+dispatched to the real local SQLite destination, read back and explicitly
+pruned only after acknowledgement. The destination copy survived pruning;
+reenqueueing preserved the acknowledged deduplication tombstone. No model
+endpoint, credentials or production service was used. These are controlled
+artifact/durability checks, not representative model quality.
+
+The first sandbox smoke was interrupted after making its private fixture
+stores. A native repetition refused because those stores already existed;
+they were retained. The successful bounded native run used fresh explicitly
+named fixture stores, not destructive cleanup or weaker storage admission.
+Its result SHA-256 was
+`359c6c5e856ebcbdbc01f9590f089845849c97bdaf9267775df2627a2cc24991`.
+The initial wheel SHA-256 was
+`bfcbe84e62fbfe7dc500dee062440ae38d9d2aac924177b3bdcf75cba0556506`;
+the initial source archive SHA-256 was
+`bddc60189ff10a2f80fd04ddccfa93337349327ad64a885d95abc6578f17719b`.
+The final source archive must be rebuilt after adding this evidence, and the
+final wheel's equality/acceptance checked before publication.
+
 ## Publication requirements
 
 Commit the exact candidate, run `scripts/gate.sh` with the declared installed
