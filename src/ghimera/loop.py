@@ -38,7 +38,7 @@ from ghimera.reference_types import DocumentReference, SearchReference
 from ghimera.references import ReferenceBook
 from ghimera.refusals import GhimeraRefused, ModelFailure, RefusalCode
 from ghimera.scoring import Scorer
-from ghimera.semantic_graph import SemanticExtractor, SemanticStage
+from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, SemanticStage
 from ghimera.session_state import SessionState
 
 CollectionStop = StopReason | Literal["round_limit"]
@@ -148,6 +148,7 @@ class GoalLoop:
         scorer: Scorer,
         judge: Judge,
         semantic_extractor: SemanticExtractor | None = None,
+        semantic_reviewer: SemanticReviewer | None = None,
         graph_sink: GraphSink | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -161,8 +162,12 @@ class GoalLoop:
         self._graph_sink = graph_sink
         if (config.semantics is not None) != (semantic_extractor is not None):
             raise ValueError("semantic policy and extractor must be supplied together")
+        if semantic_extractor is None and semantic_reviewer is not None:
+            raise ValueError("semantic reviewer requires its extractor")
         self._semantics = (
-            SemanticStage(config, semantic_extractor) if semantic_extractor is not None else None
+            SemanticStage(config, semantic_extractor, reviewer=semantic_reviewer)
+            if semantic_extractor is not None
+            else None
         )
         if judge.model.location == "external":
             raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)

@@ -18,10 +18,13 @@ from ghimera.graph_types import (
 )
 
 GRAPH_PLANNING_REVISION = "ghimera-graph-planning/1"
+GRAPH_GAP_PLANNING_REVISION = "ghimera-graph-planning/2"
 
 
 class GraphPlanningConfig(GraphRecord):
-    schema_version: Literal["ghimera.graph-planning/1"] = Field(alias="schema")
+    schema_version: Literal["ghimera.graph-planning/1", "ghimera.graph-planning/2"] = Field(
+        alias="schema"
+    )
     entity_roles: Annotated[tuple[Name, ...], Field(min_length=1)]
     relation_rules: tuple[Name, ...]
     selection: Literal["newest_first"]
@@ -29,9 +32,12 @@ class GraphPlanningConfig(GraphRecord):
     max_relations: Positive
     max_evidence_chars: Positive
     max_context_chars: Annotated[int, Field(strict=True, ge=500)]
+    max_gaps: Count = Field(default=0, exclude_if=lambda v: v == 0)
 
     @model_validator(mode="after")
     def unique(self) -> "GraphPlanningConfig":
+        if (self.schema_version == "ghimera.graph-planning/2") != (self.max_gaps > 0):
+            raise ValueError("graph-planning/2 requires an explicit positive gap limit")
         if len(set(self.entity_roles)) != len(self.entity_roles) or len(
             set(self.relation_rules)
         ) != len(self.relation_rules):
@@ -52,8 +58,34 @@ class PlanningEntity(GraphRecord):
     confidence: Confidence
 
 
+class PlanningGap(GraphRecord):
+    """Model-assessed coverage/quarantine, not an asserted entity or relation."""
+
+    id: Annotated[str, Field(pattern=r"^gap:[0-9a-f]{64}$")]
+    source: PlanningSource
+    start: Count
+    end: Positive
+    coverage: Literal["adequate", "incomplete", "uncertain"]
+    coverage_reason: Annotated[str, Field(min_length=1, max_length=4096)]
+    excluded_mentions: Count
+    excluded_relations: Count
+    held_edges: Count
+    omitted_chars: Count
+    review_request_sha256: Digest
+    review_model_id: Text
+    review_model_revision: Text
+
+    @model_validator(mode="after")
+    def bounded(self) -> "PlanningGap":
+        if self.end <= self.start:
+            raise ValueError("planning gap requires a nonempty native window")
+        return self
+
+
 class PlanningGraph(GraphRecord):
-    schema_version: Literal["ghimera.planning-graph/1"] = Field(alias="schema")
+    schema_version: Literal["ghimera.planning-graph/1", "ghimera.planning-graph/2"] = Field(
+        alias="schema"
+    )
     policy_digest: Digest
     population_digest: Digest
     entities: tuple[PlanningEntity, ...]
@@ -62,18 +94,27 @@ class PlanningGraph(GraphRecord):
     omitted_entities: Count
     omitted_relations: Count
     omitted_evidence_chars: Count
+    gaps: tuple[PlanningGap, ...] = Field(default=(), exclude_if=lambda v: not v)
+    omitted_gaps: Count = Field(default=0, exclude_if=lambda v: v == 0)
 
     @model_validator(mode="after")
     def closed(self) -> "PlanningGraph":
+        if self.schema_version == "ghimera.planning-graph/1" and (self.gaps or self.omitted_gaps):
+            raise ValueError("planning gaps require planning-graph/2")
         entities = {item.node.id for item in self.entities}
         sources = {item.document_id: item for item in self.sources}
         if (
             len(entities) != len(self.entities)
             or len(sources) != len(self.sources)
             or len({item.id for item in self.relations}) != len(self.relations)
+            or len({item.id for item in self.gaps}) != len(self.gaps)
         ):
             raise ValueError("planning graph identities must be unique")
         used: set[str] = set()
+        for gap in self.gaps:
+            if sources.get(gap.source.document_id) != gap.source:
+                raise ValueError("planning gap requires its retained source identity")
+            used.add(gap.source.document_id)
         for edge in self.relations:
             if edge.claim_status != "model_asserted" or not {edge.source, edge.target} <= entities:
                 raise ValueError("planning relations require asserted, selected endpoints")
@@ -94,6 +135,16 @@ class PlanningGraph(GraphRecord):
 
     @property
     def references(self) -> frozenset[str]:
-        return frozenset(item.node.id for item in self.entities) | frozenset(
-            item.id for item in self.relations
+        return (
+            frozenset(item.node.id for item in self.entities)
+            | frozenset(item.id for item in self.relations)
+            | frozenset(item.id for item in self.gaps)
+        )
+
+    @property
+    def prompt_revision(self) -> str:
+        return (
+            GRAPH_GAP_PLANNING_REVISION
+            if self.schema_version == "ghimera.planning-graph/2"
+            else GRAPH_PLANNING_REVISION
         )

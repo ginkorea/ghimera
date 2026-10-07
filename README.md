@@ -236,6 +236,12 @@ exact-origin clearance reuse; see [challenge recovery](docs/CHALLENGES.md).
 That addition is not in the published 0.3.0 artifacts and does not guarantee
 universal CAPTCHA solving or provide an authenticated-site bypass.
 
+The unreleased defined-ontology profile adds separately configured semantic
+verification, quarantined proposals and source-bound coverage gaps that can
+motivate follow-up discovery. See [semantic verification](docs/SEMANTIC_VERIFICATION.md).
+Model agreement is not corroboration; real organizational extraction quality
+remains an open acceptance item.
+
 The unreleased semantic extraction stage can also feed a configured, bounded
 graph view into follow-up research planning. Queries retain references to the
 observed entities/relations and omissions remain explicit; see

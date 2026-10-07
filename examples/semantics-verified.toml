@@ -1,0 +1,43 @@
+# NON-ACTIVE [semantics] block: merge into a complete collector recipe.
+# Bind analyst and reviewer to distinct, pinned self-hosted model services.
+# This does not start either server, reserve GPUs or discover credentials.
+schema = "ghimera.semantics/4"
+prompt_profile = "defined_ontology"
+model_role = "analyst"
+window_chars = 1500
+max_windows_per_document = 64
+max_calls_per_run = 256
+max_mentions_per_window = 32
+max_relations_per_window = 32
+entity_roles = ["person", "organization", "position"]
+relation_rules = ["reports_to", "holds_position", "member_of"]
+mention_rule = "mentions"
+
+[[role_definitions]]
+name = "person"
+definition = "A specifically named individual human, not an unnamed group."
+[[role_definitions]]
+name = "organization"
+definition = "A named institution or organized body, not a country, ideology or generic population."
+[[role_definitions]]
+name = "position"
+definition = "A named institutional office or post, distinct from its incumbent."
+
+[[relation_definitions]]
+name = "reports_to"
+definition = "The source explicitly states that the source organization reports to the target organization. Co-occurrence is insufficient."
+[[relation_definitions]]
+name = "holds_position"
+definition = "The source explicitly identifies the source person as holding the target position."
+[[relation_definitions]]
+name = "member_of"
+definition = "The source explicitly identifies membership of the source person in the target organization."
+
+[verification]
+schema = "ghimera.semantic-verification/1"
+model_role = "reviewer"
+max_calls_per_run = 256
+
+# Each reviewed window uses two model calls from the shared judge budget.
+# Use graph-planning/2 if a research graph context is also configured.
+# Definitions must match the application's graph roles, endpoint roles and rules.

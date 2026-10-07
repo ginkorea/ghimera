@@ -335,6 +335,25 @@ def endpoint():
                     "language": "en",
                     "reason": "protocol fixture only",
                 }
+            elif task == "semantic_review":
+                proposal = payload["semantic_proposal"]
+                result = {
+                    "proposal_digest": payload["proposal_digest"],
+                    "mentions": [
+                        {
+                            "key": item["key"],
+                            "verdict": "unsupported",
+                            "reason": "Fixture: a country is not a named institution.",
+                        }
+                        for item in proposal["mentions"]
+                    ],
+                    "relations": [
+                        {"index": index, "verdict": "unsupported", "reason": "Fixture assessment."}
+                        for index, _ in enumerate(proposal["relations"])
+                    ],
+                    "coverage": "uncertain",
+                    "coverage_reason": "Controlled protocol fixture, not extraction accuracy.",
+                }
             elif task == "assessment":
                 citation = payload["evidence"]["windows"][0]["citation"]
                 result = {

@@ -48,6 +48,12 @@ refuse instead of silently skipping a declared stage.
 
 ## Extraction and identity
 
+Version 4 adds explicitly defined ontology roles/relations and a required,
+separately bound semantic reviewer. Unsupported items are quarantined without
+modifying the original proposal or discarding valid neighbors; see
+[semantic verification](SEMANTIC_VERIFICATION.md). Profiles 1–3 keep their
+existing whole-window refusal behavior. This is not real-model accuracy proof.
+
 Accepted documents pass through sequential bounded native-text windows. Calls
 consume both `max_calls_per_run` and the existing shared judge/model-call
 allowance and deadline. A document window limit records the unread native tail

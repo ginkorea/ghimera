@@ -1,0 +1,12 @@
+# NON-ACTIVE [research.graph_context] block for a complete collector recipe.
+# Gaps are source-bound review assessments, not factual graph claims.
+[research.graph_context]
+schema = "ghimera.graph-planning/2"
+entity_roles = ["person", "organization", "position"]
+relation_rules = ["reports_to", "holds_position", "member_of"]
+selection = "newest_first"
+max_entities = 24
+max_relations = 16
+max_gaps = 8
+max_evidence_chars = 6000
+max_context_chars = 24000

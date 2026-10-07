@@ -24,6 +24,12 @@ records and source evidence; it is not another graph store or entity resolver.
 
 ## Selection, evidence and discovery
 
+For reviewed semantic extraction, select the explicit version-2
+[gap policy](../examples/graph-planning-gaps.toml). It adds bounded source-bound
+coverage/quarantine assessments and query references, without turning excluded
+proposals into graph entities. See [semantic verification](SEMANTIC_VERIFICATION.md).
+Version-1 policy, serialization and prompt remain unchanged.
+
 Newest acknowledged relationships are considered first. Each admitted relation
 keeps both source-local endpoints and complete native quotations. Remaining
 space can hold observed mentions whose relationships are still unknown. A limit

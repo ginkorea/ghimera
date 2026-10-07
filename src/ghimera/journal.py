@@ -365,7 +365,16 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
                 or receipt.judge_calls
                 != sum(
                     row.event
-                    in {"verdict", "grade", "plan", "assessment", "answer", "review", "semantic"}
+                    in {
+                        "verdict",
+                        "grade",
+                        "plan",
+                        "assessment",
+                        "answer",
+                        "review",
+                        "semantic",
+                        "semantic_review",
+                    }
                     for row in rows
                 )
                 or not rows

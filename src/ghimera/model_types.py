@@ -9,7 +9,14 @@ from ghimera.model_config import ModelServiceConfig
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Count = Annotated[int, Field(strict=True, ge=0)]
 ModelTask = Literal[
-    "plan", "assessment", "answer", "review", "verdict", "grade", "semantic_extract"
+    "plan",
+    "assessment",
+    "answer",
+    "review",
+    "verdict",
+    "grade",
+    "semantic_extract",
+    "semantic_review",
 ]
 
 

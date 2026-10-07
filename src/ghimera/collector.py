@@ -84,6 +84,9 @@ class Collector:
             semantic_extractor=models.service(config.semantics.model_role)
             if config.semantics is not None
             else None,
+            semantic_reviewer=models.service(config.semantics.verification.model_role)
+            if config.semantics is not None and config.semantics.verification is not None
+            else None,
         )
         search_type = SearxHtmlSearch if config.search.response_format == "html" else SearxSearch
         research = ResearchLoop(

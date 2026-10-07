@@ -26,7 +26,7 @@ from pydantic import (
 from ghimera.config import GhimeraConfig
 from ghimera.evidence_context import ContextSelector, EvidenceContext, native_citation
 from ghimera.graph_planning import validate_context
-from ghimera.graph_planning_types import GRAPH_PLANNING_REVISION, PlanningGraph
+from ghimera.graph_planning_types import PlanningGraph
 from ghimera.model_citations import ModelCitationResolver, referenced_output
 from ghimera.model_config import ModelServiceConfig
 from ghimera.model_http import (
@@ -51,18 +51,44 @@ from ghimera.research_types import (
     ResearchPlan,
     ReviewRequest,
 )
-from ghimera.semantic_types import SemanticConfig, SemanticProposal
+from ghimera.semantic_types import (
+    SEMANTIC_REVIEW_REVISION,
+    SemanticConfig,
+    SemanticProposal,
+    SemanticReview,
+)
 from ghimera.transport import Resolver
 
 Task = ModelTask
 T = TypeVar(
-    "T", ResearchPlan, Assessment, AnswerDraft, AnswerReview, Verdict, Grade, SemanticProposal
+    "T",
+    ResearchPlan,
+    Assessment,
+    AnswerDraft,
+    AnswerReview,
+    Verdict,
+    Grade,
+    SemanticProposal,
+    SemanticReview,
 )
 PROMPT_REVISION = "chimera-research-prompts/1"
 CITATION_PROMPT_REVISION = "chimera-research-prompts/2"
 GRADE_PROMPT_REVISION = "chimera-collection-grade/2"
 INSTRUCTIONS = MappingProxyType(
     {
+        "semantic_review": (
+            "Independently assess the supplied semantic proposal against this one native "
+            "source window and the explicit role/relation definitions. Preserve the supplied "
+            "proposal_digest exactly. Assess every mention key and every zero-based relation "
+            "index exactly once, without inventing or omitting items. A literal name does "
+            "not prove its role or a relationship: test named institutions versus ideologies, "
+            "places and generic populations, and offices versus office holders or meetings. "
+            "Check source entailment, relationship direction and asserted validity dates, "
+            "not confidence or general knowledge. Unsupported items are unsupported; uncertain "
+            "or contradictory support is ambiguous. Assess coverage too: an empty or partial "
+            "proposal must not be adequate if configured entities or relationships were missed. "
+            "Do not fix the proposal, add entities, browse, or treat model assertions as facts."
+        ),
         "semantic_extract": (
             "Extract native named entity mentions and explicitly asserted relationships only "
             "from this one supplied source window. Use only configured entity roles and "
@@ -193,12 +219,18 @@ class PromptInput(Record):
     max_queries: int | None = None
     max_query_chars: int | None = None
     semantic_recipe: SemanticConfig | None = None
+    semantic_proposal: SemanticProposal | None = None
+    proposal_digest: str | None = None
     graph_context: PlanningGraph | None = None
 
     def packet(self) -> str:
         return self.model_dump_json(
             exclude_none=True,
-            exclude={"assessment": {"model_call"}, "answer": {"model_call"}},
+            exclude={
+                "assessment": {"model_call"},
+                "answer": {"model_call"},
+                "semantic_proposal": {"model_call"},
+            },
         )
 
 
@@ -280,7 +312,9 @@ class SelfHostedModel:
                 task=prompt.task,
                 prompt_revision=semantic.effective_prompt_revision
                 if prompt.task == "semantic_extract" and semantic is not None
-                else GRAPH_PLANNING_REVISION
+                else SEMANTIC_REVIEW_REVISION
+                if prompt.task == "semantic_review"
+                else prompt.graph_context.prompt_revision
                 if prompt.task == "plan" and prompt.graph_context is not None
                 else GRADE_PROMPT_REVISION
                 if prompt.task == "grade"
@@ -336,14 +370,27 @@ class SelfHostedModel:
                     MENTION_KEY_INSTRUCTIONS
                     if prompt.task == "semantic_extract"
                     and semantic is not None
-                    and semantic.prompt_profile in {"explicit_mention_keys", "native_span_keys"}
+                    and semantic.prompt_profile
+                    in {"explicit_mention_keys", "native_span_keys", "defined_ontology"}
                     else ""
                 )
                 + (
                     NATIVE_SPAN_INSTRUCTIONS
                     if prompt.task == "semantic_extract"
                     and semantic is not None
-                    and semantic.prompt_profile == "native_span_keys"
+                    and semantic.prompt_profile in {"native_span_keys", "defined_ontology"}
+                    else ""
+                )
+                + (
+                    " Apply the configured role_definitions and relation_definitions, not "
+                    "a guessed meaning of their names. Only named instances satisfying the "
+                    "definition qualify. Examples, theories, generic populations or a country "
+                    "do not become organizations unless the configured definition explicitly "
+                    "admits that type. Office-holder names, offices and assemblies are distinct. "
+                    "Relationship direction and validity dates require explicit source support."
+                    if prompt.task == "semantic_extract"
+                    and semantic is not None
+                    and semantic.prompt_profile == "defined_ontology"
                     else ""
                 )
                 + (
@@ -356,6 +403,16 @@ class SelfHostedModel:
                     "graph_refs. Other queries use an empty graph_refs list. Never invent "
                     "graph references, URLs, credentials or access authority."
                     if prompt.task == "plan" and prompt.graph_context is not None
+                    else ""
+                )
+                + (
+                    " Supplied gaps are independent model assessments of quarantine or "
+                    "incomplete coverage, not new factual entities. Investigate their native "
+                    "source windows and missing support. Cite a gap's exact ID in graph_refs "
+                    "when it motivates a query; do not treat excluded proposals as facts."
+                    if prompt.task == "plan"
+                    and prompt.graph_context is not None
+                    and prompt.graph_context.schema_version == "ghimera.planning-graph/2"
                     else ""
                 )
                 + (
@@ -466,6 +523,54 @@ class SelfHostedModel:
             ),
             SemanticProposal,
         )
+
+    async def semantic_review(
+        self,
+        intent: str,
+        document: Document,
+        start: int,
+        end: int,
+        policy: SemanticConfig,
+        proposal: SemanticProposal,
+    ) -> SemanticReview:
+        from ghimera.semantic_verification import review_service, validate_proposal, validate_review
+
+        if (
+            policy != self._config.semantics
+            or self._service != review_service(self._config)
+            or not 0 <= start < end <= len(document.extracted.text)
+            or end - start > policy.window_chars
+        ):
+            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+        validate_proposal(self._config, proposal, document, start, end, intent)
+        selector = ContextSelector(
+            self._service.context.model_copy(
+                update={"max_documents": 1, "max_windows_per_document": 1}
+            )
+        )
+        result = await self._invoke(
+            PromptInput(
+                task="semantic_review",
+                intent=intent,
+                semantic_recipe=policy,
+                semantic_proposal=proposal,
+                proposal_digest=proposal.content_digest(),
+                evidence=selector.build(
+                    intent, (document,), required=(native_citation(document, start, end),)
+                ),
+            ),
+            SemanticReview,
+        )
+        try:
+            validate_review(self._config, proposal, result, document, start, end, intent)
+        except GhimeraRefused:
+            if result.model_call is None:
+                raise
+            raise ModelFailure(
+                RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+                result.model_call.model_copy(update={"outcome": "refused"}),
+            ) from None
+        return result
 
     async def plan(self, request: PlanningRequest) -> ResearchPlan:
         validate_context(self._config, request.graph_context, request.documents)

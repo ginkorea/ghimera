@@ -200,6 +200,22 @@ class GhimeraConfig(BaseModel):
             service = models.service(semantic.model_role)
             if semantic.window_chars > min(service.context.max_chars, service.context.window_chars):
                 raise ValueError("semantic window exceeds the bound model's native context")
+            if semantic.verification is not None:
+                reviewer = models.service(semantic.verification.model_role)
+                if reviewer.model_id == service.model_id:
+                    raise ValueError("semantic verification requires a distinct declared model")
+                if semantic.window_chars > min(
+                    reviewer.context.max_chars, reviewer.context.window_chars
+                ):
+                    raise ValueError("semantic window exceeds the verifier's native context")
+                if (
+                    self.research is not None
+                    and self.research.graph_context is not None
+                    and self.research.graph_context.schema_version != "ghimera.graph-planning/2"
+                ):
+                    raise ValueError(
+                        "verified semantic planning requires graph-planning/2 gap reporting"
+                    )
         if self.local_inputs is not None and (
             self.document_extraction is None
             or self.local_inputs.max_input_bytes > self.document_extraction.max_input_bytes

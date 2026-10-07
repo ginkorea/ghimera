@@ -7,13 +7,13 @@ its earlier observations, without adding a graph database or another model.
 
 import hashlib
 
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from ghimera.config import GhimeraConfig
 from ghimera.graph_planning_types import (
-    GRAPH_PLANNING_REVISION,
     GraphPlanningConfig,
     PlanningEntity,
+    PlanningGap,
     PlanningGraph,
     PlanningSource,
 )
@@ -26,6 +26,7 @@ class Population(GraphRecord):
     entities: tuple[PlanningEntity, ...]
     relations: tuple[GraphEdge, ...]
     sources: tuple[PlanningSource, ...]
+    gaps: tuple[PlanningGap, ...] = Field(default=(), exclude_if=lambda v: not v)
 
 
 def policy_of(config: GhimeraConfig) -> GraphPlanningConfig | None:
@@ -45,6 +46,7 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
     entities: dict[str, PlanningEntity] = {}
     relations: dict[str, GraphEdge] = {}
     sources: dict[str, PlanningSource] = {}
+    gaps: dict[str, PlanningGap] = {}
     for row in rows:
         window = row.semantic_window
         if window is None:
@@ -55,6 +57,35 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
             document_sha256=window.document_sha256,
             text_sha256=window.text_sha256,
         )
+        review = window.review
+        if (
+            policy.max_gaps
+            and review is not None
+            and review.model_call is not None
+            and (
+                review.coverage != "adequate"
+                or window.excluded_mentions
+                or window.excluded_relations
+                or window.held_edges
+                or window.omitted_chars
+            )
+        ):
+            identity = "gap:" + window.content_digest()
+            gaps[identity] = PlanningGap(
+                id=identity,
+                source=sources[window.graph_document_id],
+                start=window.start,
+                end=window.end,
+                coverage=review.coverage,
+                coverage_reason=review.coverage_reason,
+                excluded_mentions=len(window.excluded_mentions),
+                excluded_relations=len(window.excluded_relations),
+                held_edges=len(window.held_edges),
+                omitted_chars=window.omitted_chars,
+                review_request_sha256=review.model_call.request_sha256,
+                review_model_id=review.model_call.service.model_id,
+                review_model_revision=review.model_call.service.revision,
+            )
         admitted = {node.id for node in window.nodes}
         for entity in window.entities:
             if entity.node.id in admitted and entity.node.role in policy.entity_roles:
@@ -72,16 +103,25 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
         entities=tuple(entities.values()),
         relations=tuple(relations.values()),
         sources=tuple(sources.values()),
+        gaps=tuple(gaps.values()),
     )
     digest = population.content_digest()
     total_chars = evidence_size(population.entities, population.relations)
 
-    def view(selected: tuple[PlanningEntity, ...], edges: tuple[GraphEdge, ...]) -> PlanningGraph:
+    selected_gaps: list[PlanningGap] = []
+
+    def view(
+        selected: tuple[PlanningEntity, ...],
+        edges: tuple[GraphEdge, ...],
+        pending_gaps: tuple[PlanningGap, ...] | None = None,
+    ) -> PlanningGraph:
+        visible_gaps = tuple(selected_gaps) if pending_gaps is None else pending_gaps
         used = {entity.evidence.document_id for entity in selected} | {
             span.document_id for edge in edges for span in edge.evidence
         }
+        used.update(gap.source.document_id for gap in visible_gaps)
         return PlanningGraph(
-            schema="ghimera.planning-graph/1",
+            schema="ghimera.planning-graph/2" if policy.max_gaps else "ghimera.planning-graph/1",
             policy_digest=policy.content_digest(),
             population_digest=digest,
             entities=selected,
@@ -90,6 +130,8 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
             omitted_entities=len(entities) - len(selected),
             omitted_relations=len(relations) - len(edges),
             omitted_evidence_chars=total_chars - evidence_size(selected, edges),
+            gaps=visible_gaps,
+            omitted_gaps=len(gaps) - len(visible_gaps),
         )
 
     def fits(candidate: PlanningGraph) -> bool:
@@ -98,6 +140,7 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
             and len(candidate.relations) <= policy.max_relations
             and evidence_size(candidate.entities, candidate.relations) <= policy.max_evidence_chars
             and len(candidate.model_dump_json()) <= policy.max_context_chars
+            and len(candidate.gaps) <= policy.max_gaps
         )
 
     selected: dict[str, PlanningEntity] = {}
@@ -105,6 +148,11 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
     current = view((), ())
     if not fits(current):
         raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+    for gap in reversed(population.gaps):
+        candidate = view((), (), (*selected_gaps, gap))
+        if fits(candidate):
+            selected_gaps.append(gap)
+            current = candidate
     # Relations keep both endpoints and complete evidence; never clip a quote.
     for edge in reversed(population.relations):
         expanded = dict(selected)
@@ -137,8 +185,11 @@ def validate_context(
         raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT) from None
     if (
         context.policy_digest != policy.content_digest()
+        or context.schema_version
+        != ("ghimera.planning-graph/2" if policy.max_gaps else "ghimera.planning-graph/1")
         or len(context.entities) > policy.max_entities
         or len(context.relations) > policy.max_relations
+        or len(context.gaps) > policy.max_gaps
         or evidence_size(context.entities, context.relations) > policy.max_evidence_chars
         or len(context.model_dump_json()) > policy.max_context_chars
         or any(entity.node.role not in policy.entity_roles for entity in context.entities)
@@ -164,6 +215,13 @@ def validate_context(
         text = document.extracted.text
         if not 0 <= span.start < span.end <= len(text) or text[span.start : span.end] != span.quote:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+    for gap in context.gaps:
+        text = docs[(gap.source.source_url, gap.source.document_sha256)].extracted.text
+        if not 0 <= gap.start < gap.end <= len(text) or gap.omitted_chars not in {
+            0,
+            len(text) - gap.end,
+        }:
+            raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
     if any(entity.node.label != entity.evidence.quote for entity in context.entities):
         raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
 
@@ -179,7 +237,7 @@ def validate_rows(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> None:
             if config.models is None or (
                 row.model_call.service != config.models.planner
                 or row.model_call.task != "plan"
-                or row.model_call.prompt_revision != GRAPH_PLANNING_REVISION
+                or row.model_call.prompt_revision != row.planning_graph.prompt_revision
             ):
                 raise ValueError("graph-aware planning calls must bind their configured planner")
         prefix.append(row)

@@ -145,6 +145,37 @@ def test_concrete_collector_wires_required_semantics_and_keeps_assertion_provena
         ResearchResult.model_validate(broken)
 
 
+def test_concrete_collector_wires_independent_semantic_review_and_quarantine(
+    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint
+):
+    from tests.test_semantic_verification import reviewed_config
+
+    semantic = reviewed_config(tmp_path)
+    cfg, _ = assembled(
+        tmp_path,
+        source_site,
+        search_endpoint,
+        model_endpoint,
+        encoder_endpoint,
+        graph=semantic.graph,
+        semantics=semantic.semantics,
+    )
+    result = asyncio.run(
+        Collector(cfg, source_resolver=ResolverFixture()).run(
+            "find ports", run_id="verified-composed"
+        )
+    )
+    assert result.status == "answered"
+    rows = result.harvest.ledger
+    review = next(row for row in rows if row.event == "semantic_review")
+    window = next(row.semantic_window for row in rows if row.event == "semantic")
+    assert review.model_call.service == cfg.models.reviewer
+    assert window.review == review.semantic_review
+    assert window.entities == () and window.excluded_mentions[0].reason == "review_unsupported"
+    assert result.harvest.receipt.judge_calls == len(model_endpoint[1]) == 7
+    assert ResearchResult.model_validate_json(result.model_dump_json()) == result
+
+
 def test_same_configured_collector_gets_fresh_goal_state_and_charges_each_run(
     tmp_path,
     source_site,

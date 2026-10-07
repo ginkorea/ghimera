@@ -109,7 +109,10 @@ that an entire organization has been exhaustively mapped.
    second-family trial initially exhausted its output budget without final text.
    Explicit generation controls returned final JSON in subsequent trials, but
    two empty windows are not entity completeness and role/span failures remain.
-   Next: configured ontology definitions and independent role/entailment checks. See
+   Configured ontology definitions, distinct-model checks, quarantine and
+   source-bound planning gaps are now implemented in unreleased source;
+   their real-model quality acceptance remains open. See
+   [SEMANTIC_VERIFICATION.md](SEMANTIC_VERIFICATION.md) and
    [ORGANIZATION_MODEL_EVIDENCE.md](ORGANIZATION_MODEL_EVIDENCE.md).
 3. Alias/temporal identity and conflict preservation across real documents.
 4. Graph-driven research over a small explicitly scoped organizational subtree,
@@ -120,7 +123,10 @@ that an entire organization has been exhaustively mapped.
    completed-round suspend/resume is implemented in unreleased source, with a
    fresh-process library/command fixtures and unchanged cumulative observations/budgets. In-flight
    external-call reconciliation and platform output projection remain open.
-6. Independent source-entailment checks and a final coverage/gaps report.
+6. Independent source-entailment checks and a final coverage/gaps report:
+   the configured review/quarantine and within-run planning-gap contract is
+   implemented; real-model entailment/coverage and complete organizational
+   report acceptance remain open.
 
 The organizational workflow may not be closed by the earlier English graphlib
 intent diagnostic or by a fixture-only graph test. The graphlib run proves the assembled

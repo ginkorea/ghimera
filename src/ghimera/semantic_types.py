@@ -25,22 +25,42 @@ MentionKey = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]*$")]
 SEMANTIC_PROMPT_REVISION = "ghimera-semantic-extraction/1"
 MENTION_KEY_PROMPT_REVISION = "ghimera-semantic-extraction/2"
 NATIVE_SPAN_PROMPT_REVISION = "ghimera-semantic-extraction/3"
+DEFINED_ONTOLOGY_PROMPT_REVISION = "ghimera-semantic-extraction/4"
+SEMANTIC_REVIEW_REVISION = "ghimera-semantic-verification/1"
 SEMANTIC_PROFILES = MappingProxyType(
     {
         "ghimera.semantics/1": (None, SEMANTIC_PROMPT_REVISION),
         "ghimera.semantics/2": ("explicit_mention_keys", MENTION_KEY_PROMPT_REVISION),
         "ghimera.semantics/3": ("native_span_keys", NATIVE_SPAN_PROMPT_REVISION),
+        "ghimera.semantics/4": ("defined_ontology", DEFINED_ONTOLOGY_PROMPT_REVISION),
     }
 )
 
 
+class SemanticDefinition(GraphRecord):
+    name: Name
+    definition: Annotated[str, Field(min_length=1, max_length=4096)]
+
+    @model_validator(mode="after")
+    def nonblank(self) -> "SemanticDefinition":
+        if not self.definition.strip():
+            raise ValueError("semantic definitions cannot be blank")
+        return self
+
+
+class SemanticVerificationConfig(GraphRecord):
+    schema_version: Literal["ghimera.semantic-verification/1"] = Field(alias="schema")
+    model_role: Literal["analyst", "reviewer", "judge"]
+    max_calls_per_run: Positive
+
+
 class SemanticConfig(GraphRecord):
-    schema_version: Literal["ghimera.semantics/1", "ghimera.semantics/2", "ghimera.semantics/3"] = (
-        Field(alias="schema")
-    )
-    prompt_profile: Literal["explicit_mention_keys", "native_span_keys"] | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
+    schema_version: Literal[
+        "ghimera.semantics/1", "ghimera.semantics/2", "ghimera.semantics/3", "ghimera.semantics/4"
+    ] = Field(alias="schema")
+    prompt_profile: (
+        Literal["explicit_mention_keys", "native_span_keys", "defined_ontology"] | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
     model_role: Literal["analyst", "reviewer", "judge"]
     window_chars: Positive
     max_windows_per_document: Positive
@@ -50,6 +70,13 @@ class SemanticConfig(GraphRecord):
     entity_roles: Annotated[tuple[Name, ...], Field(min_length=1)]
     relation_rules: tuple[Name, ...]
     mention_rule: Name
+    role_definitions: tuple[SemanticDefinition, ...] = Field(default=(), exclude_if=lambda v: not v)
+    relation_definitions: tuple[SemanticDefinition, ...] = Field(
+        default=(), exclude_if=lambda v: not v
+    )
+    verification: SemanticVerificationConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def distinct(self) -> "SemanticConfig":
@@ -61,6 +88,22 @@ class SemanticConfig(GraphRecord):
             or self.mention_rule in self.relation_rules
         ):
             raise ValueError("semantic roles and relation rules must be distinct")
+        defined = self.schema_version == "ghimera.semantics/4"
+        if defined:
+            roles = {item.name for item in self.role_definitions}
+            relations = {item.name for item in self.relation_definitions}
+            if (
+                roles != set(self.entity_roles)
+                or relations != set(self.relation_rules)
+                or len(roles) != len(self.role_definitions)
+                or len(relations) != len(self.relation_definitions)
+                or self.verification is None
+            ):
+                raise ValueError(
+                    "defined ontology requires complete unique definitions and verification"
+                )
+        elif self.role_definitions or self.relation_definitions or self.verification is not None:
+            raise ValueError("definitions and verification require semantics/4")
         return self
 
     @property
@@ -127,8 +170,64 @@ class SemanticEntity(GraphRecord):
     confidence: Confidence
 
 
+ReviewVerdict = Literal["supported", "unsupported", "ambiguous"]
+
+
+class MentionAssessment(GraphRecord):
+    key: MentionKey
+    verdict: ReviewVerdict
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
+class RelationAssessment(GraphRecord):
+    index: Count
+    verdict: ReviewVerdict
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
+class SemanticReview(GraphRecord):
+    proposal_digest: Digest
+    mentions: tuple[MentionAssessment, ...]
+    relations: tuple[RelationAssessment, ...]
+    coverage: Literal["adequate", "incomplete", "uncertain"]
+    coverage_reason: Annotated[str, Field(min_length=1, max_length=4096)]
+    model_call: ModelCallEvidence | None = None
+
+    @model_validator(mode="after")
+    def unique_assessments(self) -> "SemanticReview":
+        if len({item.key for item in self.mentions}) != len(self.mentions) or len(
+            {item.index for item in self.relations}
+        ) != len(self.relations):
+            raise ValueError("each proposed item requires one distinct assessment")
+        return self
+
+
+ExclusionReason = Literal[
+    "native_span_missing",
+    "unknown_role",
+    "citation_mismatch",
+    "review_unsupported",
+    "review_ambiguous",
+    "endpoint_quarantined",
+    "unknown_relation",
+    "endpoint_role_mismatch",
+]
+
+
+class MentionExclusion(GraphRecord):
+    key: MentionKey
+    reason: ExclusionReason
+
+
+class RelationExclusion(GraphRecord):
+    index: Count
+    reason: ExclusionReason
+
+
 class SemanticWindow(GraphRecord):
-    schema_version: Literal["ghimera.semantic-window/1"] = Field(alias="schema")
+    schema_version: Literal["ghimera.semantic-window/1", "ghimera.semantic-window/2"] = Field(
+        alias="schema"
+    )
     policy_digest: Digest
     source_url: Text
     document_sha256: Digest
@@ -142,6 +241,11 @@ class SemanticWindow(GraphRecord):
     nodes: tuple[GraphNode, ...]
     edges: tuple[GraphEdge, ...]
     held_edges: tuple[GraphEdge, ...]
+    review: SemanticReview | None = Field(default=None, exclude_if=lambda v: v is None)
+    excluded_mentions: tuple[MentionExclusion, ...] = Field(default=(), exclude_if=lambda v: not v)
+    excluded_relations: tuple[RelationExclusion, ...] = Field(
+        default=(), exclude_if=lambda v: not v
+    )
 
     @model_validator(mode="after")
     def evidence_bound(self) -> "SemanticWindow":
@@ -153,6 +257,37 @@ class SemanticWindow(GraphRecord):
             or call.outcome != "success"
         ):
             raise ValueError("semantic windows require a successful bounded source call")
+        if (self.schema_version == "ghimera.semantic-window/2") != (self.review is not None):
+            raise ValueError(
+                "reviewed windows require semantic-window/2 and actual review evidence"
+            )
+        if self.review is None and (self.excluded_mentions or self.excluded_relations):
+            raise ValueError("legacy windows cannot silently quarantine proposed items")
+        if self.review is not None:
+            review_call = self.review.model_call
+            if (
+                review_call is None
+                or review_call.task != "semantic_review"
+                or review_call.outcome != "success"
+                or self.review.proposal_digest != self.proposal.content_digest()
+                or {item.key for item in self.review.mentions}
+                != {item.key for item in self.proposal.mentions}
+                or {item.index for item in self.review.relations}
+                != set(range(len(self.proposal.relations)))
+                or len({item.key for item in self.excluded_mentions}) != len(self.excluded_mentions)
+                or len({item.index for item in self.excluded_relations})
+                != len(self.excluded_relations)
+                or {item.key for item in self.entities}
+                | {item.key for item in self.excluded_mentions}
+                != {item.key for item in self.proposal.mentions}
+                or bool(
+                    {item.key for item in self.entities}
+                    & {item.key for item in self.excluded_mentions}
+                )
+                or not {item.index for item in self.excluded_relations}
+                <= set(range(len(self.proposal.relations)))
+            ):
+                raise ValueError("independent review must bind the complete original proposal")
         for entity in self.entities:
             evidence = entity.evidence
             if (

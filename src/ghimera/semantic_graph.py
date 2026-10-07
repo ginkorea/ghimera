@@ -13,7 +13,6 @@ from pydantic import ValidationError
 
 from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
-from ghimera.evidence_context import ContextSelector, native_citation
 from ghimera.graph import MemoryGraphSink, ResearchGraph
 from ghimera.graph_types import GraphEdge, GraphEvidence, GraphNode
 from ghimera.ledger import Ledger
@@ -22,7 +21,18 @@ from ghimera.model_config import ModelServiceConfig
 from ghimera.model_types import ModelCallEvidence
 from ghimera.models import Document, Harvest, LedgerRow, ModelIdentity
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
-from ghimera.semantic_types import SemanticConfig, SemanticEntity, SemanticProposal, SemanticWindow
+from ghimera.semantic_types import (
+    SEMANTIC_REVIEW_REVISION,
+    ExclusionReason,
+    MentionExclusion,
+    RelationExclusion,
+    SemanticConfig,
+    SemanticEntity,
+    SemanticProposal,
+    SemanticReview,
+    SemanticWindow,
+)
+from ghimera.semantic_verification import review_service, validate_proposal, validate_review
 
 MENTION_REVISION = "ghimera-source-mention/1"
 
@@ -34,6 +44,21 @@ class SemanticExtractor(Protocol):
     async def semantic_extract(
         self, intent: str, document: Document, start: int, end: int, policy: SemanticConfig
     ) -> SemanticProposal: ...
+
+
+class SemanticReviewer(Protocol):
+    @property
+    def model(self) -> ModelIdentity: ...
+
+    async def semantic_review(
+        self,
+        intent: str,
+        document: Document,
+        start: int,
+        end: int,
+        policy: SemanticConfig,
+        proposal: SemanticProposal,
+    ) -> SemanticReview: ...
 
 
 def bound_service(config: GhimeraConfig) -> ModelServiceConfig:
@@ -53,6 +78,7 @@ def project(
     end: int,
     omitted: int,
     intent: str,
+    review: SemanticReview | None = None,
 ) -> SemanticWindow:
     proposal = SemanticProposal.model_validate(proposal.model_dump())
     policy, graph_policy, call = config.semantics, config.graph, proposal.model_call
@@ -60,32 +86,15 @@ def project(
         policy is None
         or graph_policy is None
         or call is None
-        or call.service != bound_service(config)
-        or call.task != "semantic_extract"
-        or call.prompt_revision != policy.effective_prompt_revision
-        or call.outcome != "success"
-        or len(proposal.mentions) > policy.max_mentions_per_window
-        or len(proposal.relations) > policy.max_relations_per_window
-        or not 0 <= start < end <= len(document.extracted.text)
-        or end - start > policy.window_chars
         or omitted not in {0, len(document.extracted.text) - end}
     ):
         raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
-    citation = native_citation(document, start, end)
-    context = ContextSelector(
-        call.service.context.model_copy(
-            update={
-                "max_documents": 1,
-                "max_windows_per_document": 1,
-            }
-        )
-    ).build(intent, (document,), required=(citation,))
-    if (
-        call.context_sha256 != context.content_digest()
-        or call.selected_spans != ((citation.document_id, start, end),)
-        or call.omitted_chars != len(document.extracted.text) - (end - start)
-    ):
+    if (policy.verification is not None) != (review is not None):
         raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+    if review is not None:
+        review = SemanticReview.model_validate(review.model_dump())
+        validate_review(config, proposal, review, document, start, end, intent)
+    citation = validate_proposal(config, proposal, document, start, end, intent)
     reference = citation_id(citation)
     evidence = GraphEvidence(
         document_id=document_id,
@@ -100,12 +109,28 @@ def project(
     nodes: dict[str, GraphNode] = {}
     edges: dict[str, GraphEdge] = {}
     held: dict[str, GraphEdge] = {}
+    excluded_mentions: list[MentionExclusion] = []
+    excluded_relations: list[RelationExclusion] = []
+    mention_reviews = {item.key: item.verdict for item in review.mentions} if review else {}
+    relation_reviews = {item.index: item.verdict for item in review.relations} if review else {}
     for mention in proposal.mentions:
-        if mention.role not in policy.entity_roles or mention.citation_id != reference:
-            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
         matches = tuple(re.finditer(re.escape(mention.surface), citation.quote))
-        if mention.occurrence >= len(matches):
-            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+        reason: ExclusionReason | None = None
+        if mention.role not in policy.entity_roles:
+            reason = "unknown_role"
+        elif mention.citation_id != reference:
+            reason = "citation_mismatch"
+        elif mention.occurrence >= len(matches):
+            reason = "native_span_missing"
+        elif mention_reviews.get(mention.key) == "unsupported":
+            reason = "review_unsupported"
+        elif mention_reviews.get(mention.key) == "ambiguous":
+            reason = "review_ambiguous"
+        if reason is not None:
+            if review is None:
+                raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+            excluded_mentions.append(MentionExclusion(key=mention.key, reason=reason))
+            continue
         match = matches[mention.occurrence]
         absolute_start, absolute_end = start + match.start(), start + match.end()
         # Document representation and exact native occurrence, not name alone.
@@ -138,16 +163,28 @@ def project(
             held[edge.id] = edge
     by_key = {entity.key: entity for entity in entities}
     rules = {rule.name: rule for rule in graph_policy.relations}
-    for relation in proposal.relations:
-        source, target = by_key[relation.source], by_key[relation.target]
+    for index, relation in enumerate(proposal.relations):
+        source, target = by_key.get(relation.source), by_key.get(relation.target)
         rule = rules.get(relation.rule)
-        if (
-            relation.rule not in policy.relation_rules
-            or rule is None
-            or source.node.role not in rule.source_roles
-            or target.node.role not in rule.target_roles
-            or relation.citation_ids != (reference,)
-        ):
+        reason = None
+        if source is None or target is None:
+            reason = "endpoint_quarantined"
+        elif relation.rule not in policy.relation_rules or rule is None:
+            reason = "unknown_relation"
+        elif source.node.role not in rule.source_roles or target.node.role not in rule.target_roles:
+            reason = "endpoint_role_mismatch"
+        elif relation.citation_ids != (reference,):
+            reason = "citation_mismatch"
+        elif relation_reviews.get(index) == "unsupported":
+            reason = "review_unsupported"
+        elif relation_reviews.get(index) == "ambiguous":
+            reason = "review_ambiguous"
+        if reason is not None:
+            if review is None:
+                raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+            excluded_relations.append(RelationExclusion(index=index, reason=reason))
+            continue
+        if source is None or target is None:
             raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
         edge = graph.edge(
             relation.rule,
@@ -170,7 +207,7 @@ def project(
         else:
             held[edge.id] = edge
     return SemanticWindow(
-        schema="ghimera.semantic-window/1",
+        schema="ghimera.semantic-window/2" if review else "ghimera.semantic-window/1",
         policy_digest=policy.content_digest(),
         source_url=document.url,
         document_sha256=document.sha256,
@@ -184,18 +221,37 @@ def project(
         nodes=tuple(nodes.values()),
         edges=tuple(edges.values()),
         held_edges=tuple(held.values()),
+        review=review,
+        excluded_mentions=tuple(excluded_mentions),
+        excluded_relations=tuple(excluded_relations),
     )
 
 
 class SemanticStage:
-    def __init__(self, config: GhimeraConfig, extractor: SemanticExtractor) -> None:
+    def __init__(
+        self,
+        config: GhimeraConfig,
+        extractor: SemanticExtractor,
+        *,
+        reviewer: SemanticReviewer | None = None,
+    ) -> None:
         config = GhimeraConfig.model_validate(config.model_dump())
         service = bound_service(config)
         if extractor.model != ModelIdentity(
             model_id=service.model_id, revision=service.revision, location="self_hosted"
         ):
             raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
-        self._config, self._extractor = config, extractor
+        if config.semantics is None:
+            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+        if (config.semantics.verification is not None) != (reviewer is not None):
+            raise ValueError("semantic verification policy and reviewer must be supplied together")
+        if reviewer is not None:
+            independent = review_service(config)
+            if reviewer.model != ModelIdentity(
+                model_id=independent.model_id, revision=independent.revision, location="self_hosted"
+            ):
+                raise ValueError("semantic reviewer must bind its configured model")
+        self._config, self._extractor, self._reviewer = config, extractor, reviewer
 
     async def extract(
         self,
@@ -223,6 +279,7 @@ class SemanticStage:
             last = number + 1 == policy.max_windows_per_document or end == len(text)
             budget.reserve_semantic()
             call: ModelCallEvidence | None = None
+            committed = False
             try:
                 async with asyncio.timeout(budget.remaining_seconds):
                     proposal = await self._extractor.semantic_extract(
@@ -230,6 +287,10 @@ class SemanticStage:
                     )
                 call = proposal.model_call
                 proposal = SemanticProposal.model_validate(proposal.model_dump())
+                validate_proposal(self._config, proposal, document, start, end, intent)
+                review = await self._review(
+                    intent, document, start, end, policy, proposal, budget, ledger
+                )
                 observation = project(
                     self._config,
                     graph,
@@ -240,6 +301,7 @@ class SemanticStage:
                     end,
                     len(text) - end if last else 0,
                     intent,
+                    review,
                 )
                 pending = asyncio.create_task(
                     graph.append(nodes=observation.nodes, edges=observation.edges)
@@ -261,12 +323,19 @@ class SemanticStage:
                         semantic_window=observation,
                     )
                 )
+                committed = True
                 if cancelled:
                     raise asyncio.CancelledError
             except ModelCancelled as exc:
                 self._failure(
                     ledger, document.url, RefusalCode.SEMANTIC_EXTRACTION_FAILED, exc.model_call
                 )
+                raise
+            except asyncio.CancelledError:
+                if not committed:
+                    self._failure(
+                        ledger, document.url, RefusalCode.SEMANTIC_EXTRACTION_FAILED, call
+                    )
                 raise
             except (GhimeraRefused, TimeoutError, ValidationError) as exc:
                 code = (
@@ -280,6 +349,64 @@ class SemanticStage:
                     call = exc.model_call
                 self._failure(ledger, document.url, code, call)
                 raise GhimeraRefused(code) from None
+
+    async def _review(
+        self,
+        intent: str,
+        document: Document,
+        start: int,
+        end: int,
+        policy: SemanticConfig,
+        proposal: SemanticProposal,
+        budget: RunBudget,
+        ledger: Ledger,
+    ) -> SemanticReview | None:
+        if self._reviewer is None:
+            return None
+        budget.reserve_semantic_review()
+        call: ModelCallEvidence | None = None
+        review: SemanticReview | None = None
+        refusal: RefusalCode | None = None
+        try:
+            async with asyncio.timeout(budget.remaining_seconds):
+                review = await self._reviewer.semantic_review(
+                    intent, document, start, end, policy, proposal
+                )
+            call = review.model_call
+            review = SemanticReview.model_validate(review.model_dump())
+            validate_review(self._config, proposal, review, document, start, end, intent)
+            return review
+        except ModelCancelled as exc:
+            call, refusal = exc.model_call, RefusalCode.SEMANTIC_EXTRACTION_FAILED
+            raise asyncio.CancelledError from None
+        except asyncio.CancelledError:
+            refusal = RefusalCode.SEMANTIC_EXTRACTION_FAILED
+            raise
+        except (GhimeraRefused, ValidationError, TimeoutError) as exc:
+            refusal = (
+                exc.code
+                if isinstance(exc, GhimeraRefused)
+                else RefusalCode.SEMANTIC_EXTRACTION_FAILED
+            )
+            if isinstance(exc, ModelFailure):
+                call = exc.model_call
+            # Do not replace the extractor call with reviewer provenance.
+            raise GhimeraRefused(refusal) from None
+        finally:
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="semantic_review",
+                    url=document.url,
+                    model=self._reviewer.model,
+                    model_call=call,
+                    semantic_review=review if refusal is None else None,
+                    refusal=refusal,
+                    reason="independent_source_check"
+                    if refusal is None
+                    else "semantic_review_refused",
+                )
+            )
 
     def _failure(
         self, ledger: Ledger, url: str, code: RefusalCode, call: ModelCallEvidence | None
@@ -299,15 +426,44 @@ class SemanticStage:
 
 def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple[LedgerRow, ...]:
     rows = tuple(row for row in ledger if row.event == "semantic")
-    if not rows:
-        return rows
+    reviews = tuple(row for row in ledger if row.event == "semantic_review")
     policy = config.semantics
+    if reviews:
+        if (
+            policy is None
+            or policy.verification is None
+            or len(reviews) > policy.verification.max_calls_per_run
+        ):
+            raise ValueError("semantic reviews exceed their configured allowance")
+        service = review_service(config)
+        identity = ModelIdentity(
+            model_id=service.model_id, revision=service.revision, location="self_hosted"
+        )
+        for row in reviews:
+            if (
+                row.model != identity
+                or row.url is None
+                or (
+                    row.model_call is not None
+                    and (
+                        row.model_call.service != service
+                        or row.model_call.task != "semantic_review"
+                        or row.model_call.prompt_revision != SEMANTIC_REVIEW_REVISION
+                    )
+                )
+            ):
+                raise ValueError("semantic review must bind its independent configured service")
+    if not rows:
+        if reviews:
+            raise ValueError("semantic review requires its extraction observation")
+        return rows
     if policy is None or len(rows) > policy.max_calls_per_run:
         raise ValueError("semantic calls exceed their configured run allowance")
     service = bound_service(config)
     identity = ModelIdentity(
         model_id=service.model_id, revision=service.revision, location="self_hosted"
     )
+    used_reviews: set[int] = set()
     for row in rows:
         if row.model != identity:
             raise ValueError("semantic calls require the bound self-hosted model")
@@ -322,6 +478,23 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
             and row.semantic_window.policy_digest != policy.content_digest()
         ):
             raise ValueError("semantic window must bind its effective extraction policy")
+        window = row.semantic_window
+        if window is not None:
+            if (policy.verification is not None) != (window.review is not None):
+                raise ValueError("semantic window cannot omit its required independent check")
+            if window.review is not None:
+                matches = tuple(
+                    item
+                    for item in reviews
+                    if item.sequence < row.sequence
+                    and item.url == row.url
+                    and item.semantic_review == window.review
+                )
+                if len(matches) != 1 or matches[0].sequence in used_reviews:
+                    raise ValueError(
+                        "reviewed projection requires exactly one earlier review observation"
+                    )
+                used_reviews.add(matches[0].sequence)
     return rows
 
 
@@ -386,6 +559,7 @@ def validate_harvest(harvest: Harvest) -> None:
             observation.end,
             observation.omitted_chars,
             harvest.goal.text,
+            observation.review,
         )
         if (
             expected != observation

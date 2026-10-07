@@ -22,7 +22,7 @@ from ghimera.model_types import ModelCallEvidence
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.scoring_types import SimilarityEvidence
-from ghimera.semantic_types import SemanticWindow
+from ghimera.semantic_types import SemanticReview, SemanticWindow
 from ghimera.source_session_types import SourceSessionUse
 from ghimera.transport_types import TransportEvidence
 
@@ -393,6 +393,7 @@ class LedgerRow(Record):
         "challenge",
         "local_input",
         "semantic",
+        "semantic_review",
     ]
     url: str | None = None
     route: str | None = None
@@ -430,10 +431,23 @@ class LedgerRow(Record):
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     semantic_window: SemanticWindow | None = Field(default=None, exclude_if=lambda v: v is None)
+    semantic_review: SemanticReview | None = Field(default=None, exclude_if=lambda v: v is None)
     planning_graph: PlanningGraph | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if self.event == "semantic_review":
+            if (self.semantic_review is None) == (self.refusal is None):
+                raise ValueError("semantic review requires its assessment or refusal")
+            if self.semantic_review is not None and (
+                self.model_call is None
+                or self.model_call != self.semantic_review.model_call
+                or self.model_call.task != "semantic_review"
+                or self.model_call.outcome != "success"
+            ):
+                raise ValueError("semantic review must bind its actual model call")
+        elif self.semantic_review is not None:
+            raise ValueError("semantic review belongs to its review call observation")
         if self.planning_graph is not None and self.event != "plan":
             raise ValueError("planning graph belongs to its observed planning call")
         if self.event == "semantic":
@@ -662,7 +676,17 @@ class Harvest(Record):
         if self.receipt.bytes_read != sum(row.bytes_read for row in self.ledger):
             raise ValueError("byte spend does not match ledger")
         if self.receipt.judge_calls != sum(
-            row.event in {"verdict", "grade", "plan", "assessment", "answer", "review", "semantic"}
+            row.event
+            in {
+                "verdict",
+                "grade",
+                "plan",
+                "assessment",
+                "answer",
+                "review",
+                "semantic",
+                "semantic_review",
+            }
             for row in self.ledger
         ):
             raise ValueError("judge spend does not match ledger")

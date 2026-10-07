@@ -19,6 +19,7 @@ class RunBudget:
         self.challenge_attempts = 0
         self.local_inputs = 0
         self.semantic_calls = 0
+        self.semantic_review_calls = 0
         self.local_input_bytes = 0
         self.encoding_calls = 0
         self.encoding_chars = 0
@@ -60,6 +61,7 @@ class RunBudget:
         self.local_inputs = sum(row.event == "local_input" for row in rows)
         self.local_input_bytes = sum(row.bytes_read for row in rows if row.event == "local_input")
         self.semantic_calls = sum(row.event == "semantic" for row in rows)
+        self.semantic_review_calls = sum(row.event == "semantic_review" for row in rows)
         if (
             self.fetches > self.config.page_budget
             or self.bytes_read > self.config.byte_budget
@@ -151,3 +153,14 @@ class RunBudget:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         self.encoding_calls += 1
         self.encoding_chars += input_chars
+
+    def reserve_semantic_review(self) -> None:
+        policy = self.config.semantics
+        if (
+            policy is None
+            or policy.verification is None
+            or self.semantic_review_calls >= policy.verification.max_calls_per_run
+        ):
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        self.reserve_judge()
+        self.semantic_review_calls += 1
