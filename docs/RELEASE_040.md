@@ -1,6 +1,6 @@
 # ghimera 0.4.0 release acceptance
 
-Status: release candidate; full combined gate and package acceptance pending.
+Status: release candidate; full combined source gate green, package acceptance pending.
 No publication is implied by this document until its terminal evidence is added.
 
 ## Scope
@@ -18,10 +18,13 @@ Tor/browser and Ahmia services are operator-provided, not implicitly deployed.
 
 ## Gates and artifacts
 
-The corrected complete `scripts/gate.sh` must run on frozen source/tests with
-the executing interpreter and import path recorded. It includes offline lock,
-Ruff, format, strict mypy and the entire pytest suite. Failed earlier gates
-remain documented in [Ahmia integration](AHMIA_INTEGRATION.md).
+The corrected complete `scripts/gate.sh` ran on frozen source/tests at `9f104ef`
+using `/tmp/chimera-c0-20261006/.venv/bin/python`, Python **3.11.16**, importing
+`/tmp/ghimera-ahmia-20261007/src/ghimera/__init__.py`. Offline lock checked
+137 packages; Ruff/format passed over 171 files; strict mypy passed over
+113 source files. The entire pytest suite returned **794 passed in 677.03
+seconds**, no failures or skips reported. Failed earlier gates remain documented
+in [Ahmia integration](AHMIA_INTEGRATION.md), not relabeled green.
 
 Before publication, build a wheel/source archive, validate their metadata and
 contents, and install the exact wheel into an isolated environment without an
@@ -37,3 +40,7 @@ evidence is recorded [separately](C1_HUMAN_PUBLIC_EVIDENCE.md). Real semantic
 organization-model refusals and remaining collector requirements remain in
 [C0](C0.md) and their detailed evidence documents. Downstream platform ingestion
 and the separately hosted Ahmia MCP architecture remain design-only.
+
+The [infrastructure review](INFRASTRUCTURE_REVIEW.md) distinguishes native
+embedding-based relevance from persistent corpus indexing, and describes the
+remaining functional, operational and quality requirements.
