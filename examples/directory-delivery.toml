@@ -1,0 +1,13 @@
+# Non-active local durable destination. This is not off-host backup or remote
+# publication. The destination and outbox must use different directories.
+schema = "ghimera.directory-delivery/1"
+directory = "/srv/ghimera/delivery/archive-example"
+max_items = 10000
+max_item_bytes = 16777216
+max_total_item_bytes = 1073741824
+database_timeout_seconds = 5.0
+
+[target]
+schema = "ghimera.delivery-target/1"
+id = "owned_result_archive"
+revision = "replace-with-reviewed-destination-revision"

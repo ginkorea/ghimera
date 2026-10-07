@@ -3,9 +3,8 @@
 import asyncio
 import hashlib
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TypeVar
 
 from ghimera.corpus_config import CorpusConfig
 from ghimera.corpus_index import NativePassageIndex
@@ -19,26 +18,10 @@ from ghimera.corpus_types import (
 )
 from ghimera.embedding_types import EncodingBatch, EncodingCall
 from ghimera.models import Document, Harvest
+from ghimera.owned_worker import off_loop
 from ghimera.ports import EvidenceEncoder
 from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused, RefusalCode
 from ghimera.visual_types import ImageRegion
-
-Result = TypeVar("Result")
-
-
-async def off_loop(function: Callable[[], Result]) -> Result:
-    """Keep native/SQLite reconstruction off-loop and drain it even on cancellation."""
-    task = asyncio.create_task(asyncio.to_thread(function))
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        while not task.done():
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                continue
-        task.result()  # A native failure is not hidden behind caller cancellation.
-        raise
 
 
 def document_passages(document: Document, config: CorpusConfig) -> tuple[CorpusPassage, ...]:

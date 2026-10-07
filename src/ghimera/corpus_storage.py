@@ -1,10 +1,7 @@
 """Owner-private transactional originals, passages, vectors and operation audit."""
 
-import fcntl
 import hashlib
-import os
 import sqlite3
-import stat
 import struct
 import uuid
 from collections.abc import Iterator
@@ -16,6 +13,7 @@ from ghimera.corpus_config import CorpusConfig
 from ghimera.corpus_types import BoundCorpusDocument, CorpusPassage
 from ghimera.embedding_types import EncodingCall, Vector
 from ghimera.models import Document
+from ghimera.private_database import PrivateDatabase
 
 _VECTOR = TypeAdapter(Vector)
 
@@ -29,37 +27,16 @@ class CorpusStorage:
 
     def __init__(self, config: CorpusConfig, *, create: bool) -> None:
         self.config = CorpusConfig.model_validate(config.model_dump())
-        path = config.directory
-        if any(item.is_symlink() for item in (path, *path.parents)):
-            raise ValueError("corpus storage cannot traverse symlinks")
-        if create:
-            path.mkdir(mode=0o700, exist_ok=False)
-        self._directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        self._connection: sqlite3.Connection | None = None
-        self._database = -1
+        self._private = PrivateDatabase(
+            config.directory,
+            "corpus.sqlite",
+            timeout=config.database_timeout_seconds,
+            create=create,
+        )
         try:
-            self.check()
-            self._database = os.open(
-                "corpus.sqlite",
-                os.O_RDWR | os.O_NOFOLLOW | (os.O_CREAT | os.O_EXCL if create else 0),
-                0o600,
-                dir_fd=self._directory,
-            )
-            self.check()
-            # SQLite journals are created inside the checked directory descriptor.
-            database = f"/proc/self/fd/{self._directory}/corpus.sqlite"
-            self._connection = sqlite3.connect(database, timeout=config.database_timeout_seconds)
-            self.db.execute("PRAGMA foreign_keys=ON")
-            self.db.execute("PRAGMA trusted_schema=OFF")
-            self.db.execute("PRAGMA synchronous=FULL")
             if create:
                 self._initialize()
-                os.fsync(self._directory)
-                parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                try:
-                    os.fsync(parent)
-                finally:
-                    os.close(parent)
+                self._private.seal_directory()
             else:
                 policy = self.db.execute("SELECT policy FROM state WHERE id=1").fetchone()
                 if policy is None or policy[0] != config.recipe_identity:
@@ -80,30 +57,10 @@ class CorpusStorage:
 
     @property
     def db(self) -> sqlite3.Connection:
-        if self._connection is None:
-            raise ValueError("corpus storage is closed")
-        return self._connection
+        return self._private.db
 
     def check(self) -> None:
-        info = os.fstat(self._directory)
-        named = self.config.directory.lstat()
-        if (
-            info.st_uid != os.getuid()
-            or info.st_mode & 0o077
-            or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)
-        ):
-            raise ValueError("corpus directory must remain at its owner-private identity")
-        if self._database >= 0:
-            info = os.fstat(self._database)
-            named = os.stat("corpus.sqlite", dir_fd=self._directory, follow_symlinks=False)
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_uid != os.getuid()
-                or info.st_mode & 0o077
-                or info.st_nlink != 1
-                or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)
-            ):
-                raise ValueError("corpus database must remain owner-private and non-linked")
+        self._private.check()
 
     def _initialize(self) -> None:
         self.db.executescript(
@@ -134,25 +91,11 @@ class CorpusStorage:
 
     @contextmanager
     def writer(self) -> Iterator[None]:
-        self.check()
-        # Independent opens are essential: flock on a shared fd is not exclusion.
-        fd = os.open(".", os.O_RDONLY | os.O_DIRECTORY, dir_fd=self._directory)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with self._private.writer():
             yield
-        finally:
-            os.close(fd)
 
     def close(self) -> None:
-        if self._connection is not None:
-            self._connection.close()
-            self._connection = None
-        if self._database >= 0:
-            os.close(self._database)
-            self._database = -1
-        if self._directory >= 0:
-            os.close(self._directory)
-            self._directory = -1
+        self._private.close()
 
     def counts(self) -> tuple[int, int, int, int]:
         self.check()
@@ -240,13 +183,8 @@ class CorpusStorage:
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
-        self.db.execute("BEGIN IMMEDIATE")
-        try:
+        with self._private.transaction():
             yield
-            self.db.commit()
-        except BaseException:
-            self.db.rollback()
-            raise
 
     def audit(self, operation: str, purpose: str, call: EncodingCall) -> int:
         self.check()

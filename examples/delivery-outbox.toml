@@ -1,0 +1,21 @@
+# Non-active local queue; create the chosen parent first. Inject a destination
+# adapter with this exact non-secret target. No credentials or daemon are implied.
+schema = "ghimera.delivery-outbox/1"
+directory = "/srv/ghimera/delivery/outbox-example"
+max_items = 10000
+max_item_bytes = 16777216
+max_total_item_bytes = 1073741824
+max_ack_bytes = 8192
+max_attempt_records = 100000
+max_attempts = 5
+max_claims_per_dispatch = 32
+dispatch_concurrency = 4
+database_timeout_seconds = 5.0
+delivery_timeout_seconds = 60.0
+claim_seconds = 120.0
+retry_delay_seconds = 30.0
+
+[target]
+schema = "ghimera.delivery-target/1"
+id = "owned_result_archive"
+revision = "replace-with-reviewed-destination-revision"

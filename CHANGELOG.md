@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.4.1 — 2026-10-07
+
+- Explicit completed-result delivery outbox with durable claims, bounded
+  concurrent dispatch, retry/audit budgets and immutable destination readback.
+  Existing collector/corpus facades can queue before returning without waiting
+  for publication. Explicit acknowledged-payload pruning preserves deduplication
+  tombstones. A real local destination is included; off-host storage, automatic
+  age retention/compaction and unattended service deployment remain separate.
+
 - An explicitly bound retained-corpus discovery provider through the existing
   grounded search/routing interface. Native query/model observations, selected
   original documents and deterministic source leads survive archive validation.

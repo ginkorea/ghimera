@@ -240,7 +240,12 @@ credential-free loopback HTTP fixtures cover native query/original readback,
 wrong-corpus/bounds preflight, language-filtered empty observations, duplicate and
 size omissions, tampered original/query/lead refusal, configured single-provider
 and multi-provider research, and repeated cancellation draining an original-read
-worker. Full gate and versioned publication of discovery are still pending.
+worker. The full `scripts/gate.sh` at frozen `0ab1443` subsequently returned
+**906 passed in 785.14 seconds**, no failures or skips, on that same Python
+3.11.16 interpreter and corpus-leads checkout. Ruff/format passed over 203 files,
+strict mypy passed over 135 source files, and the offline lock checked 142
+packages. Delivery-outbox changes were not in that gate. Versioned publication
+and real language/model acceptance remain pending.
 
 Witnesses include actual SQLite/compiled FAISS, fresh-process query and original
 readback, idempotent appends, native Japanese span coverage, pending append

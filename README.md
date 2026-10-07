@@ -131,10 +131,10 @@ acceptance remain open, not claims of the existing research graph.
 
 ## Installation
 
-The unreleased source candidate adds [bounded parallel collection](docs/CONCURRENT_COLLECTION.md)
+The 0.4.1 source line adds [bounded parallel collection](docs/CONCURRENT_COLLECTION.md)
 and a [durable native evidence corpus](docs/EVIDENCE_CORPUS.md). The corpus keeps
 accepted originals, text/OCR/visual provenance and model-bound vectors for later
-similarity queries. These additions are not in the published 0.4.0 wheel yet;
+similarity queries. These additions are not in the immutable 0.4.0 wheel;
 representative Pacific-language quality and the full infrastructure tracker
 remain explicit acceptance work.
 
@@ -144,11 +144,17 @@ beside the unchanged original result. Failed handoffs retain completed source
 work for persistence-only retry; operation-level crash recovery and an unattended
 service are still separate requirements. See the corpus documentation for usage.
 
-The source candidate can also use an explicitly bound corpus as a discovery
+This source line can also use an explicitly bound corpus as a discovery
 provider, alone or beside configured web/MCP/onion providers. It preserves native
 query and source observations; returned matches are leads that still go through
 ordinary collection and citation checks. Cross-language quality and direct
 cached-source answer reuse remain separate acceptance work.
+
+An explicit [delivery outbox](docs/DELIVERY_OUTBOX.md) can queue complete results
+before returning and dispatch them concurrently when its configured destination
+is available. Destination readback precedes acknowledgement and any explicit
+local-payload pruning. The included local durable destination is not off-host
+backup; remote adapters and unattended service deployment remain open.
 
 Use a dedicated virtual environment:
 
