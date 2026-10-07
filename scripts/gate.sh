@@ -33,6 +33,9 @@ export UV_CACHE_DIR="${GHIMERA_GATE_CACHE:-${CHIMERA_GATE_CACHE:-$GHIMERA_GATE_W
 export MYPY_CACHE_DIR="${MYPY_CACHE_DIR:-$GHIMERA_GATE_WORK/mypy}"
 export RUFF_CACHE_DIR="${RUFF_CACHE_DIR:-$GHIMERA_GATE_WORK/ruff}"
 export TMPDIR="${TMPDIR:-$GHIMERA_GATE_WORK/tmp}"
+# Chromium puts a Unix socket here. Reject an overlong operator path before
+# spending eleven minutes on a suite whose browser process cannot launch.
+"$GHIMERA_GATE_PYTHON" -c 'import os,sys; path=os.fsencode(os.environ["TMPDIR"])+b"/org.chromium.Chromium.XXXXXX/SingletonSocket"; sys.exit("Set TMPDIR to a shorter owned directory: Chromium socket path exceeds Linux sun_path" if len(path)>107 else 0)'
 unset TAIPAN_TOKEN TAIPAN_COGNITO_ACCESS_TOKEN
 mkdir -p "$GHIMERA_GATE_WORK" "$TMPDIR"
 printf 'Gate work directory: %s\n' "$GHIMERA_GATE_WORK"

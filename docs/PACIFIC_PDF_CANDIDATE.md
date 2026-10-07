@@ -92,7 +92,12 @@ candidate source. Ruff and formatting passed; strict mypy passed across 122
 source modules. Source/tests/examples were frozen during the reported run.
 The first attempted regression command named two nonexistent test files and
 ran no tests; only the corrected, completed command is counted above. The full
-package gate and publication have not been run for this candidate.
+package gate subsequently passed at `36d024f`: **845 passed in 692.77 seconds**,
+no failures/skips, using Python 3.11.16 at the isolated gate interpreter above.
+Source/tests/examples remained frozen. See CONCURRENT_COLLECTION.md for the
+resolved temporary-directory browser-launch failure in the initial full run.
+This is software-contract evidence, not a change to the failed Simplified
+Chinese quality verdict. Publication remains pending.
 
 ## Bounded next actions
 

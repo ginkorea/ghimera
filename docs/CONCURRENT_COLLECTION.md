@@ -1,6 +1,6 @@
 # Bounded concurrent collection
 
-Status: **source candidate**, not yet full-gated or published. This closes part
+Status: **full-gated source candidate**, not yet published. This closes part
 of the infrastructure execution gap, not durable operation-level recovery or
 representative language/model quality.
 
@@ -110,4 +110,15 @@ seconds**, without skips. Strict mypy passed 124 source modules and Ruff
 passed. Source/tests/examples were not edited during either reported run.
 An earlier run failed because the new reviewer fixture used a keyword-only
 argument positionally; that fixture invocation was corrected, not its expected
-source-binding behavior. No full-package gate result is claimed here yet.
+source-binding behavior.
+
+The frozen combined source at `36d024f` then passed the full standalone gate:
+**845 tests passed in 692.77 seconds**, no failures/skips, under that same
+Python 3.11.16 interpreter importing `/tmp/ghimera-cadence-20261007/src/ghimera`.
+Ruff, formatting, strict mypy (124 source modules) and the offline lock check
+also passed. This includes the Pacific PDF candidate's contracts, not successful
+representative OCR quality. The first full attempt reported 828 passes and 17
+browser-launch failures because the selected TMPDIR made Chromium's Unix socket
+path too long. The identical source passed with a shorter owned TMPDIR; no
+browser assertion was removed or weakened. Later corpus code is a separate
+candidate and is not covered by this source's gate result.

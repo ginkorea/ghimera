@@ -28,6 +28,7 @@ html = ["scrapling==0.4.2", "crawl4ai==0.9.4", "lingua-language-detector==2.1.1"
 documents = ["docling-slim[convert-core,format-docx,format-pdf]==2.134.0", "docling-core==2.99.0", "lingua-language-detector==2.1.1"]
 pdf-ocr = ["tesserocr==2.11.0"]
 images = ["Pillow==12.3.0"]
+corpus = ["faiss-cpu==1.15.1", "numpy==2.4.6; python_version < '3.12'", "numpy==2.5.3; python_version >= '3.12'"]
 
 [dependency-groups]
 dev = ["pytest==9.1.1", "ruff==0.16.10", "mypy==2.4.0", "jsonschema==4.26.0"]

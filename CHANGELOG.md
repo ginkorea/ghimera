@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A standalone owner-private native evidence corpus: transactional originals,
+  complete text/OCR/reviewed-visual passages, exact model-bound vectors and
+  durable encoding audit. Optional compiled FAISS cosine queries preserve
+  source spans and image anchors; fresh processes rebuild the view without
+  re-embedding. Operator capacity/transport/ANN tuning stays distinct from the
+  immutable passage recipe. Corpus/service wiring, retention, operation-level
+  recovery and representative cross-language retrieval quality remain open.
+
 - Explicit `ghimera.execution/1` source concurrency and independent parser,
   scoring, judge, semantic and visual capacities. Reuse the existing frontier,
   spend boundaries, origin scheduler and graph writer; do not dispatch batches

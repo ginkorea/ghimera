@@ -131,6 +131,13 @@ acceptance remain open, not claims of the existing research graph.
 
 ## Installation
 
+The unreleased source candidate adds [bounded parallel collection](docs/CONCURRENT_COLLECTION.md)
+and a [durable native evidence corpus](docs/EVIDENCE_CORPUS.md). The corpus keeps
+accepted originals, text/OCR/visual provenance and model-bound vectors for later
+similarity queries. These additions are not in the published 0.4.0 wheel yet;
+representative Pacific-language quality and the full infrastructure tracker
+remain explicit acceptance work.
+
 Use a dedicated virtual environment:
 
 ```bash
