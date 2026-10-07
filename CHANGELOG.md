@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.4 — 2026-10-07
+
+- Explicit caller-Page navigation policy admits each main-frame redirect before
+  contact, reusing run scope, robots, cadence and request budgets. Redirected
+  HTML/PDF/DOCX, inline originals and mapped landing downloads retain native
+  chains through extraction, citations, graph, journal and archives. Cancellation
+  leaves borrowed tabs open; human assistance releases owned interception, then
+  re-admits collector navigation with separate evidence.
+- Configurable `DeliveryWorker` and `ghimera-delivery` command provide bounded
+  background retries, JSONL health, graceful shutdown and optional payload pruning
+  only after exact destination readback. A local destination is not off-host backup.
+- An explicit Chinese RapidOCR profile passes unchanged required-term controls;
+  full transcription, representative Pacific quality and Qwen-assisted OCR remain
+  unaccepted. No weights or implicit model service are included.
+- Complete frozen-source gate: 999 passed, zero failures/skips. Independent
+  installed-package archive acceptance and a robots-aware public PDF capture
+  passed; these are not representative publisher, Tor or model-quality claims.
+  Final publication evidence is tracked in [release acceptance](docs/RELEASE_044.md).
+
 ## 0.4.3 — 2026-10-07
 
 - Explicit, bounded inline-document body collection in the caller's existing

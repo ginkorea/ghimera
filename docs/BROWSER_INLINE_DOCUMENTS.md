@@ -121,8 +121,8 @@ under the owned `ghimera-043-release-R1PMMC` operator directory. It used no
 credentials, assistance or inference. A public sample is not a representative
 publisher, entitled-session or research-quality benchmark.
 
-An integrated development candidate supports admitted final-URL navigation before
+The gated 0.4.4 release line supports admitted final-URL navigation before
 the explicit second inline GET; see [guarded collection](BROWSER_NAVIGATION_GUARD.md).
-It is not published support. Representative entitled publishers,
-onion-browser networking, pagination, cross-origin/redirected files and native
+Final artifact status is in RELEASE_044.md. Representative entitled publishers,
+onion-browser networking, pagination, redirected publisher workflows and native
 Pacific OCR/research quality remain open in the infrastructure PRD.

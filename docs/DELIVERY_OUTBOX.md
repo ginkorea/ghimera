@@ -97,14 +97,14 @@ The destination copy and separately stored evidence corpus are untouched.
 
 SQLite may reuse freed pages; pruning is not a claim of physical disk shrinkage.
 Automatic age retention, compaction/rotation and a remote storage adapter remain
-implementation/deployment requirements. The development worker below adds
+implementation/deployment requirements. The 0.4.4 worker below adds
 explicit background lifecycle and readback-gated payload pruning, not physical
 disk shrinkage or automatic tombstone/audit rotation.
 Item count, total item bytes including acknowledgement reservations, individual
 payload/ack limits and attempt-record count prevent unbounded accepted growth;
 filesystem/journal overhead still requires operator headroom and monitoring.
 
-## Explicit background worker (development candidate)
+## Explicit background worker (0.4.4 release line)
 
 `DeliveryWorkerConfig` (`ghimera.delivery-worker/1`) owns polling cadence,
 shutdown grace, bounded pruning and `keep` versus `prune_acknowledged` policy.
@@ -170,6 +170,13 @@ delivered identities. A local second directory is not an off-host archive.
 
 ## Verification
 
+The combined browser/delivery source `73129ea` passed the complete gate: **999
+passed in 980.63 seconds**, zero failures/skips, Python 3.11.16 at
+`/tmp/chimera-c0-20261006/.venv/bin/python`, importing
+`/tmp/ghimera-browser-redirects-20261007/src/ghimera`. Final artifact identity and
+publication are tracked separately in RELEASE_044.md. This supersedes the
+parent-only gate below, not representative remote destination or model quality.
+
 The background-worker candidate's final delivery/command/package-boundary
 selection returned **37 passed in 15.82 seconds**, zero failures/skips, using
 Python 3.11.16 at `/tmp/chimera-c0-20261006/.venv/bin/python`, importing
@@ -195,7 +202,8 @@ runtime occurred. The frozen delivery source at `9e060f4` then passed the full
 same Python 3.11.16 interpreter and unattended-delivery checkout. Offline lock,
 Ruff check/format and strict mypy passed first. This completed gate does not
 cover later browser-navigation source changes. Independent next-version wheel
-acceptance and publication remain separate pending requirements.
+acceptance subsequently passed for the combined candidate; final release
+artifact checks and publication are tracked in RELEASE_044.md.
 
 The initial delivery-only run returned 15 passes in 9.21 seconds, no skips,
 using Python 3.11.16 at `/tmp/chimera-c0-20261006/.venv/bin/python`, importing

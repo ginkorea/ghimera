@@ -156,8 +156,11 @@ accepts explicit human_browser.navigation on its caller-bound Page, reuses the
 run's robots/cadence/budgets, and retains native source-chain evidence through
 documents, graph, journal and archives. Controlled native/importer acceptance
 passed 166 tests; see BROWSER_NAVIGATION_GUARD.md for exact environment and scope.
-The combined gate, installed-package and representative publisher/Tor acceptance
-remain required. This is not published support or full I08 closure.
+The combined gate passed 999 tests with zero failures/skips under Python 3.11.16;
+independent installed-package archive/API/CLI acceptance and a robots-aware
+public PDF capture passed. Final 0.4.4 artifact publication is tracked in
+RELEASE_044.md. Representative publisher/Tor acceptance remains required;
+this is not full I08 closure.
 
 ## Delivery and release discipline
 

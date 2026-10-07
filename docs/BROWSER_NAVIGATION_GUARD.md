@@ -1,4 +1,4 @@
-# Caller-session redirects (integrated development candidate)
+# Caller-session redirects (0.4.4 release line)
 
 The existing native download observer compares the download URL with the
 frontier request. Chromium reports a redirected attachment's final URL instead,
@@ -10,8 +10,9 @@ The full `Collector` now consumes an explicit `human_browser.navigation` policy
 through its existing FetchLadder and caller-bound Page session. Redirected HTML,
 PDF/DOCX attachments, inline originals and mapped download landing pages retain
 their native before-contact chain through extraction, citations, graph, journal
-and archive readback. This is an integrated development candidate, not published
-support. Representative publisher, Tor-browser and model-quality acceptance remain
+and archive readback. The combined source gate and independent candidate-wheel
+acceptance passed; see [release status](RELEASE_044.md) for final artifact publication.
+Representative publisher, Tor-browser and model-quality acceptance remain
 separate requirements.
 
 ## Ownership and configuration
@@ -103,10 +104,18 @@ solver or entitlement bypass. Browser flows depending on non-reloadable transien
 page state still need representative acceptance; the controlled witness uses
 browser-persisted completion state. Borrowed and unrelated tabs remain open.
 
-Combined gate, independent installed-package acceptance, representative publisher
-workflows and immutable publication remain required; I08 is not wholly closed.
+The complete gate and independent candidate-package acceptance passed as recorded
+below. Final artifact publication is tracked separately in RELEASE_044.md;
+representative publisher workflows remain required. I08 is not wholly closed.
 
 ## Verification record
+
+The frozen integration `73129ea` passed the complete `scripts/gate.sh`: **999
+passed in 980.63 seconds**, zero failures/skips, under Python 3.11.16 at the
+interpreter and source path below. Independent installed-wheel API/CLI checks and
+five guarded plus three legacy native archive readbacks passed. A robots-aware
+actual public W3C PDF capture passed, not a representative redirect or research
+benchmark. Exact provenance and publication state are in RELEASE_044.md.
 
 The frozen full integration and affected browser/fetch/journal/continuation/package
 selection passed **166 tests in 271.27 seconds**, zero failures/skips, under
@@ -149,5 +158,4 @@ corrected by failing paused requests first. One later cross-origin fixture
 failed before navigation by treating a tuple-valued policy field as a list;
 the fixture was corrected, without weakening origin admission. The final
 42-pass selection includes both cases. The earlier 967-pass delivery full
-gate does not cover this new guard; a combined full gate remains required
-before a release.
+gate does not cover this new guard; the later 999-pass combined gate above does.

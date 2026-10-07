@@ -4,13 +4,15 @@ Intent-driven web research: discover sources, collect native-language documents,
 follow evidence gaps, and return a source-cited answer—or an explicit partial
 result when the evidence or budget is insufficient.
 
-**v0.4.3 adds same-session inline documents beside PDF/DOCX downloads.**
+**v0.4.4 adds guarded browser redirects and a background delivery worker.**
 
-Version 0.4.3 adds explicitly configured inline-document collection
-through that same caller-owned browser session. Original file bytes enter the
-existing parsing, citation, graph and archive path; they are not taken from the
-PDF viewer's HTML. See [inline browser documents](docs/BROWSER_INLINE_DOCUMENTS.md)
-for configuration, actual-byte provenance and acceptance status.
+Version 0.4.4 adds explicitly configured before-contact navigation admission
+through the caller-owned browser session. Redirected pages, downloads and inline
+originals retain their source chains through parsing, citations, graph and
+archives. A configurable background worker retries durable delivery without
+refetching sources. See [guarded collection](docs/BROWSER_NAVIGATION_GUARD.md),
+[delivery lifecycle](docs/DELIVERY_OUTBOX.md) and
+[release acceptance](docs/RELEASE_044.md) for evidence and remaining limits.
 The repository, distribution and import use `ghimera`.
 It succeeds the `go-spider` distribution and `chimera` implementation. It is not
 backward-compatible with v0.1.0's `spider_core` API or `spider` CLI. Python
@@ -173,23 +175,23 @@ is available. Destination readback precedes acknowledgement and any explicit
 local-payload pruning. The included local durable destination is not off-host
 backup; remote adapters and unattended service deployment remain open.
 
-The development source also includes a configurable `DeliveryWorker` and
+Version 0.4.4 includes a configurable `DeliveryWorker` and
 `ghimera-delivery` command for background retries, JSONL health and optional
-readback-confirmed outbox cleanup. It does not change the immutable 0.4.3
-artifacts. See [delivery lifecycle and configuration](docs/DELIVERY_OUTBOX.md).
+readback-confirmed outbox cleanup. Previous release artifacts remain immutable.
+See [delivery lifecycle and configuration](docs/DELIVERY_OUTBOX.md).
 
 Use a dedicated virtual environment:
 
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'ghimera==0.4.0'
+python -m pip install 'ghimera==0.4.4'
 ```
 
 Install the adapters you intend to configure:
 
 ```bash
-python -m pip install 'ghimera[html,documents,browser]==0.4.0'
+python -m pip install 'ghimera[html,documents,browser]==0.4.4'
 ```
 
 The base package contains the typed core, HTTP/Tor transport, research/search
