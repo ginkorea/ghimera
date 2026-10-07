@@ -206,9 +206,10 @@ substitutes.
 `Collector(config, human_assistant=application_port)` and its `from_toml`
 equivalent accept the explicit application-owned assistance port. A configured
 assistance recipe without that port refuses before network work. A zero-assistance
-recipe can collect from an already entitled browser session. The intent command
-does not supply an interactive human port; interactive command-line assistance
-remains a separate deliverable.
+recipe can collect from an already entitled browser session. Development source
+now supplies an opt-in terminal port through `ghimera.collector-command/3`; see
+[interactive command](TERMINAL_ASSISTANCE.md). It reuses this browser mechanism
+and the existing complete-result archive rather than creating another collector.
 
 `HumanBrowserRoute` reuses FetchLadder's run budget, scope, concurrency and
 cadence. It is selected only for configured origins. A denied path, failed

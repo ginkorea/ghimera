@@ -1,0 +1,17 @@
+# Non-active command: replace absolute paths and bind your dedicated browser
+# in the separate collector recipe. No browser/profile discovery or login input.
+schema = "ghimera.collector-command/3"
+config_path = "/replace/private/collector-with-browser.toml"
+request_path = "/replace/private/research-request.json"
+output_directory = "/replace/private/results/human-research-001"
+run_id = "human-research-001"
+max_input_bytes = 1000000
+max_result_bytes = 50000000
+
+[human_assistance]
+schema = "ghimera.terminal-assistance/1"
+max_response_bytes = 256
+max_response_attempts = 2
+
+# The ordinary optional [execution] run/resume policy remains available with /3;
+# it requires the collector recipe's existing durable continuation configuration.

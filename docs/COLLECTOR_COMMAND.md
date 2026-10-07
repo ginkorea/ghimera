@@ -43,6 +43,13 @@ run/output identity. It does not automatically replay uncertain interrupted call
 
 ## Explicit credentials
 
+Development source also supports explicitly configured human-proxy interaction
+through `ghimera.collector-command/3`. It binds the existing selected browser
+and pauses for a terminal response to the exact assistance request. No passwords
+or source cookies are entered in that terminal. See
+[interactive command configuration](TERMINAL_ASSISTANCE.md); legacy command
+versions remain noninteractive and unchanged.
+
 For services configured with bearer authorization, optionally set
 `bindings_path` to a JSON `chimera.command-credentials/1` file. It names environment
 variables, **not credentials**. Only those named variables are read; there is no

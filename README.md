@@ -22,6 +22,10 @@ self-hosted model services, extraction policies and graph profile.
   session to obtain source leads; default mappings support the `web_search`
   envelope. Other tools and result paths are configurable. See
   [MCP leads](docs/MCP_LEADS.md).
+- **Human-proxy browser interaction (development source).** An explicitly
+  configured CLI can pause while you act in the selected browser, then resume
+  native capture with request-bound terminal input. See
+  [interactive collection](docs/TERMINAL_ASSISTANCE.md).
 - **Local models first.** Configured, already-served self-hosted models supply
   planning, judging, answer generation, review and embeddings. Compatible HTTP
   interfaces are supported; no external LLM fallback, model weights or model

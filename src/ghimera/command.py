@@ -17,6 +17,7 @@ from ghimera.collector import Collector
 from ghimera.config import GhimeraConfig
 from ghimera.continuation import CheckpointReceipt, CheckpointStore, ResearchSuspended
 from ghimera.embedding_types import EmbeddingReferences
+from ghimera.human_browser_types import HumanAssistant
 from ghimera.refusals import GhimeraRefused
 from ghimera.research_types import ResearchRequest
 from ghimera.result_archive import (
@@ -26,6 +27,7 @@ from ghimera.result_archive import (
     bounded_file,
 )
 from ghimera.source_sessions import SourceCredentials
+from ghimera.terminal_assistance import TerminalAssistanceConfig, TerminalHumanAssistant
 from ghimera.transport import Resolver
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
@@ -52,9 +54,9 @@ class CommandExecution(BaseModel):
 
 class CommandOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["chimera.collector-command/1", "ghimera.collector-command/2"] = Field(
-        alias="schema"
-    )
+    schema_version: Literal[
+        "chimera.collector-command/1", "ghimera.collector-command/2", "ghimera.collector-command/3"
+    ] = Field(alias="schema")
     config_path: Path
     request_path: Path | None = Field(default=None, exclude_if=lambda value: value is None)
     output_directory: Path
@@ -64,10 +66,18 @@ class CommandOptions(BaseModel):
     bindings_path: Path | None = None
     references_path: Path | None = None
     execution: CommandExecution | None = Field(default=None, exclude_if=lambda value: value is None)
+    human_assistance: TerminalAssistanceConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def paths(self) -> "CommandOptions":
-        if (self.schema_version == "ghimera.collector-command/2") != (self.execution is not None):
+        if self.schema_version == "ghimera.collector-command/3":
+            if self.human_assistance is None:
+                raise ValueError("command /3 requires explicit human assistance")
+        elif self.human_assistance is not None:
+            raise ValueError("human assistance requires command /3")
+        elif (self.schema_version == "ghimera.collector-command/2") != (self.execution is not None):
             raise ValueError("command /2 requires an execution policy; legacy /1 forbids it")
         resuming = self.execution is not None and self.execution.operation == "resume"
         if resuming == (self.request_path is not None):
@@ -153,12 +163,22 @@ class CredentialBindings(BaseModel):
 
 
 async def execute(
-    options: CommandOptions, *, source_resolver: Resolver | None = None
+    options: CommandOptions,
+    *,
+    source_resolver: Resolver | None = None,
+    human_assistant: HumanAssistant | None = None,
 ) -> ArchiveReceipt | CheckpointReceipt:
     options = CommandOptions.model_validate(options.model_dump())
     config = GhimeraConfig.model_validate(
         tomllib.loads(bounded_file(options.config_path, options.max_input_bytes).decode())
     )
+    if options.human_assistance is not None:
+        if config.human_browser is None:
+            raise ValueError("terminal assistance requires the recipe's explicit browser binding")
+        if human_assistant is None:
+            human_assistant = TerminalHumanAssistant.from_standard_streams(options.human_assistance)
+    elif human_assistant is not None:
+        raise ValueError("human assistance requires an explicit command policy")
     execution = options.execution
     if execution is not None and config.continuation is None:
         raise ValueError("command /2 requires the recipe's durable continuation policy")
@@ -193,6 +213,7 @@ async def execute(
         encoder_credential=bindings.encoder,
         source_credentials=bindings.sources,
         source_resolver=source_resolver,
+        human_assistant=human_assistant,
     )
     request = collector.validate_request(request)
     # Reserve output before any paid/discovery work; an existing result is not reusable.

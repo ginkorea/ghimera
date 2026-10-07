@@ -21,8 +21,11 @@ if [[ "$GHIMERA_GATE_WORK" != /* || "$GHIMERA_GATE_WORK" == / ]]; then
   exit 2
 fi
 export UV_CACHE_DIR="${GHIMERA_GATE_CACHE:-${CHIMERA_GATE_CACHE:-$GHIMERA_GATE_WORK/uv}}"
+export MYPY_CACHE_DIR="${MYPY_CACHE_DIR:-$GHIMERA_GATE_WORK/mypy}"
+export RUFF_CACHE_DIR="${RUFF_CACHE_DIR:-$GHIMERA_GATE_WORK/ruff}"
+export TMPDIR="${TMPDIR:-$GHIMERA_GATE_WORK/tmp}"
 unset TAIPAN_TOKEN TAIPAN_COGNITO_ACCESS_TOKEN
-mkdir -p "$GHIMERA_GATE_WORK"
+mkdir -p "$GHIMERA_GATE_WORK" "$TMPDIR"
 printf 'Gate work directory: %s\n' "$GHIMERA_GATE_WORK"
 
 "$GHIMERA_GATE_PYTHON" -c 'import pathlib, sys, ghimera; print(sys.executable, sys.version); print(ghimera.__file__); assert sys.version_info >= (3, 11); assert pathlib.Path(ghimera.__file__).resolve().is_relative_to(pathlib.Path.cwd() / "src")'
