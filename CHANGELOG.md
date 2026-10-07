@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Explicit, bounded passive responsive-image selection: lazy `srcset` and
+  `<picture>` alternatives retain source descriptors, media conditions and
+  markup/policy bindings. Existing logo admission precedes download; retained
+  selection must replay against archived markup. This is a configured collection
+  policy, not browser-layout emulation or representative Pacific OCR acceptance.
+
 - Add an explicitly composed persistent collector: collection/research/resume
   automatically appends accepted evidence and returns a digest-bound corpus
   acknowledgement beside the unchanged original result. Failed/cancelled handoff

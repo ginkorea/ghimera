@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.model_config import ModelServiceConfig
+from ghimera.responsive_config import ResponsiveImageConfig
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
 
@@ -46,6 +47,7 @@ class VisualConfig(BaseModel):
     cpu_threads: Positive
     vision: ModelServiceConfig | None = None
     reviewer: ModelServiceConfig | None = None
+    responsive: ResponsiveImageConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def coherent(self) -> "VisualConfig":

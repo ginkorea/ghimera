@@ -35,7 +35,8 @@ initial adapter admission; changed bytes refuse subsequent work.
 
 1. Passive HTML inspection captures `img` URLs (`data-src` then `src`), alt/title,
    a following figure caption, element index and declared dimensions. No page
-   execution or image download occurs during inspection.
+   execution or image download occurs during inspection. The unreleased explicit
+   responsive policy below also admits bounded `srcset` and `<picture>` choices.
 2. Configured exclusion tokens, presentation attributes, dimensions, candidate
    terms, host/port scope and per-page limits admit likely useful figures.
    Logos/icons and unmatched candidates produce only a refusal observation.
@@ -62,9 +63,67 @@ initial adapter admission; changed bytes refuse subsequent work.
    `Document.images`. Rejected bytes are removed from the conditional fetch
    cache and worker files are cleaned. This path creates no image vectors; an
    index consumer must admit only these accepted records, never all page images.
+   The unreleased [native evidence corpus](EVIDENCE_CORPUS.md) does this for OCR
+   and reviewed visual text, retaining original-image region anchors.
 
 Original HTML/PDF preservation may include inline or embedded images. This
 feature does not rewrite the original source to erase those bytes.
+
+## Explicit responsive intake — unreleased
+
+Set `VisualConfig.responsive` from the non-active fragment
+[`examples/responsive-images.toml`](../examples/responsive-images.toml).
+An absent policy preserves the previous serialized configuration/candidate
+shape and `data-src`/`src` precedence. Operators choose attribute precedence,
+attribute/variant/source limits, maximum declared width/density and whether
+conditional `<picture>` alternatives are included. This does not install models
+or change source scope, robots, transport, image retention or byte budgets.
+
+Each eligible source group contributes at most its largest declared variant
+within those bounds; supported `<picture>` alternatives and the `img` fallback
+remain distinct candidates. `all_declared` retains media conditions rather than
+claiming they match a viewport; `unconditional_only` skips conditional sources.
+Neither setting implements browser layout or full HTML parsing. Real browser
+selection depends on layout and device/environment information; see the
+[HTML image specification](https://html.spec.whatwg.org/multipage/images.html),
+inspected 7 October 2026. The collector does not interpret `sizes` as a rendered
+width or convert a declaration into actual decoded-image dimensions.
+
+The passive tokenizer preserves commas within URL tokens and rejects invalid
+descriptors, mixed width/density sets, unsupported schemes, credentials and
+control characters. A variant-count, attribute or picture-source overflow
+refuses that set rather than pretending its prefix is complete; an explicit
+valid fallback may still be selected. Page and image caps remain bounded and
+may omit alternatives. They are collection limits, not exhaustive coverage.
+Logo/presentation filtering still happens before any image resource request.
+
+Every selected responsive candidate carries `ghimera.responsive-selection/1`:
+effective policy and markup digests, decoding name, exact source token and
+attribute digest, width/density descriptor, picture-source index, original
+media/sizes/type strings and encountered omission codes. Archive revalidation
+replays selection against retained markup; merely editing a descriptor or
+policy hash cannot make it a valid observed source choice. The markup decoder
+is recorded, not independently reconstructed from an archived HTTP header.
+
+## Required language acceptance
+
+The primary targets are English, Simplified Chinese, Traditional Chinese,
+Japanese, Korean, Tagalog/Filipino, Indonesian, Malay, Vietnamese and Thai.
+Khmer, Lao, Burmese, Māori and Russian are additional coverage targets. Treat
+the two Chinese scripts as separate acceptance cases even when language
+detection returns `zh`. A Tagalog `tl` route using the `fil` OCR package does
+not establish support for every Philippine language.
+
+Admission, native image OCR, native/scanned PDF extraction, relevant-image
+selection, semantic extraction and native/cross-language retrieval are separate
+checks. Keep source text in its original script and preserve source/region
+anchors; an English translation cannot stand in for native extraction acceptance.
+The controlled execution observations are in
+[VISUAL_LANGUAGE_ACCEPTANCE.md](VISUAL_LANGUAGE_ACCEPTANCE.md); they are not
+representative multilingual accuracy. In particular, the
+[scanned-PDF candidate](PACIFIC_PDF_CANDIDATE.md) still failed a required
+Simplified-Chinese title term, and Thai has not received the rendered-script
+quality check in that record. Those gaps remain open.
 
 ## Provenance and boundaries
 
@@ -75,14 +134,26 @@ claims have normalized region references and separate interpretation/review
 request and response hashes. These are derived observations, not native page
 text offsets. They are preserved by the ordinary archive read/write boundary.
 
-Current limits are explicit: HTML `srcset`/`picture` selection, embedded PDF
-figure crops, standalone image seed dispatch, automatic graph promotion and
+Current limits are explicit: embedded PDF figure crops, standalone image seed
+dispatch, automatic graph promotion and
 answer citation rendering for visual regions are not built. Existing scanned
 PDF OCR remains the configured document adapter, not this raster enrichment
-path. Durable corpus indexing is a separate open PRD row. Representative
+path. The responsive and durable-corpus source candidates are unreleased;
+service wiring and representative corpus acceptance remain open PRD rows. Representative
 multilingual infographic/diagram accuracy and a real served-vision run remain
 acceptance requirements; protocol fixtures cannot close them.
 
 The gate uses explicitly configured Tesseract, English traineddata and a font
 fixture; it exercises real local raster/OCR execution and source retention,
 not a benchmark of all declared Pacific languages.
+
+The responsive candidate and its visual/corpus/collector/continuation importers
+returned **84 passed in 88.64 seconds**, no failures or skips, on Python 3.11.16
+at `/tmp/chimera-c0-20261006/.venv/bin/python`, importing
+`/tmp/ghimera-responsive-visuals-20261007/src/ghimera`. Source/tests/examples
+were frozen during the run. Witnesses include native captions, bounded width/
+density/lazy/picture selection, malformed URLs, exact archive replay, unchanged
+legacy wire shape, every primary Pacific OCR route, and actual English Tesseract
+execution followed by SQLite/FAISS retrieval of the retained OCR/image anchors.
+The model wire uses credential-free loopback replies, not a real semantic model.
+Full responsive-candidate gate and publication remain pending.

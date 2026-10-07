@@ -1,5 +1,13 @@
 # Infrastructure readiness review — 7 October 2026
 
+This is the baseline assessment before the unreleased concurrent collection,
+native corpus, automatic handoff and responsive-image candidates. Its original
+missing-feature list below is historical, not a current implementation inventory.
+Use [PRD_INFRASTRUCTURE.md](PRD_INFRASTRUCTURE.md),
+[EVIDENCE_CORPUS.md](EVIDENCE_CORPUS.md), [VISUALS.md](VISUALS.md) and
+[CONCURRENT_COLLECTION.md](CONCURRENT_COLLECTION.md) for current candidate
+coverage and still-open quality/service requirements.
+
 ## Intended product and verdict
 
 Ghimera is a standalone, intent-driven research collector: discover permitted

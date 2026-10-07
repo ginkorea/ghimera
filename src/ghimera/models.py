@@ -33,7 +33,7 @@ from ghimera.semantic_types import (
 )
 from ghimera.source_session_types import SourceSessionUse
 from ghimera.transport_types import TransportEvidence
-from ghimera.visual_types import ImageEvidence
+from ghimera.visual_types import ImageCandidate, ImageEvidence
 
 NonEmpty = Annotated[str, Field(min_length=1)]
 NonNegative = Annotated[int, Field(strict=True, ge=0)]
@@ -291,6 +291,28 @@ class DocumentSource(Record):
                 for image in self.images
             ):
                 raise ValueError("visual evidence must bind its exact policy and limits")
+            selections: dict[str, tuple[ImageCandidate, ...]] = {}
+            for image in self.images:
+                selected = image.candidate.responsive
+                if selected is None:
+                    if config.visuals.responsive is not None:
+                        raise ValueError("responsive images require their source selection record")
+                    continue
+                if (
+                    config.visuals.responsive is None
+                    or selected.policy_sha256 != config.visuals.responsive.identity
+                ):
+                    raise ValueError("responsive selection must bind its effective policy")
+                from ghimera.image_candidates import image_candidates_from_markup
+
+                markup = self.rendered.html if self.rendered is not None else self.raw
+                encoding = selected.markup_encoding
+                if encoding not in selections:
+                    selections[encoding] = image_candidates_from_markup(
+                        self.url, self.raw, markup, encoding, config.visuals
+                    )
+                if image.candidate not in selections[encoding]:
+                    raise ValueError("responsive selection must replay from the retained markup")
         if self.human_browser is not None:
             self.human_browser.validate_policy(config.human_browser)
         if self.local_input is not None:

@@ -1,0 +1,14 @@
+# Non-active fragment for VisualConfig.responsive. Merge it explicitly into a
+# visual recipe; it installs nothing and does not change a running collector.
+schema = "ghimera.responsive-images/1"
+selection = "largest_within_bounds"
+srcset_attributes = ["data-srcset", "srcset"]
+url_attributes = ["data-src", "src"]
+# Capture declared art-directed alternatives, not a claim they match a viewport.
+# Use unconditional_only if conditional picture sources are unwanted.
+picture_media = "all_declared"
+max_attribute_chars = 16384
+max_variants_per_attribute = 32
+max_picture_sources = 8
+max_declared_width = 4096
+max_declared_density = 3.0

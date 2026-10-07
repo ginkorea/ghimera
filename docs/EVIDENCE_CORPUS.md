@@ -1,8 +1,7 @@
 # Durable native evidence corpus
 
-Status: native corpus source at `7733285` passed the full gate; the subsequent
-automatic collector handoff is a separate candidate with bounded checks passed
-and its own full gate pending. This
+Status: native corpus source at `7733285` and the subsequent automatic collector
+handoff at `3b21a7a` passed their respective full gates. Both are unreleased. This
 does not close the infrastructure PRD's language/model quality, operation
 recovery, service, refresh or delivery-outbox requirements.
 
@@ -177,7 +176,15 @@ The first facade-only run returned four passes and one failed retrieval assertio
 the protocol fixture assigns orthogonal vectors to plural `ports` and the source's
 singular `port`. The corrected witness queries retained native text and validates
 each returned passage against its original; no threshold, source binding or
-quality criterion was relaxed. Full release/package acceptance remains pending.
+quality criterion was relaxed.
+
+The full `scripts/gate.sh` at frozen `3b21a7a` subsequently returned **865 passed
+in 734.20 seconds**, no failures or skips, on Python 3.11.16 at
+`/tmp/chimera-c0-20261006/.venv/bin/python`, importing
+`/tmp/ghimera-automatic-corpus-20261007/src/ghimera`. Ruff/format and strict mypy
+passed, and the offline lock checked 142 packages. This includes the automatic
+handoff; the subsequent responsive-image candidate was not in that gate.
+Versioned package publication and real model/language acceptance remain pending.
 
 Witnesses include actual SQLite/compiled FAISS, fresh-process query and original
 readback, idempotent appends, native Japanese span coverage, pending append
@@ -203,5 +210,5 @@ can establish durability and source bindings, not multilingual model accuracy.
 Simplified/Traditional Chinese, Japanese, Korean, Tagalog/Filipino and the other
 Pacific priorities require representative native and cross-language retrieval
 checks on the actually admitted encoder. The example's name is a placeholder,
-not model admission. Automatic collector/service wiring, hybrid/reranked context,
+not model admission. Unattended service wiring, hybrid/reranked context,
 long-running refresh and scalable corpus-size acceptance remain open.
