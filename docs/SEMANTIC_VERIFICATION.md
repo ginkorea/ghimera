@@ -98,7 +98,14 @@ quarantine, provenance, cancellation, budgets, journal/archive replay and
 gap-driven planner requests. They do not establish actual extraction recall,
 role accuracy, entailment or reviewer error correlation. The earlier actual
 Chinese-PDF trials remain failures, not retroactively accepted results.
-Next acceptance uses pinned, distinct served models and the retained official
-native document, checking rejected and accepted proposals against the source.
+The subsequent [real-model two-phase diagnostic](ORGANIZATION_INDEPENDENT_EVIDENCE.md)
+used pinned, distinct served families over the retained official native
+document. Original-proposal review, quarantine and graph replay worked, but
+both models accepted some abstract concepts as organizations, the reviewer
+also made a false-negative native-text judgment, and two windows remained
+unresolved. It is not a complete live `Collector` run or organization-quality
+acceptance. Next acceptance must distinguish role/entailment support from
+simple string presence and measure these source-bound failures without
+rewriting the original responses.
 Chart arrows, alias/temporal resolution, multi-run expansion, external graph
 publication and representative OCR/Marker acceptance remain separate gaps.

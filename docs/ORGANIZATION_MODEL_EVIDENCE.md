@@ -2,6 +2,10 @@
 
 Date: 6 October 2026. Status: **not accepted for organization-graph accuracy**.
 These bounded checks used actual model responses, not fixture proposals.
+Trials 01–09 are recorded here. The subsequent distinct-family extraction and
+review diagnostic is in [ORGANIZATION_INDEPENDENT_EVIDENCE.md](ORGANIZATION_INDEPENDENT_EVIDENCE.md):
+it retains source-local observations but exposes role/entailment errors, so it
+does not close organization-quality acceptance either.
 
 ## Retained source and recipe
 
@@ -131,10 +135,11 @@ These checks establish implementation invariants, not real-model quality.
 
 ## Next acceptance boundary
 
-The native-surface/index distinction and explicit versioned generation controls
-are now implemented and observed. Next, supply configured entity/relation
-definitions and independent role/entailment checks, then evaluate real
-source-grounded proposals and omissions. Preserve native text and failure records;
+The native-surface/index distinction, explicit versioned generation controls,
+configured definitions and independent review are implemented and observed.
+Trial 10 now evaluates actual source-grounded proposals and omissions; its
+retained model agreement still fails role/entailment quality checks. Preserve
+native text and failure records;
 do not silently normalize model text into evidence or accept concepts as actors.
 Real entity/relationship accuracy, entailment, coverage, alias/temporal
 resolution and visual-chart handling remain open in

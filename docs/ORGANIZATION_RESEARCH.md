@@ -111,9 +111,15 @@ that an entire organization has been exhaustively mapped.
    two empty windows are not entity completeness and role/span failures remain.
    Configured ontology definitions, distinct-model checks, quarantine and
    source-bound planning gaps are now implemented in unreleased source;
-   their real-model quality acceptance remains open. See
+   their real-model quality acceptance remains open. A tenth actual diagnostic
+   reviewed the retained proposals with a distinct pinned model family: 15
+   projected windows retained 54 mention observations and 12 model-asserted
+   relationships, but source inspection still found role/entailment errors
+   and two unresolved windows. Those are not 54 resolved entities or a
+   validated organization graph. See
    [SEMANTIC_VERIFICATION.md](SEMANTIC_VERIFICATION.md) and
-   [ORGANIZATION_MODEL_EVIDENCE.md](ORGANIZATION_MODEL_EVIDENCE.md).
+   [ORGANIZATION_MODEL_EVIDENCE.md](ORGANIZATION_MODEL_EVIDENCE.md), with the
+   latest results in [ORGANIZATION_INDEPENDENT_EVIDENCE.md](ORGANIZATION_INDEPENDENT_EVIDENCE.md).
 3. Alias/temporal identity and conflict preservation across real documents.
 4. Graph-driven research over a small explicitly scoped organizational subtree,
    proving that findings change its next research frontier: within-run source
