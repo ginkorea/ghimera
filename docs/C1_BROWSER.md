@@ -128,9 +128,11 @@ lifecycle acceptance.
 
 ## What is not closed
 
-Same-browser, human-assisted collection remains unimplemented. Its bounded
-implementation contract is [HUMAN_BROWSER.md](HUMAN_BROWSER.md); it must not
-be mislabeled as this isolated renderer or cookie-replay acceptance.
+Same-browser human-assisted Chromium capture is implemented in development
+source, with a paired DOM/provenance reader and real local-browser checks.
+Its FetchLadder/Collector, graph/archive/resume composition and real publisher
+acceptance remain open: [HUMAN_BROWSER.md](HUMAN_BROWSER.md). It must not be
+mislabeled as this isolated renderer or cookie-replay acceptance.
 
 Camoufox/nodriver fallback, public Tor browser corpus acceptance,
 publisher readiness policies and the 30-publisher C1

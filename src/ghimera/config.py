@@ -15,6 +15,7 @@ from ghimera.dedup_config import DedupConfig
 from ghimera.document_config import DocumentExtractionConfig
 from ghimera.extraction_config import ExtractionConfig
 from ghimera.graph_types import GraphConfig
+from ghimera.human_browser_types import HumanBrowserConfig
 from ghimera.journal_config import JournalConfig
 from ghimera.local_input_types import LocalInputConfig
 from ghimera.model_config import ModelBindingsConfig
@@ -131,6 +132,9 @@ class GhimeraConfig(BaseModel):
     document_extraction: DocumentExtractionConfig | None = None
     dedup: DedupConfig | None = None
     browser: BrowserConfig | None = None
+    human_browser: HumanBrowserConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     scoring: ScoringConfig | None = None
     search: SearxConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     references: ReferenceConfig | None = None

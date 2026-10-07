@@ -1,0 +1,27 @@
+# Non-active configuration fragment. Never attach to an ambient/first browser tab.
+# Replace endpoint and target with an explicitly selected dedicated Chromium tab.
+# The core capture adapter is implemented on the development line; Collector,
+# archive and graph composition are not wired yet. Collector refuses this recipe
+# rather than silently ignoring it. This fragment enables no browser by itself.
+[human_browser]
+schema = "ghimera.human-browser/1"
+adapter = "patchright_cdp"
+adapter_revision = "ghimera-human-chromium/1"
+driver_version = "1.63.0"
+session_id = "dedicated-research-session"
+control_endpoint = "ws://127.0.0.1:9222/devtools/browser/REPLACE-EXPLICIT-BROWSER-ID"
+target_id = "REPLACE-EXPLICIT-TARGET-ID"
+lifecycle = "caller_managed"
+network_boundary = "operator_managed_browser"
+declared_route = "direct"
+assistance_reasons = ["challenge_not_solved", "login_wall", "paywall"]
+max_assistance_attempts = 2
+timeout_seconds = 180.0
+assistance_timeout_seconds = 90.0
+cleanup_timeout_seconds = 5.0
+max_dom_bytes = 2097152
+
+[[human_browser.origins]]
+origin = "https://publisher.example"
+path_prefixes = ["/research", "/login"]
+allow_http = false

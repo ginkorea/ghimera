@@ -81,10 +81,14 @@ class BoundedHeaders:
 
 
 def page_barrier(page: Page) -> RefusalCode | None:
+    return html_barrier(page.content_type, page.body)
+
+
+def html_barrier(content_type: str, content: bytes) -> RefusalCode | None:
     """Refuse explicit interstitials, not ordinary reporting *about* challenges."""
-    if page.content_type != "text/html":
+    if content_type not in {"text/html", "application/xhtml+xml"}:
         return None
-    body = page.body.decode("utf-8", errors="replace").lower()
+    body = content.decode("utf-8", errors="replace").lower()
     # Entitlement walls take precedence even when the login form embeds CAPTCHA.
     if "type=" in body and "password" in body and "sign in to continue" in body:
         return RefusalCode.LOGIN_WALL

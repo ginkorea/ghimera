@@ -47,6 +47,11 @@ class Collector:
     ) -> None:
         # Revalidate injected models: model_copy(update=...) can bypass guards.
         config = GhimeraConfig.model_validate(config.model_dump())
+        if config.human_browser is not None:
+            raise ValueError(
+                "human_browser capture is available through ChromiumHumanSession; "
+                "Collector composition and archive readers are not wired yet"
+            )
         if (
             config.http is None
             or config.research is None

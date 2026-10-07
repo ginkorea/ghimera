@@ -1,7 +1,9 @@
 # Human-assisted, same-browser collection
 
-Status: implementation contract, **not implemented or accepted**. This closes
-no acceptance row by itself. The existing authorized HTTP sessions and local
+Status: **core same-target Chromium capture implemented in development source**;
+Collector composition, archive/graph readers and real publisher acceptance are
+not complete. This does not close the full browser/collector acceptance row.
+The existing authorized HTTP sessions and local
 challenge gateways remain separate, working mechanisms. Their cookies are not
 silently imported into this mechanism.
 
@@ -41,6 +43,9 @@ browser is an operator-managed boundary, not the existing HTTP guard. Require
 explicit deployment egress control and record that distinction.
 
 ## Small contracts, existing collection owner
+
+This is the target composition. The concrete capture port is implemented;
+the FetchLadder/Collector connections below remain subsequent integration work.
 
 ```mermaid
 classDiagram
@@ -134,6 +139,88 @@ unobserved browser bytes or requests as zero.
 No new model admission is required for the first three steps. Real intent
 quality still needs the separately configured actual model/search services.
 Do not weaken semantic validation to make browser acceptance appear complete.
+
+## Implemented core API and limits
+
+`HumanBrowserConfig` is an optional recipe at the existing `GhimeraConfig`
+boundary. Its omission preserves legacy serialized recipes. The
+[non-active fragment](../examples/human-browser.toml) contains explicit example
+choices, not library defaults. The explicit local WebSocket debugger URL and
+target are caller inputs; discovery of a first tab, default profile or browser
+port is not implemented. Keep the local control endpoint/private recipe private;
+captures retain the policy digest, not the control URL.
+
+`ChromiumHumanSession(config, assistant=human_port)` implements the narrow
+`AuthorizedBrowserSession.capture(url)` port. Each operation connects to the
+configured local Chromium endpoint, binds the exact target ID, navigates that
+target, reads bounded UTF-8 DOM bytes in an isolated JavaScript world and, when
+needed, calls the application-supplied `HumanAssistant.assist(request)` port.
+The adapter supplies no credential form-filler, CAPTCHA clicks or challenge
+solver. A configured assistance mechanism without a bound port refuses before
+contact. The caller can also configure zero assistance attempts/reasons and use
+an already entitled session.
+
+The human's decision must bind the exact immutable request digest, capture ID,
+target, URL, policy, observed barrier DOM hash and attempt. A resume signal does
+not suppress another barrier or expand capture scope. Requests and captures are
+deadline-bounded, and the same adapter instance serializes its one target.
+Separate instances must not share that target concurrently: lifecycle ownership
+is the application's, not a package-global registry.
+
+Every capture disconnects its own driver without closing the caller's browser
+or context or clearing cookies. Decline, timeout, stale decisions, exhausted
+assistance, callback errors and cancellation retain their observations and
+actual DOM bytes read. The success evidence accounts discarded assisted
+interstitials as well as the final retained DOM. Cookie/header values, storage
+state and other tabs' content are not read into the evidence. Source content
+can itself be private; this is not a redaction mechanism.
+
+`BrowserCapture` stores only browser-observed DOM with a digest and exact
+content binding, not a fictional HTTP status/raw-response body. It has a paired
+JSON reader and rejects changed DOM, policy/target changes, invalid assistance
+ordering and hidden discarded-DOM spend. It reports subresource request/byte
+counts as **unknown**, not zero. The operator owns browser egress, ongoing
+JavaScript, redirects and subresource/network bounds. This core does not claim
+the parent HTTP client's DNS/redirect/robots enforcement or network isolation.
+
+Direct routing is explicitly **operator-declared, not independently verified**.
+Tor configuration refuses before attachment: browser attachment alone cannot
+prove Tor routing or prevent direct fallback. The existing guarded Tor HTTP
+route remains separate. Native PDF/download capture, passive-driver alternatives
+and transport verification are still required follow-ups, not silent HTML
+substitutes.
+
+The concrete `Collector` currently refuses a recipe selecting `human_browser`
+with an explicit not-wired error. It cannot silently ignore an enabled capture
+recipe. Next work integrates the capture through FetchLadder accounting, native
+extraction and every document/ledger/graph/archive/resume reader **before**
+turning on this source kind in complete collection runs. No source or full
+collector release is claimed by this core implementation.
+
+## Bounded development evidence
+
+On 7 October 2026 UTC, the new adapter plus existing HTTP, source-session,
+Collector/command, fetch conformance and package-boundary checks passed
+**98 tests, zero failed/skipped**, in 106.92 seconds using
+`/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16), importing
+`/tmp/chimera-c0-20261006/src/ghimera/__init__.py`. After explicit isolated-world
+reading and additional exact non-first-tab/tamper cases, the final human-browser
+module passed **24 tests, zero failed/skipped**, in 30.27 seconds on that same
+interpreter and import path. Ruff passed over all source/tests; strict mypy
+passed over 100 source files. These are separate runs, not additive coverage
+counts. The earlier complete 696-test recovery gate predates this adapter and
+does not verify it; a new complete package gate remains required before merge.
+
+The browser checks used installed real Chromium with owned temporary profiles
+and loopback fixture source/control endpoints, not mocked browser DOMs. A
+fixture-only assistant clicked a controlled local button to simulate human
+completion; it is not a real CAPTCHA/login or publisher acceptance. Evidence
+covers same-tab/session continuity, retained session cookies, capture/readers,
+discarded-interstitial spend, stale decisions, decline, timeout, callback error,
+cancellation, exact target selection with an unrelated first tab, scope refusal,
+bounded DOM reads, page-script encoder tampering and caller-browser survival.
+Ambient platform tokens were unset. No external collection, model/GPU calls,
+pool changes, publication or deployment occurred.
 
 ## Vendor interface evidence
 
