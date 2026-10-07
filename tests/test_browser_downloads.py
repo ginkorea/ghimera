@@ -60,6 +60,7 @@ def download_site(
     media="application/octet-stream",
     assisted=False,
     slow_body=None,
+    landing_html=None,
 ):
     counts = Counter()
 
@@ -73,6 +74,8 @@ def download_site(
                     b"<article>Download the original report.</article>"
                     b"<a id='get-report' href='/research/report' download>Download</a>"
                 )
+                if landing_html is not None:
+                    body = landing_html
                 if assisted:
                     body = (
                         b"<title>Just a moment</title><p>Verify you are human</p>"

@@ -77,12 +77,21 @@ class BrowserDownloadConfig(BaseModel):
     adapter_revision: Literal["ghimera-patchright-download-stream/1"]
     max_file_bytes: Annotated[int, Field(strict=True, gt=0)]
     read_chunk_bytes: Annotated[int, Field(strict=True, gt=0)]
-    actions: Annotated[tuple[BrowserDownloadAction, ...], Field(min_length=1)]
+    actions: tuple[BrowserDownloadAction, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+    navigation_content_types: tuple[DocumentMime, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
 
     @model_validator(mode="after")
     def unique_actions(self) -> "BrowserDownloadConfig":
+        if not self.actions and not self.navigation_content_types:
+            raise ValueError("downloads require explicit actions or navigation formats")
         if len({action.source_url for action in self.actions}) != len(self.actions):
             raise ValueError("each browser download source has one action owner")
+        if len(set(self.navigation_content_types)) != len(self.navigation_content_types):
+            raise ValueError("navigation download formats must be unique")
         return self
 
 
@@ -379,7 +388,18 @@ class BrowserDownloadEvidence(BaseModel):
             (item for item in policy.downloads.actions if item.source_url == checked.request_url),
             None,
         )
-        if action is None or (
+        if action is None:
+            if checked.content_type not in policy.downloads.navigation_content_types:
+                raise ValueError("unmapped navigation downloads require their admitted format")
+            # The actual frontier request, not an invented/configured action,
+            # binds direct navigation. No locator or parent click is claimed.
+            action = BrowserDownloadAction(
+                source_url=checked.request_url,
+                navigation_url=checked.request_url,
+                selector=None,
+                content_type=checked.content_type,
+            )
+        if (
             checked.policy_digest != policy.content_digest()
             or checked.session_id != policy.session_id
             or checked.target_id != policy.target_id
@@ -449,7 +469,7 @@ class BrowserDownloadCapture(BaseModel):
 
 
 class AuthorizedBrowserSession(Protocol):
-    """Each capture detaches its own driver; it never closes a borrowed browser."""
+    """Each capture releases only its owned resources, never a borrowed browser."""
 
     def validate_config(self, config: HumanBrowserConfig) -> None: ...
 

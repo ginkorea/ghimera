@@ -194,9 +194,20 @@ class HumanBrowserSession(ABC):
         )
         if action is not None:
             return await self._download(browser, page, url, action, work)
+        if self.config.downloads is not None and self.config.downloads.navigation_content_types:
+            return await self._download(browser, page, url, None, work)
         await page.goto(
             url, wait_until="domcontentloaded", timeout=self.config.timeout_seconds * 1000
         )
+        return await self._capture_dom(browser, page, url, work)
+
+    async def _capture_dom(
+        self,
+        browser: BrowserIdentity,
+        page: "Page",
+        url: str,
+        work: CaptureWork,
+    ) -> BrowserCapture:
         capture_id = uuid.uuid4().hex
         while True:
             dom, final_url, content_type = await self._dom(page, work)
@@ -238,34 +249,39 @@ class HumanBrowserSession(ABC):
         browser: BrowserIdentity,
         page: "Page",
         url: str,
-        action: BrowserDownloadAction,
+        action: BrowserDownloadAction | None,
         work: CaptureWork,
-    ) -> BrowserDownloadCapture:
+    ) -> BrowserCapture | BrowserDownloadCapture:
         from patchright.async_api import Error
 
-        from ghimera.browser_download_stream import observe_document_media, read_download
+        from ghimera.browser_download_stream import admit_download_media, read_download
 
         policy = self.config.downloads
-        if policy is None or (
-            work.scope is not None and not work.scope.permits(action.navigation_url)
-        ):
+        navigation_url = action.navigation_url if action is not None else url
+        selector = action.selector if action is not None else None
+        if policy is None or (work.scope is not None and not work.scope.permits(navigation_url)):
             raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+        if action is None and not policy.navigation_content_types:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         capture_id = uuid.uuid4().hex
         initiator_url: str | None = None
-        if action.selector is not None:
-            await page.goto(action.navigation_url, wait_until="domcontentloaded")
+        if selector is not None:
+            await page.goto(navigation_url, wait_until="domcontentloaded")
             while True:
-                dom, final_url, content_type = await self._dom(page, work)
-                if (barrier := html_barrier(content_type, dom)) is None:
+                dom, final_url, dom_content_type = await self._dom(page, work)
+                if (barrier := html_barrier(dom_content_type, dom)) is None:
                     initiator_url = final_url
                     break
                 await self._assist(url, final_url, capture_id, barrier, dom, work)
         download: Download | None = None
         owned_downloads: list[Download] = []
+        ready: asyncio.Future[Download] = asyncio.get_running_loop().create_future()
 
         def observed(item: "Download") -> None:
-            if item.page == page and item.url == action.source_url:
+            if item.page == page and item.url == url:
                 owned_downloads.append(item)
+                if not ready.done():
+                    ready.set_result(item)
 
         page.on("download", observed)
         dom_spend = work.bytes_read
@@ -274,29 +290,31 @@ class HumanBrowserSession(ABC):
                 raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
             # Register before the action. A refused/cancelled capture is never
             # retried automatically through another session or by another click.
-            async with page.expect_download(
-                predicate=lambda item: item.url == action.source_url,
-                timeout=self.config.timeout_seconds * 1000,
-            ) as event:
-                if action.selector is not None:
-                    if not self.config.permits(page.url) or (
-                        work.scope is not None and not work.scope.permits(page.url)
-                    ):
-                        raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
-                    await page.locator(action.selector).click(
-                        timeout=self.config.timeout_seconds * 1000
+            if selector is not None:
+                if not self.config.permits(page.url) or (
+                    work.scope is not None and not work.scope.permits(page.url)
+                ):
+                    raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+                await page.locator(selector).click(timeout=self.config.timeout_seconds * 1000)
+            else:
+                attachment_navigation = False
+                try:
+                    await page.goto(
+                        url,
+                        wait_until="domcontentloaded" if action is None else "commit",
+                        timeout=self.config.timeout_seconds * 1000,
                     )
-                else:
-                    try:
-                        await page.goto(
-                            url, wait_until="commit", timeout=self.config.timeout_seconds * 1000
-                        )
-                    except Error as exc:
-                        # Chromium reports an attachment navigation as aborted.
-                        # The separately awaited event, URL and file prove capture.
-                        if "ERR_ABORTED" not in str(exc) and "Download is starting" not in str(exc):
-                            raise
-            download = await event.value
+                except Error as exc:
+                    # An aborted navigation alone never proves a file. It still
+                    # requires the separately observed exact-page/URL event.
+                    if "ERR_ABORTED" not in str(exc) and "Download is starting" not in str(exc):
+                        raise
+                    attachment_navigation = True
+                if action is None and not attachment_navigation and not ready.done():
+                    # Ordinary HTML follows its unchanged same-session DOM path:
+                    # no timeout waiting for a nonexistent download and no refetch.
+                    return await self._capture_dom(browser, page, url, work)
+            download = await ready
             if (
                 download.page != page
                 or not self.config.permits(download.url)
@@ -310,13 +328,17 @@ class HumanBrowserSession(ABC):
                 spend=work,
                 cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
             )
+            content_type, media_observation = admit_download_media(
+                body,
+                (action.content_type,) if action is not None else policy.navigation_content_types,
+            )
             evidence = BrowserDownloadEvidence(
                 schema="ghimera.browser-download-evidence/1",
                 acquisition="browser_download",
                 capture_id=capture_id,
                 request_url=url,
                 final_url=download.url,
-                navigation_url=action.navigation_url,
+                navigation_url=navigation_url,
                 initiator_url=initiator_url,
                 session_id=self.config.session_id,
                 target_id=self.config.target_id,
@@ -332,8 +354,8 @@ class HumanBrowserSession(ABC):
                 browser_subresource_bytes=None,
                 browser_subresource_requests=None,
                 browser_download_bytes=None,
-                content_type=action.content_type,
-                media_observation=observe_document_media(body, action.content_type),
+                content_type=content_type,
+                media_observation=media_observation,
                 file_sha256=hashlib.sha256(body).hexdigest(),
                 file_bytes=len(body),
                 collector_file_bytes_read=work.bytes_read - dom_spend,
@@ -345,6 +367,8 @@ class HumanBrowserSession(ABC):
             return result
         finally:
             page.remove_listener("download", observed)
+            if not ready.done():
+                ready.cancel()
             if download is None and owned_downloads:
                 download = owned_downloads[0]
             if download is not None:

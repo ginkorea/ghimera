@@ -19,6 +19,18 @@ URLs must fit the existing exact-origin/path policy and the run's source scope.
 The fetch owner checks robots policy for both the file and the landing page.
 Nothing discovers credentials, browser profiles or unrelated tabs.
 
+For initially unknown attachment URLs, opt into `navigation_content_types` in
+that same policy; see `examples/browser-navigation-downloads.toml`. Explicit
+actions may be omitted. URLs come from the existing configured discovery and
+scored native-link frontier, not a separate URL list. Ordinary HTML is captured
+once through the same DOM path, without waiting for a nonexistent file event.
+If navigation actually produces an exact-page/URL download event, the bounded
+file stream is inspected against only the admitted formats. URL suffixes,
+suggested filenames and a model's guess cannot admit file bytes. Empty/duplicate
+format selections and a policy containing neither actions nor formats refuse
+at configuration time. Omitted navigation formats preserve the explicit-action
+recipe's serialized identity.
+
 Downloads use `adapter = "patchright_page"`. The application supplies its
 actual Patchright `Page` to `BoundPageHumanSession`, then injects that session
 into `Collector(..., human_browser_session=session)`. It does not configure a
@@ -94,13 +106,14 @@ candidate does not substitute the viewer's DOM for original PDF bytes. A
 configured download button may work when it produces the exact admitted file
 event, but unknown viewer controls are not clicked speculatively.
 
-Autonomous attachment discovery is the next implementation step, not a config
-file containing every expected document URL. It must consume links observed in
-retained parent content, admit them through the existing scoped/scored frontier,
-and retain the parent hash plus actual link/action observation beside the file.
+Scored native HTML links now feed initially unknown navigation downloads.
+The retained parent extraction includes the link, and discovery/retrieval graph
+edges bind the parent document hash to the child's source and captured file.
 Operational policy supplies allowed formats, origins, path limits and budgets;
 the source-derived action is run state, not a mutation of that policy. A model
 may prioritize an observed attachment but may not invent a source URL or locator.
+Autonomous discovery of publisher-specific download controls, inline PDFs,
+redirected file URLs and pagination remains separate work.
 
 Its acceptance must include an initially unknown PDF link, an inline PDF, a
 publisher link that redirects to a file, a same-session entitled attachment,
@@ -145,3 +158,18 @@ adapter ordering contract, and the final config example. It does not close
 the independent publisher, autonomous discovery, inline-document, Tor-browser
 or multilingual-quality acceptance requirements above. No publication follows
 from this gate alone.
+
+The subsequent navigation-format extension passed **53 browser regressions in
+116.73 seconds**, no failures or skips, on the same Python 3.11.16 interpreter
+and owned checkout above. It includes actual initially unknown PDF/DOCX downloads
+and a native HTML parent flowing through the scored frontier into downloaded
+PDF parsing and graph/harvest readback. Strict mypy passed all 145 source files.
+This is not a new full-package gate. The final example and stronger graph-edge
+assertions passed the bounded native module recheck: **5 passed in 17.74 seconds**,
+no failures or skips, on the same interpreter/checkout. The graph assertions
+prove the discovery edge reaches the retained parent version and the retrieval
+edge binds the child's source to its exact browser capture. Ruff and formatting
+passed. No merge or publication is claimed.
+The initial extension check exposed a missing run ID in its graph-enabled test
+harness; that check did not reach collection. The corrected passing run supplied
+the required identity rather than weakening graph behavior.

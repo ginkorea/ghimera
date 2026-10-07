@@ -43,6 +43,19 @@ def observe_document_media(
     raise GhimeraRefused(RefusalCode.CONTENT_TYPE_UNWANTED)
 
 
+def admit_download_media(
+    body: bytes, formats: tuple[DocumentMime, ...]
+) -> tuple[DocumentMime, Literal["pdf_header_at_start", "docx_archive_members"]]:
+    """Only actual bytes can select one of the operator-admitted formats."""
+    for mime in formats:
+        try:
+            observation = observe_document_media(body, mime)
+        except GhimeraRefused:
+            continue
+        return mime, observation
+    raise GhimeraRefused(RefusalCode.CONTENT_TYPE_UNWANTED)
+
+
 async def read_download(
     download: "Download",
     *,

@@ -1,0 +1,9 @@
+# Non-active fragment: merge into an explicitly scoped patchright_page policy.
+# Existing scored links supply URLs. No credentials, browser or storage is made.
+# The application enables downloads and injects its dedicated caller-owned Page.
+[human_browser.downloads]
+schema = "ghimera.browser-downloads/1"
+adapter_revision = "ghimera-patchright-download-stream/1"
+max_file_bytes = 16777216
+read_chunk_bytes = 65536
+navigation_content_types = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
