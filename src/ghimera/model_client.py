@@ -440,13 +440,27 @@ class SelfHostedModel:
                     else ""
                 )
                 + (
+                    " Identity groups are unresolved hypotheses, not merged or canonical entities. "
+                    "Same native surface and role do not prove global identity. Alias links remain "
+                    "model assertions. Disputes are potentially competing claims under configured "
+                    "exclusivity, not proof that a source is wrong. Unknown time stays unknown. "
+                    "Research source-bound identity and temporal support; copy an exact identity "
+                    "or dispute reference into graph_refs when it motivates a query. Never turn "
+                    "omitted groups or unchecked pairs into a completeness claim."
+                    if prompt.task == "plan"
+                    and prompt.graph_context is not None
+                    and prompt.graph_context.identity is not None
+                    else ""
+                )
+                + (
                     " Supplied gaps are independent model assessments of quarantine or "
                     "incomplete coverage, not new factual entities. Investigate their native "
                     "source windows and missing support. Cite a gap's exact ID in graph_refs "
                     "when it motivates a query; do not treat excluded proposals as facts."
                     if prompt.task == "plan"
                     and prompt.graph_context is not None
-                    and prompt.graph_context.schema_version == "ghimera.planning-graph/2"
+                    and prompt.graph_context.schema_version
+                    in {"ghimera.planning-graph/2", "ghimera.planning-graph/3"}
                     else ""
                 )
                 + (

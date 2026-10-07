@@ -18,6 +18,7 @@ from ghimera.graph_planning_types import (
     PlanningSource,
 )
 from ghimera.graph_types import GraphEdge, GraphRecord
+from ghimera.identity_planning import build_identity_view
 from ghimera.models import Document, LedgerRow
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
@@ -121,7 +122,7 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
         }
         used.update(gap.source.document_id for gap in visible_gaps)
         return PlanningGraph(
-            schema="ghimera.planning-graph/2" if policy.max_gaps else "ghimera.planning-graph/1",
+            schema=policy.view_schema,
             policy_digest=policy.content_digest(),
             population_digest=digest,
             entities=selected,
@@ -132,6 +133,11 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
             omitted_evidence_chars=total_chars - evidence_size(selected, edges),
             gaps=visible_gaps,
             omitted_gaps=len(gaps) - len(visible_gaps),
+            identity=build_identity_view(
+                policy.identity, tuple(item.node for item in selected), edges
+            )
+            if policy.identity is not None
+            else None,
         )
 
     def fits(candidate: PlanningGraph) -> bool:
@@ -185,8 +191,7 @@ def validate_context(
         raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT) from None
     if (
         context.policy_digest != policy.content_digest()
-        or context.schema_version
-        != ("ghimera.planning-graph/2" if policy.max_gaps else "ghimera.planning-graph/1")
+        or context.schema_version != policy.view_schema
         or len(context.entities) > policy.max_entities
         or len(context.relations) > policy.max_relations
         or len(context.gaps) > policy.max_gaps
@@ -194,6 +199,10 @@ def validate_context(
         or len(context.model_dump_json()) > policy.max_context_chars
         or any(entity.node.role not in policy.entity_roles for entity in context.entities)
         or any(edge.rule not in policy.relation_rules for edge in context.relations)
+    ):
+        raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+    if policy.identity is not None and context.identity != build_identity_view(
+        policy.identity, tuple(item.node for item in context.entities), context.relations
     ):
         raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
     docs = {(doc.url, doc.sha256): doc for doc in documents}

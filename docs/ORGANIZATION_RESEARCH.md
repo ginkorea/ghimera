@@ -125,7 +125,12 @@ that an entire organization has been exhaustively mapped.
    concept/type errors persisted. Its three retained mention occurrences and
    zero organizational relationships are not a validated organizational graph.
    See [ORGANIZATION_FACTORIZED_EVIDENCE.md](ORGANIZATION_FACTORIZED_EVIDENCE.md).
-3. Alias/temporal identity and conflict preservation across real documents.
+3. Alias/temporal identity and conflict preservation across real documents:
+   source now includes an explicit identity-aware planning view with same-name
+   and asserted-alias hypotheses, potentially competing dated claims and
+   follow-up query references. Original observations are retained, not merged.
+   Actual identity decisions/merge-split and real-document quality acceptance
+   remain open. See [IDENTITY_PLANNING.md](IDENTITY_PLANNING.md).
 4. Graph-driven research over a small explicitly scoped organizational subtree,
    proving that findings change its next research frontier: within-run source
    implementation and controlled composed-loop checks exist; real subtree/model

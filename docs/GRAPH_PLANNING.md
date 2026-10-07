@@ -30,6 +30,14 @@ coverage/quarantine assessments and query references, without turning excluded
 proposals into graph entities. See [semantic verification](SEMANTIC_VERIFICATION.md).
 Version-1 policy, serialization and prompt remain unchanged.
 
+For identity-aware research, select the explicit version-3
+[identity policy](../examples/graph-planning-identity.toml). It includes the
+version-2 gap view and adds unresolved identity/dispute questions described in
+[identity-aware planning](IDENTITY_PLANNING.md). Same-name and asserted-alias
+groups retain the original source-local IDs. They are candidates for research,
+not canonical entities or evidence-preserving merge/split decisions. Predicate
+exclusivity, unknown-time handling and question/pair bounds are configuration.
+
 Newest acknowledged relationships are considered first. Each admitted relation
 keeps both source-local endpoints and complete native quotations. Remaining
 space can hold observed mentions whose relationships are still unknown. A limit

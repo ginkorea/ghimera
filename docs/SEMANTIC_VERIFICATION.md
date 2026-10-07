@@ -118,7 +118,9 @@ stages. This is not recovery of arbitrary interrupted external calls.
 ## Follow-up planning
 
 When graph-aware research is configured, reviewed extraction requires
-`ghimera.graph-planning/2`; use [the gap example](../examples/graph-planning-gaps.toml).
+`ghimera.graph-planning/2` or `/3`; use
+[the gap example](../examples/graph-planning-gaps.toml) or
+[the identity-aware example](../examples/graph-planning-identity.toml).
 This produces `ghimera.planning-graph/2` with bounded, newest-first gap records
 for incomplete/uncertain reviewed coverage, quarantined items, held edges or
 an unread native tail. Records identify the retained source/window, reviewer
@@ -126,7 +128,7 @@ model/revision/request and counts; excluded concepts do not become entities.
 Stable gap IDs can motivate follow-up queries through `graph_refs`.
 Configured gap/count/context limits retain explicit omission counts.
 Readers replay planning views from earlier acknowledged semantic observations.
-The planner receives `ghimera-graph-planning/2`, explicitly marking gaps as
+The planner receives `ghimera-graph-planning/2` (or `/3` with identity questions), explicitly marking gaps as
 assessments, never facts. Existing planning/1 identities remain unchanged.
 
 ## Acceptance still required

@@ -85,6 +85,9 @@ It also admits hash-pinned owned PDF/DOCX seeds before intent planning through
 the same document pipeline. See [local inputs](docs/LOCAL_INPUTS.md).
 Configured [semantic extraction](docs/SEMANTIC_EXTRACTION.md) now produces
 native entity/relationship observations as source-local model assertions.
+Explicit [identity-aware planning](docs/IDENTITY_PLANNING.md) can turn repeated
+names, asserted aliases and potentially competing dated claims into source-bound
+follow-up research questions without merging the original nodes.
 These additions are not in the immutable `ghimera==0.3.0` artifacts. Alias
 resolution, graph-driven network expansion and organizational accuracy
 acceptance remain open, not claims of the existing research graph.

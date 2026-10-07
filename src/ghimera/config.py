@@ -211,10 +211,10 @@ class GhimeraConfig(BaseModel):
                 if (
                     self.research is not None
                     and self.research.graph_context is not None
-                    and self.research.graph_context.schema_version != "ghimera.graph-planning/2"
+                    and self.research.graph_context.schema_version == "ghimera.graph-planning/1"
                 ):
                     raise ValueError(
-                        "verified semantic planning requires graph-planning/2 gap reporting"
+                        "verified semantic planning requires graph-planning/2 or /3 gap reporting"
                     )
         if self.local_inputs is not None and (
             self.document_extraction is None
