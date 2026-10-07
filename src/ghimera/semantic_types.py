@@ -30,6 +30,7 @@ SEMANTIC_REVIEW_REVISION = "ghimera-semantic-verification/1"
 FACTORIZED_REVIEW_REVISION = "ghimera-semantic-verification/2"
 GROUNDED_REVIEW_REVISION = "ghimera-semantic-verification/3"
 BATCHED_REVIEW_REVISION = "ghimera-semantic-verification/4"
+ASSIGNED_ROLE_REVIEW_REVISION = "ghimera-semantic-verification/5"
 SEMANTIC_PROFILES = MappingProxyType(
     {
         "ghimera.semantics/1": (None, SEMANTIC_PROMPT_REVISION),
@@ -63,6 +64,9 @@ class SemanticVerificationConfig(GraphRecord):
     max_coverage_findings: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
     max_mentions_per_call: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
     max_relations_per_call: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
+    prompt_profile: Literal["assigned_role_checks"] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def coverage_bound(self) -> "SemanticVerificationConfig":
@@ -76,12 +80,18 @@ class SemanticVerificationConfig(GraphRecord):
             self.max_relations_per_call is not None
         ):
             raise ValueError("only verification/4 requires both explicit batch item limits")
+        if self.prompt_profile is not None and not batching:
+            raise ValueError("the assigned-role review profile requires explicit batching")
         return self
 
     @property
     def effective_prompt_revision(self) -> str:
         if self.schema_version == "ghimera.semantic-verification/4":
-            return BATCHED_REVIEW_REVISION
+            return (
+                ASSIGNED_ROLE_REVIEW_REVISION
+                if self.prompt_profile == "assigned_role_checks"
+                else BATCHED_REVIEW_REVISION
+            )
         if self.schema_version == "ghimera.semantic-verification/3":
             return GROUNDED_REVIEW_REVISION
         return (

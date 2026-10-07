@@ -227,6 +227,26 @@ GROUNDED_REVIEW_INSTRUCTIONS = (
     "inferred merely from empty proposals, rejected items or the finding limit."
 )
 
+ASSIGNED_ROLE_REVIEW_INSTRUCTIONS = (
+    " For each selected mention, find its assigned role from the original proposal "
+    "and the matching configured role_definitions entry. Test that exact assignment; "
+    "do not test every mention as an office or a person. named_entity asks whether "
+    "the native context identifies a specific instance under the configured entity "
+    "types, rather than an abstract idea, generic class, unnamed population or phrase "
+    "fragment. role asks whether that instance satisfies its ASSIGNED definition: "
+    "an institution need not be an office, an office need not have a named incumbent, "
+    "and an incumbent is not the office itself. A body's explicitly described "
+    "functions, membership or election in this source can identify a specific "
+    "institution. An explicit existential sentence is not required. Mere literal "
+    "presence, a familiar name or external knowledge is still insufficient. "
+    "State a separate source-grounded reason for each check; when source context "
+    "does not resolve the assigned type, use ambiguous instead of assuming support. "
+    "Before returning JSON, recompute each mention's overall verdict from its two "
+    "checks and each relation's verdict from its applicable checks: unsupported if "
+    "any applicable dimension is unsupported, otherwise ambiguous if any is ambiguous, "
+    "otherwise supported. Do not repair the proposed role or rewrite its assertions."
+)
+
 
 class WireMessage(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
@@ -515,6 +535,14 @@ class SelfHostedModel:
                     and semantic is not None
                     and semantic.verification is not None
                     and semantic.verification.schema_version == "ghimera.semantic-verification/2"
+                    else ""
+                )
+                + (
+                    ASSIGNED_ROLE_REVIEW_INSTRUCTIONS
+                    if prompt.task == "semantic_review"
+                    and semantic is not None
+                    and semantic.verification is not None
+                    and semantic.verification.prompt_profile == "assigned_role_checks"
                     else ""
                 )
                 + (

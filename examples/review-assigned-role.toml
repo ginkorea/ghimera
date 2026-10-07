@@ -1,0 +1,11 @@
+# NON-ACTIVE replacement for a caller's [semantics.verification] block.
+# Requires semantics/4 with complete caller-owned role/relation definitions.
+# Model pins, generation settings and global judge budgets belong to the recipe.
+# This starts no service, allocates no GPU and silently retries no failed call.
+schema = "ghimera.semantic-verification/4"
+prompt_profile = "assigned_role_checks"
+model_role = "reviewer"
+max_calls_per_run = 256
+max_mentions_per_call = 4
+max_relations_per_call = 2
+max_coverage_findings = 4

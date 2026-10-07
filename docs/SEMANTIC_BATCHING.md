@@ -31,6 +31,38 @@ request; an HTTP failure, invalid response, timeout or cancellation retains
 previous observations and the current attempted call, with no automatic retry.
 No semantic graph claims are projected from a partial batch.
 
+### Opt-in assigned-role questions
+
+The non-active [assigned-role example](../examples/review-assigned-role.toml)
+selects `prompt_profile = "assigned_role_checks"` inside verification/4.
+This explicitly changes the review prompt revision to
+`ghimera-semantic-verification/5` without changing extraction assertions,
+partitioning, output schemas, checks, spend ownership or complete-set projection.
+Omitting the field retains the exact original verification/4 prompt and
+serialized policy. Earlier verification profiles refuse this option.
+
+The clarification asks each review to locate the original mention's assigned
+role and its corresponding configured definition. An institution need not be
+an office or a person; an office need not have a named incumbent. Explicit native
+functions, membership or election can identify a specific body without a
+separate existential sentence. Literal presence or familiar names alone still
+do not establish the type. Each verdict must match all its required dimensions;
+the validator still rejects contradictory answers rather than repairing them.
+The profile addresses reasoning observed in trial 15; instructions alone do
+not establish real-model quality or full organization coverage.
+
+The assigned-role source gate on 7 October 2026 UTC used
+`/tmp/chimera-c0-20261006/.venv/bin/python`, Python 3.11.16, importing this
+checkout's `src/ghimera`. The complete `scripts/gate.sh` passed 631 tests,
+zero failed and zero skipped, in 534.41 seconds. Offline lock validation
+resolved 137 packages; lint and formatting passed for 141 files and strict
+typing for 95 source files. The installed browser was isolated and fixture
+servers were local; no model or remote challenge provider was used by the gate.
+The initial contract witness failed before implementation; its existing-prompt
+fingerprint remained unchanged after the fix. A broader sandboxed focused run
+timed out in fixture I/O and is not counted as a pass. This full source gate
+does not establish live quality, publication or deployment.
+
 ## Retained evidence and replay
 
 Actual responses remain `ghimera.semantic-review/3` observations, with explicit
