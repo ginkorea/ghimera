@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.4.2 — candidate
+
+- Caller-bound Chromium PDF/DOCX downloads reuse the existing bounded native
+  extraction, scoring, citation, graph, journal and archive path. The original
+  file and exact session/target/policy provenance remain distinct from HTTP
+  responses and PDF-viewer HTML. Cleanup removes only this operation's download;
+  caller tabs and browser lifetime remain untouched, including cancellation.
+- Explicit navigation-format admission lets the existing scored native-link
+  frontier collect initially unknown attachment URLs, without a static URL
+  list or ordinary-HTML download waits. Format admission uses actual file bytes,
+  not URL suffixes or filenames. Explicit action recipes keep their identities.
+- Application-supplied browser session injection through `Collector` and
+  `Collector.from_toml`. CDP DOM capture remains unchanged; working downloads
+  require the caller's actual Page/driver connection. Browser egress/storage
+  quota is operator-owned and unobserved network bytes are never reported as zero.
+
+Combined release gate, installed artifact acceptance and publication are pending.
+Inline PDFs, redirected file URLs, autonomous publisher-specific download
+controls, pagination, verified browser Tor networking and representative
+publisher/multilingual quality remain explicit infrastructure requirements.
+
 ## 0.4.1 — 2026-10-07
 
 - Explicit completed-result delivery outbox with durable claims, bounded

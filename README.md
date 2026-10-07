@@ -118,6 +118,15 @@ Tor routing and representative-publisher acceptance remain open. A bounded
 English/Traditional Chinese public-document capture is recorded in
 [publisher evidence](docs/C1_HUMAN_PUBLIC_EVIDENCE.md). See
 [human-assisted collection](docs/HUMAN_BROWSER.md).
+The 0.4.2 development candidate also captures actual PDF/DOCX downloads through
+the caller's selected `BoundPageHumanSession`, injected into `Collector`.
+An explicit format policy lets scored native links supply previously unknown
+file URLs; the collector does not need a hard-coded attachment list. Original
+file bytes enter the same extraction, citation, graph and archive path.
+Caller-owned tabs remain open, and unknown browser-network usage is not
+represented as zero. Inline PDF viewers and verified entitled-publisher/Tor
+compatibility remain separate acceptance work. See
+[browser downloads and configuration](docs/BROWSER_DOWNLOADS.md).
 It also admits hash-pinned owned PDF/DOCX seeds before intent planning through
 the same document pipeline. See [local inputs](docs/LOCAL_INPUTS.md).
 Configured [semantic extraction](docs/SEMANTIC_EXTRACTION.md) now produces
