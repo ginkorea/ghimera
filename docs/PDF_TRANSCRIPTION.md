@@ -1,13 +1,13 @@
 # Reviewed scanned-PDF transcription
 
 Development source, not a published or accuracy-accepted capability. The
-current public release remains 0.4.4. In particular, Simplified Chinese
+current public release remains 0.4.4; 0.4.5 is in release preparation. Simplified Chinese
 scanned-PDF quality is still unaccepted; protocol fixtures do not change that.
 
-The combined PDF/corpus development gate completed under Python 3.11.16 with 1,026 tests
+The final combined PDF/corpus/graph gate completed under Python 3.11.16 with 1,031 tests
 passed, zero failures/skips, plus Ruff, formatting, strict mypy (158 source files)
 and offline lock validation. This verifies the integrated protocol, accounting,
-cleanup and replay behavior before the graph follow-up below; scripted model
+cleanup and replay behavior including the graph follow-up below; scripted model
 replies are not OCR-quality evidence.
 
 The collector accepts an explicit `pdf_transcription` recipe beside its
@@ -89,12 +89,13 @@ Graph-aware follow-up planning checks spans through that same reading-binding
 contract rather than checking quote text alone.
 Harvest validation checks the compact reading against the retained full PDF
 evidence. Ordinary native node/evidence serialization remains unchanged. This
-follow-up is not included in the preceding test counts. Its five focused
+follow-up is included in the final combined count. Its five focused
 regressions passed under Python 3.11.16, including durable replay, semantic
 extraction, planning, page boundaries and native wire identity. The broader
 graph, planning, journal, resume and local-input selection passed 109 tests with
-no failures/skips under the same interpreter. Its combined gate is still
-required before publication.
+no failures/skips under the same interpreter. The final combined gate passed
+1,031 tests, zero failures/skips; installed-artifact and publication acceptance
+remain separate.
 
 ## Acceptance still required
 

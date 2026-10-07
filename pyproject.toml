@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ghimera"
-version = "0.4.4"
+version = "0.4.5"
 description = "Intent-driven web research with bounded collection and source-bound evidence"
 readme = "README.md"
 license = "MIT"

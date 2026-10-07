@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.5 — 2026-10-07
+
+- Explicit scanned-PDF transcription recipe with bounded offline page rendering,
+  caller-selected private transcription and independent review services, pinned
+  model/configuration identities and original-page retention. Uncertain or
+  truncated pages cannot promote a partial PDF. Native readings remain separate.
+- Reviewed machine text carries its exact source pages through answer citations,
+  durable corpus retrieval, semantic graph extraction/replay and graph-aware
+  planning. Compact graph references bind the full retained page/model evidence;
+  different reading recipes create distinct generated representations. Native
+  citation, passage and graph serialization identities remain unchanged.
+- Complete frozen-source gate: 1,031 passed, zero failures/skips under Python
+  3.11.16. Installed-artifact and publication readback remain separate checks.
+- This is model integration, not a validated multilingual OCR claim. Qwen-VL is
+  a configurable candidate, not bundled weights or an automatic fallback. The
+  Simplified Chinese character-quality control remains unaccepted. Publication
+  and complete gate evidence are tracked in [release acceptance](docs/RELEASE_045.md).
+
 ## 0.4.4 — 2026-10-07
 
 - Explicit caller-Page navigation policy admits each main-frame redirect before

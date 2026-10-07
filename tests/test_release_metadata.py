@@ -9,7 +9,7 @@ def test_release_identity_license_and_readme_are_declared():
     root = Path(__file__).resolve().parents[1]
     project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
     assert project["name"] == "ghimera"
-    assert project["version"] == "0.4.4"
+    assert project["version"] == "0.4.5"
     assert project["readme"] == "README.md"
     assert project["license"] == "MIT"
     assert project["license-files"] == ["LICENSE"]

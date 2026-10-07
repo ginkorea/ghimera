@@ -4,15 +4,16 @@ Intent-driven web research: discover sources, collect native-language documents,
 follow evidence gaps, and return a source-cited answer—or an explicit partial
 result when the evidence or budget is insufficient.
 
-**v0.4.4 adds guarded browser redirects and a background delivery worker.**
+**v0.4.5 adds explicitly configured, independently reviewed scanned-PDF transcription.**
 
-Version 0.4.4 adds explicitly configured before-contact navigation admission
-through the caller-owned browser session. Redirected pages, downloads and inline
-originals retain their source chains through parsing, citations, graph and
-archives. A configurable background worker retries durable delivery without
-refetching sources. See [guarded collection](docs/BROWSER_NAVIGATION_GUARD.md),
-[delivery lifecycle](docs/DELIVERY_OUTBOX.md) and
-[release acceptance](docs/RELEASE_044.md) for evidence and remaining limits.
+The scanned-PDF path renders retained originals into bounded pages, calls your
+explicitly selected private vision and review services, and preserves generated
+reading provenance through citations, corpus search, graphs and research planning.
+It does not download models, silently replace native extraction or certify a
+language's OCR accuracy. Simplified Chinese quality remains unaccepted. See
+[configuration and evidence](docs/PDF_TRANSCRIPTION.md) and
+[release acceptance](docs/RELEASE_045.md). Guarded browser collection and the
+background delivery worker from 0.4.4 remain available.
 The repository, distribution and import use `ghimera`.
 It succeeds the `go-spider` distribution and `chimera` implementation. It is not
 backward-compatible with v0.1.0's `spider_core` API or `spider` CLI. Python
@@ -185,13 +186,13 @@ Use a dedicated virtual environment:
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'ghimera==0.4.4'
+python -m pip install 'ghimera==0.4.5'
 ```
 
 Install the adapters you intend to configure:
 
 ```bash
-python -m pip install 'ghimera[html,documents,browser]==0.4.4'
+python -m pip install 'ghimera[html,documents,browser]==0.4.5'
 ```
 
 The base package contains the typed core, HTTP/Tor transport, research/search
