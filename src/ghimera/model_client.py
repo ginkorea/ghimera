@@ -61,6 +61,7 @@ from ghimera.semantic_types import (
     SEMANTIC_REVIEW_REVISION,
     FactorizedSemanticReview,
     GroundedSemanticReview,
+    IndependentSemanticReview,
     ReviewSelection,
     SemanticConfig,
     SemanticProposal,
@@ -79,6 +80,7 @@ T = TypeVar(
     Grade,
     SemanticProposal,
     SemanticReview,
+    IndependentSemanticReview,
 )
 PROMPT_REVISION = "chimera-research-prompts/1"
 CITATION_PROMPT_REVISION = "chimera-research-prompts/2"
@@ -254,6 +256,37 @@ PROPOSAL_DATE_REVIEW_INSTRUCTIONS = (
     "original date, independently assess source support; its presence is not "
     "evidence that the date is correct. Entailment and direction remain separate "
     "source-grounded judgments regardless of date state."
+)
+
+
+INDEPENDENT_REVIEW_INSTRUCTIONS = (
+    " Return ghimera.semantic-review/5 with independent checks and reasons ONLY; "
+    "do not generate an overall verdict. The client derives summaries from your "
+    "checks; never make a check agree with an earlier summary. For each selected "
+    "mention, find its assigned role from the original proposal and its configured "
+    "definition; do not test every mention as an office or a person. named_entity "
+    "asks whether native context identifies a specific instance under the allowed "
+    "entity types, not a generic class, ideology, unnamed population or fragment. "
+    "role independently checks that exact ASSIGNED definition. An institution "
+    "need not be an office, an office need not have a named incumbent, and an "
+    "incumbent is not the office. Explicit functions, membership or election can "
+    "identify a specific institution; an existential sentence is not required. "
+    "Mere presence or familiarity is insufficient; unresolved type means ambiguous. "
+    "For relationships, independently assess source entailment of the configured "
+    "predicate and direction for these endpoints. Co-occurrence, generic descriptions "
+    "and external knowledge do not establish a relationship. Date assertion state "
+    "is fixed to the original global relation index: absent dates mean asserted=false "
+    "and assessment=null, not timeless validity. Asserted dates require an independent "
+    "source-grounded assessment. Every applicable check may be supported, unsupported "
+    "or ambiguous with its own reason. Do not rewrite roles, assertions or dates. "
+    "Coverage concerns the WHOLE original proposal: return only bounded concrete "
+    "native omission witnesses with exact surfaces, including line breaks, supplied "
+    "citation_id and per-surface zero-based occurrence. Missing relations require "
+    "source/target witnesses and a native quote containing both occurrences. Do not "
+    "mark proposed items omitted. Findings are research leads, not accepted claims. "
+    "Incomplete requires witnesses; unresolved coverage without witnesses is uncertain. "
+    "Adequate requires no findings but cannot be inferred from empty proposals, "
+    "rejected items or the finding cap. Obey max_coverage_findings."
 )
 
 
@@ -496,14 +529,21 @@ class SelfHostedModel:
                     schema,
                     prompt.semantic_review_selection,
                     semantic.verification.max_coverage_findings,
+                    dimensions_only=output is IndependentSemanticReview,
                 )
-                if semantic.verification.prompt_profile == "proposal_date_checks":
+                if semantic.verification.prompt_profile in {
+                    "proposal_date_checks",
+                    "independent_dimension_checks",
+                }:
                     from ghimera.semantic_batching import bind_proposal_dates
 
                     if prompt.semantic_proposal is None:
                         raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
                     bind_proposal_dates(
-                        schema, prompt.semantic_proposal, prompt.semantic_review_selection
+                        schema,
+                        prompt.semantic_proposal,
+                        prompt.semantic_review_selection,
+                        dimensions_only=output is IndependentSemanticReview,
                     )
             response_format: dict[str, JsonValue] = (
                 {"type": "json_object"}
@@ -544,6 +584,15 @@ class SelfHostedModel:
                     and semantic.verification is not None
                     and semantic.verification.schema_version
                     in {"ghimera.semantic-verification/3", "ghimera.semantic-verification/4"}
+                    and semantic.verification.prompt_profile != "independent_dimension_checks"
+                    else ""
+                )
+                + (
+                    INDEPENDENT_REVIEW_INSTRUCTIONS
+                    if prompt.task == "semantic_review"
+                    and semantic is not None
+                    and semantic.verification is not None
+                    and semantic.verification.prompt_profile == "independent_dimension_checks"
                     else ""
                 )
                 + (
@@ -821,7 +870,7 @@ class SelfHostedModel:
         proposal: SemanticProposal,
         selection: ReviewSelection,
     ) -> GroundedSemanticReview:
-        from ghimera.semantic_batching import validate_selection
+        from ghimera.semantic_batching import derive_independent_review, validate_selection
         from ghimera.semantic_verification import (
             review_service,
             validate_proposal,
@@ -841,32 +890,39 @@ class SelfHostedModel:
                 update={"max_documents": 1, "max_windows_per_document": 1}
             )
         )
-        result = await self._invoke(
-            PromptInput(
-                task="semantic_review",
-                intent=intent,
-                semantic_recipe=policy,
-                semantic_proposal=proposal,
-                proposal_digest=proposal.content_digest(),
-                semantic_review_selection=selection,
-                evidence=selector.build(
-                    intent, (document,), required=(native_citation(document, start, end),)
-                ),
+        prompt = PromptInput(
+            task="semantic_review",
+            intent=intent,
+            semantic_recipe=policy,
+            semantic_proposal=proposal,
+            proposal_digest=proposal.content_digest(),
+            semantic_review_selection=selection,
+            evidence=selector.build(
+                intent, (document,), required=(native_citation(document, start, end),)
             ),
-            GroundedSemanticReview,
+        )
+        observed: SemanticReview | IndependentSemanticReview = (
+            await self._invoke(prompt, IndependentSemanticReview)
+            if policy.verification.prompt_profile == "independent_dimension_checks"
+            else await self._invoke(prompt, GroundedSemanticReview)
         )
         try:
+            result = (
+                derive_independent_review(observed)
+                if isinstance(observed, IndependentSemanticReview)
+                else observed
+            )
             if not isinstance(result, GroundedSemanticReview):
                 raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
             validate_review_part(
                 self._config, proposal, result, selection, document, start, end, intent
             )
         except (GhimeraRefused, ValidationError):
-            if result.model_call is None:
+            if observed.model_call is None:
                 raise
             raise ModelFailure(
                 RefusalCode.SEMANTIC_EXTRACTION_FAILED,
-                result.model_call.model_copy(update={"outcome": "refused"}),
+                observed.model_call.model_copy(update={"outcome": "refused"}),
             ) from None
         return result
 

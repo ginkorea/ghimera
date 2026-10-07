@@ -5,6 +5,7 @@ from types import MappingProxyType
 from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from ghimera.graph_types import (
     Confidence,
@@ -32,6 +33,7 @@ GROUNDED_REVIEW_REVISION = "ghimera-semantic-verification/3"
 BATCHED_REVIEW_REVISION = "ghimera-semantic-verification/4"
 ASSIGNED_ROLE_REVIEW_REVISION = "ghimera-semantic-verification/5"
 PROPOSAL_DATE_REVIEW_REVISION = "ghimera-semantic-verification/6"
+INDEPENDENT_REVIEW_REVISION = "ghimera-semantic-verification/7"
 SEMANTIC_PROFILES = MappingProxyType(
     {
         "ghimera.semantics/1": (None, SEMANTIC_PROMPT_REVISION),
@@ -65,9 +67,10 @@ class SemanticVerificationConfig(GraphRecord):
     max_coverage_findings: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
     max_mentions_per_call: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
     max_relations_per_call: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
-    prompt_profile: Literal["assigned_role_checks", "proposal_date_checks"] | None = Field(
-        default=None, exclude_if=lambda v: v is None
-    )
+    prompt_profile: (
+        Literal["assigned_role_checks", "proposal_date_checks", "independent_dimension_checks"]
+        | None
+    ) = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def coverage_bound(self) -> "SemanticVerificationConfig":
@@ -88,6 +91,8 @@ class SemanticVerificationConfig(GraphRecord):
     @property
     def effective_prompt_revision(self) -> str:
         if self.schema_version == "ghimera.semantic-verification/4":
+            if self.prompt_profile == "independent_dimension_checks":
+                return INDEPENDENT_REVIEW_REVISION
             if self.prompt_profile == "proposal_date_checks":
                 return PROPOSAL_DATE_REVIEW_REVISION
             return (
@@ -373,11 +378,41 @@ class GroundedRelationAssessment(RelationAssessment):
     checks: GroundedRelationChecks
 
 
+class IndependentMentionAssessment(GraphRecord):
+    key: MentionKey
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+    checks: MentionChecks
+
+
+class IndependentRelationAssessment(GraphRecord):
+    index: Count
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+    checks: GroundedRelationChecks
+
+
+class IndependentSemanticReview(GraphRecord):
+    """Model-facing independent judgments; no generated aggregate verdict."""
+
+    schema_version: Literal["ghimera.semantic-review/5"] = Field(alias="schema")
+    proposal_digest: Digest
+    mentions: tuple[IndependentMentionAssessment, ...]
+    relations: tuple[IndependentRelationAssessment, ...]
+    coverage: Literal["adequate", "incomplete", "uncertain"]
+    coverage_reason: Annotated[str, Field(min_length=1, max_length=4096)]
+    coverage_findings: tuple[CoverageFinding, ...]
+    model_call: ModelCallEvidence | None = None
+
+
 class GroundedSemanticReview(SemanticReview):
     schema_version: Literal["ghimera.semantic-review/3"] = Field(alias="schema")
     mentions: tuple[FactorizedMentionAssessment, ...]
     relations: tuple[GroundedRelationAssessment, ...]
     coverage_findings: tuple[CoverageFinding, ...]
+    # Client-owned provenance, never requested from a model. Absent for every
+    # old profile, preserving its JSON schema, serialization and prompt identity.
+    dimension_response: SkipJsonSchema[IndependentSemanticReview | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def grounded_dimensions(self) -> "GroundedSemanticReview":
@@ -394,6 +429,19 @@ class GroundedSemanticReview(SemanticReview):
             self.coverage_findings
         ):
             raise ValueError("coverage witnesses must be distinct")
+        observed = self.dimension_response
+        if observed is not None and (
+            observed.model_call is not None
+            or observed.proposal_digest != self.proposal_digest
+            or observed.coverage != self.coverage
+            or observed.coverage_reason != self.coverage_reason
+            or observed.coverage_findings != self.coverage_findings
+            or tuple((item.key, item.reason, item.checks) for item in observed.mentions)
+            != tuple((item.key, item.reason, item.checks) for item in self.mentions)
+            or tuple((item.index, item.reason, item.checks) for item in observed.relations)
+            != tuple((item.index, item.reason, item.checks) for item in self.relations)
+        ):
+            raise ValueError("derived review must preserve every independent model judgment")
         return self
 
 
@@ -493,7 +541,9 @@ def review_profile_matches(
     if isinstance(review, BatchedSemanticReview):
         return verification.schema_version == "ghimera.semantic-verification/4"
     if isinstance(review, GroundedSemanticReview):
-        return verification.schema_version in {
+        return (verification.prompt_profile == "independent_dimension_checks") == (
+            review.dimension_response is not None
+        ) and verification.schema_version in {
             "ghimera.semantic-verification/3",
             "ghimera.semantic-verification/4",
         }

@@ -203,7 +203,8 @@ class GhimeraConfig(BaseModel):
             if semantic.verification is not None:
                 reviewer = models.service(semantic.verification.model_role)
                 if (
-                    semantic.verification.prompt_profile == "proposal_date_checks"
+                    semantic.verification.prompt_profile
+                    in {"proposal_date_checks", "independent_dimension_checks"}
                     and reviewer.response_format != "json_schema"
                 ):
                     raise ValueError("proposal date checks require provider json_schema responses")

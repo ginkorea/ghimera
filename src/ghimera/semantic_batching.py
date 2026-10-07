@@ -7,11 +7,47 @@ from pydantic import JsonValue
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.semantic_types import (
     BatchedSemanticReview,
+    FactorizedMentionAssessment,
+    GroundedRelationAssessment,
+    GroundedSemanticReview,
+    IndependentSemanticReview,
     ReviewPart,
     ReviewSelection,
     SemanticProposal,
     SemanticVerificationConfig,
+    combined_verdict,
 )
+
+
+def derive_independent_review(observed: IndependentSemanticReview) -> GroundedSemanticReview:
+    """Derive summaries only; retain all actual model judgments and call evidence."""
+    return GroundedSemanticReview(
+        schema="ghimera.semantic-review/3",
+        proposal_digest=observed.proposal_digest,
+        mentions=tuple(
+            FactorizedMentionAssessment(
+                key=item.key,
+                verdict=combined_verdict((item.checks.named_entity, item.checks.role)),
+                reason=item.reason,
+                checks=item.checks,
+            )
+            for item in observed.mentions
+        ),
+        relations=tuple(
+            GroundedRelationAssessment(
+                index=item.index,
+                verdict=item.checks.verdict,
+                reason=item.reason,
+                checks=item.checks,
+            )
+            for item in observed.relations
+        ),
+        coverage=observed.coverage,
+        coverage_reason=observed.coverage_reason,
+        coverage_findings=observed.coverage_findings,
+        model_call=observed.model_call,
+        dimension_response=observed.model_copy(update={"model_call": None}),
+    )
 
 
 def validate_selection(
@@ -89,7 +125,11 @@ def assemble_review(
 
 
 def bound_review_schema(
-    schema: dict[str, JsonValue], selection: ReviewSelection, max_findings: int
+    schema: dict[str, JsonValue],
+    selection: ReviewSelection,
+    max_findings: int,
+    *,
+    dimensions_only: bool = False,
 ) -> None:
     """Constrain generated arrays to the same original keys/indices checked at replay."""
     properties, definitions = schema.get("properties"), schema.get("$defs")
@@ -112,8 +152,16 @@ def bound_review_schema(
     mention_values: list[JsonValue] = list(selection.mention_keys)
     relation_values: list[JsonValue] = list(selection.relation_indices)
     for record, name, values in (
-        ("FactorizedMentionAssessment", "key", mention_values),
-        ("GroundedRelationAssessment", "index", relation_values),
+        (
+            "IndependentMentionAssessment" if dimensions_only else "FactorizedMentionAssessment",
+            "key",
+            mention_values,
+        ),
+        (
+            "IndependentRelationAssessment" if dimensions_only else "GroundedRelationAssessment",
+            "index",
+            relation_values,
+        ),
     ):
         definition = definitions.get(record)
         fields = definition.get("properties") if isinstance(definition, dict) else None
@@ -132,7 +180,11 @@ def _schema_object(parent: dict[str, JsonValue], key: str) -> dict[str, JsonValu
 
 
 def bind_proposal_dates(
-    schema: dict[str, JsonValue], proposal: SemanticProposal, selection: ReviewSelection
+    schema: dict[str, JsonValue],
+    proposal: SemanticProposal,
+    selection: ReviewSelection,
+    *,
+    dimensions_only: bool = False,
 ) -> None:
     """Bind input facts per global index, never a verdict or a rewritten proposal.
 
@@ -146,7 +198,10 @@ def bind_proposal_dates(
     properties = _schema_object(schema, "properties")
     definitions = _schema_object(schema, "$defs")
     relations = _schema_object(properties, "relations")
-    relation_template = _schema_object(definitions, "GroundedRelationAssessment")
+    relation_template = _schema_object(
+        definitions,
+        "IndependentRelationAssessment" if dimensions_only else "GroundedRelationAssessment",
+    )
     check_template = _schema_object(definitions, "GroundedRelationChecks")
     date_template = _schema_object(definitions, "DateAssertionCheck")
     _schema_object(definitions, "SemanticCheck")

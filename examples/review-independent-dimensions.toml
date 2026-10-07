@@ -1,0 +1,11 @@
+# Nonactive semantics.verification block; merge into your own validated recipe.
+# The selected model binding must declare response_format = "json_schema".
+# This wire asks for independent checks; typed code derives item verdicts.
+# It does not change extraction, allocate compute or increase global budgets.
+schema = "ghimera.semantic-verification/4"
+prompt_profile = "independent_dimension_checks"
+model_role = "reviewer"
+max_calls_per_run = 256
+max_mentions_per_call = 4
+max_relations_per_call = 2
+max_coverage_findings = 4

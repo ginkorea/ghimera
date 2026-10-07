@@ -102,9 +102,57 @@ a pass. The full gate used installed isolated Chromium and local fixture
 servers, not a live model or real CAPTCHA service. Source/protocol validation
 does not establish publication, deployment or model accuracy.
 
+## Opt-in independent dimensions
+
+The nonactive [independent-dimensions example](../examples/review-independent-dimensions.toml)
+selects `prompt_profile = "independent_dimension_checks"` under verification/4.
+It requires the reviewer's explicit `json_schema` response format and selects
+prompt revision `ghimera-semantic-verification/7`. This is a new model-facing
+`ghimera.semantic-review/5` wire: each selected mention and relationship returns
+its independent checks and reasons, **not an overall verdict**. Supplying a
+generated overall verdict is an unexpected-field refusal, not answer repair.
+
+`derive_independent_review` computes the existing fail-closed aggregate: any
+unsupported applicable check means unsupported; otherwise any ambiguous check
+means ambiguous; only all-supported checks mean supported. There is no earlier
+generated summary to constrain later factual judgments. The profile retains
+assigned-role questions and binds date assertion state to original relation
+indices. Each check's substantive correctness still depends on the model and
+native evidence; deterministic summaries do not establish factual accuracy.
+
+The client retains the original typed dimension payload in `dimension_response`
+beside the actual call evidence in each grounded review. Replay checks every
+original key/index, reason, check and coverage field against that payload.
+The payload is client-owned provenance, never requested from a model; absent
+fields leave older profile schemas, prompts and serialized records unchanged.
+The selected profile cannot be replayed without the payload or as an older
+profile. Batching, native grounding, omitted-item witnesses, date validation,
+budgets and no-partial-projection guarantees remain unchanged. No service,
+runtime, endpoint, retry or allocation is selected by this profile.
+
+This source closes redundant-summary consistency, not served-model quality,
+full Collector acceptance, publication or deployment. The real input used in
+trial 17 must still pass a complete live review before that acceptance is
+claimed; broader entity typing, relationship entailment and coverage calibration
+remain separate requirements.
+
+The complete `scripts/gate.sh` for this profile on 7 October 2026 UTC used
+`/tmp/chimera-c0-20261006/.venv/bin/python` (Python 3.11.16), importing this
+checkout's `src/ghimera`. It passed **660 tests, zero failed, zero skipped**,
+in 540.59 seconds. Offline lock validation resolved the unchanged 137 packages;
+lint and formatting passed for 143 files and strict typing for 95 source files.
+The new profile's first contract failed before implementation. Controlled
+checks cover all supported/ambiguous/unsupported dimension combinations,
+unchanged older request identity, original-date schema binding, refusal of
+invented aggregate verdicts, retained-payload integrity, profile-bound replay,
+late failure without retry and witnessed coverage gaps without invented nodes.
+The gate used installed isolated Chromium and local fixture servers, not a live
+model, GPU or real CAPTCHA provider. Its source acceptance is not publication,
+deployment, complete Collector acceptance or model accuracy.
+
 ## Retained evidence and replay
 
-Actual responses remain `ghimera.semantic-review/3` observations, with explicit
+Older-profile actual responses remain `ghimera.semantic-review/3` observations, with explicit
 `ghimera.review-selection/1` metadata in each ledger row. The assembled
 `ghimera.semantic-review/4` contains every actual part and the complete assessed
 key/index set. Its `model_call` is the actual final coverage call, not an
@@ -112,6 +160,10 @@ invented aggregate request. Coverage-based research gaps cite that call; every
 other part remains available in the window and durable ledger. Harvest/journal
 validation requires the corresponding earlier exact observations and restores
 all actual review spending.
+
+The independent-dimensions profile also keeps its actual model-facing `/5`
+payload inside each client-derived grounded `/3` observation. The aggregate
+`/4` is still deterministic assembly of all observed parts, not a model answer.
 
 ## Limits and acceptance
 
