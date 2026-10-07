@@ -84,6 +84,26 @@ class Citation(ResearchRecord):
     start: Index
     end: Annotated[int, Field(strict=True, gt=0)]
     quote: Text
+    basis: Literal["native", "reviewed_pdf_transcription"] = Field(
+        default="native", exclude_if=lambda value: value == "native"
+    )
+    page_indices: tuple[Index, ...] = Field(default=(), exclude_if=lambda value: not value)
+
+    @classmethod
+    def from_document(cls, document: Document, start: int, end: int) -> "Citation":
+        text = document.extracted.text
+        transcription = document.extracted.pdf_transcription
+        return cls(
+            document_id="doc:" + document.sha256,
+            source_url=document.url,
+            document_sha256=document.sha256,
+            text_sha256=hashlib.sha256(text.encode()).hexdigest(),
+            start=start,
+            end=end,
+            quote=text[start:end],
+            basis="reviewed_pdf_transcription" if transcription is not None else "native",
+            page_indices=transcription.cited_pages(start, end) if transcription is not None else (),
+        )
 
     @model_validator(mode="after")
     def nonempty(self) -> "Citation":
@@ -93,8 +113,14 @@ class Citation(ResearchRecord):
 
     def matches(self, document: Document) -> bool:
         text = document.extracted.text
+        transcription = document.extracted.pdf_transcription
         return (
-            self.document_id == "doc:" + document.sha256
+            self.basis == ("reviewed_pdf_transcription" if transcription is not None else "native")
+            and self.page_indices
+            == (
+                transcription.cited_pages(self.start, self.end) if transcription is not None else ()
+            )
+            and self.document_id == "doc:" + document.sha256
             and self.document_sha256 == document.sha256
             and hashlib.sha256(document.raw).hexdigest() == document.sha256
             and self.source_url == document.url

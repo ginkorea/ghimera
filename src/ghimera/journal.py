@@ -374,6 +374,7 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
                         "review",
                         "semantic",
                         "semantic_review",
+                        "transcription_model",
                     }
                     for row in rows
                 )

@@ -89,6 +89,13 @@ remains a candidate requiring its own service/page/provenance/review boundary
 and unchanged-source quality acceptance; see PACIFIC_PDF_CANDIDATE.md. No
 language-level capability is inferred from a model's vocabulary or marketing.
 
+Reviewed PDF transcription is now development source: typed rendering/model
+recipes, original-page retention, separate review, collector budget integration,
+preserved native reading and explicitly labelled generated citations. It is
+not yet published or language-quality accepted. Its combined development gate
+passed 1,023 tests under Python 3.11.16 with no failures/skips; see
+PDF_TRANSCRIPTION.md for the distinction between protocol and quality acceptance.
+
 1. Discover image candidates from retained HTML/DOM: actual source URL, parent
    document hash, native caption/alt/surrounding text, element locator and declared
    dimensions. Include lazy-image/srcset/picture candidates through an explicit

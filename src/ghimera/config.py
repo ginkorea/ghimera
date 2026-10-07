@@ -25,6 +25,7 @@ from ghimera.journal_config import JournalConfig
 from ghimera.local_input_types import LocalInputConfig
 from ghimera.mcp_lead_config import McpLeadConfig
 from ghimera.model_config import ModelBindingsConfig
+from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.reference_config import ReferenceConfig
 from ghimera.research_config import ResearchConfig
 from ghimera.scoring_config import ScoringConfig
@@ -140,6 +141,9 @@ class GhimeraConfig(BaseModel):
     models: ModelBindingsConfig | None = None
     extraction: ExtractionConfig | None = None
     document_extraction: DocumentExtractionConfig | None = None
+    pdf_transcription: PdfTranscriptionConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     dedup: DedupConfig | None = None
     browser: BrowserConfig | None = None
     human_browser: HumanBrowserConfig | None = Field(
@@ -161,6 +165,11 @@ class GhimeraConfig(BaseModel):
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
+        if self.pdf_transcription is not None and (
+            self.document_extraction is None
+            or "application/pdf" not in self.document_extraction.supported_content_types
+        ):
+            raise ValueError("PDF transcription requires the original binary-document adapter")
         if self.visuals is not None:
             if self.http is None or self.http.max_response_bytes > self.visuals.max_image_bytes:
                 raise ValueError(

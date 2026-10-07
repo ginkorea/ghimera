@@ -53,16 +53,8 @@ class EvidenceContext(Record):
 
 
 def native_citation(document: Document, start: int, end: int) -> Citation:
-    text = document.extracted.text
-    return Citation(
-        document_id="doc:" + document.sha256,
-        source_url=document.url,
-        document_sha256=document.sha256,
-        text_sha256=hashlib.sha256(text.encode()).hexdigest(),
-        start=start,
-        end=end,
-        quote=text[start:end],
-    )
+    """Retain the actual reading basis; generated PDF text is never labelled native."""
+    return Citation.from_document(document, start, end)
 
 
 class ContextSelector:

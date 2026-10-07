@@ -37,6 +37,7 @@ from ghimera.models import (
     StopReason,
     Verdict,
 )
+from ghimera.pdf_transcription import PdfTranscriptionStage
 from ghimera.ports import Extractor, Judge
 from ghimera.reference_types import DocumentReference, SearchReference
 from ghimera.references import ReferenceBook
@@ -177,12 +178,18 @@ class GoalLoop:
         semantic_reviewer: SemanticReviewer | None = None,
         graph_sink: GraphSink | None = None,
         visual_stage: VisualStage | None = None,
+        pdf_transcription: PdfTranscriptionStage | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._config = config
         self._fetcher = fetcher
         self._extractor = extractor
         extractor.validate_config(config)
+        if (config.pdf_transcription is None) != (pdf_transcription is None) or (
+            pdf_transcription is not None and pdf_transcription.config != config.pdf_transcription
+        ):
+            raise ValueError("PDF transcription recipe and bound stage must be supplied together")
+        self._pdf_transcription = pdf_transcription
         self._scorer = scorer
         scorer.validate_config(config)
         self._judge = judge
@@ -688,7 +695,13 @@ class GoalLoop:
         extraction_started = self._clock()
         async with session._slots.slot("extraction"), asyncio.timeout(budget.remaining_seconds):
             try:
-                extracted = await self._extractor.extract(page)
+                extracted = (
+                    await self._pdf_transcription.extract(
+                        page, native=self._extractor, budget=budget, ledger=ledger
+                    )
+                    if self._pdf_transcription is not None
+                    else await self._extractor.extract(page)
+                )
             except ExtractionCancelled as exc:
                 self._record_parse_attempts(ledger, exc.attempts)
                 # Preserve asyncio.timeout's exact CancelledError contract.
@@ -725,7 +738,7 @@ class GoalLoop:
                 page.final_url,
                 page.body,
                 extracted.text,
-                self._extractor.revision,
+                self._extraction_revision(extracted),
                 transport=page.transport,
                 local_input=page.local_input,
                 human_browser=page.human_browser,
@@ -999,7 +1012,7 @@ class GoalLoop:
                 source.url,
                 source.raw,
                 source.extracted.text,
-                self._extractor.revision,
+                self._extraction_revision(source.extracted),
                 transport=source.transport,
                 local_input=source.local_input,
                 human_browser=source.human_browser,
@@ -1016,6 +1029,11 @@ class GoalLoop:
         harvest = self.snapshot(session, stop)
         ledger.finish(harvest)
         return harvest
+
+    def _extraction_revision(self, extracted: Extracted) -> str:
+        if extracted.pdf_transcription is not None:
+            return f"{self._extractor.revision}+{PdfTranscriptionStage.revision}"
+        return self._extractor.revision
 
     def snapshot(self, session: CollectionSession, stop: StopReason = "frontier_empty") -> Harvest:
         """Validated partial evidence; does not append stop or seal the journal."""

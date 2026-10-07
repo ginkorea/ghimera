@@ -1,0 +1,92 @@
+# NON-ACTIVE PdfTranscriptionConfig example, loaded as the [pdf_transcription]
+# section of GhimeraConfig. Keep the original document_extraction recipe too.
+# Replace absolute paths, private endpoints and exact admitted model revisions.
+# Declared languages are routing hints, NOT demonstrated recognition coverage.
+schema = "ghimera.pdf-transcription/1"
+mode = "native_refused"
+language_hint = "zh-Hans"
+max_document_text_chars = 200000
+
+[pages]
+schema = "ghimera.page-transcription/1"
+languages = ["zh-Hans", "zh-Hant", "ja", "ko", "tl", "en"]
+max_lines = 1000
+max_text_chars = 20000
+max_uncertain_regions = 100
+max_concurrent_pages = 2
+
+[pages.renderer]
+schema = "ghimera.page-render/1"
+worker_python = "/path/to/private/pdf-render-venv/bin/python"
+work_directory = "/path/to/private/pdf-render-scratch"
+renderer_package_version = "5.14.0"
+image_package_version = "12.3.0"
+scale = 2.0
+max_input_bytes = 16777216
+max_pages = 50
+max_pixels_per_page = 16000000
+max_image_bytes = 4194304
+max_total_image_bytes = 67108864
+max_workers = 2
+timeout_seconds = 90.0
+cleanup_timeout_seconds = 5.0
+max_output_bytes = 100663296
+max_diagnostic_bytes = 65536
+
+[pages.transcriber]
+schema = "chimera.model-service/1"
+endpoint = "https://vision.private.invalid/v1/chat/completions"
+approved_addresses = ["10.0.0.10"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "none"
+model_id = "replace-with-admitted-vision-transcriber"
+revision = "replace-with-exact-transcriber-revision"
+served_model = "replace-with-served-vision-transcriber"
+timeout_seconds = 90.0
+max_request_bytes = 8388608
+max_response_bytes = 1048576
+max_header_bytes = 65536
+max_input_chars = 100000
+max_output_tokens = 16384
+temperature = 0.0
+top_p = 1.0
+response_format = "json_object"
+require_usage = true
+
+[pages.transcriber.context]
+schema = "chimera.evidence-context/1"
+max_documents = 1
+max_chars = 100000
+window_chars = 20000
+max_windows_per_document = 1
+overlap_chars = 0
+
+[pages.reviewer]
+schema = "chimera.model-service/1"
+endpoint = "https://vision-review.private.invalid/v1/chat/completions"
+approved_addresses = ["10.0.0.11"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "none"
+model_id = "replace-with-separate-admitted-vision-reviewer"
+revision = "replace-with-exact-reviewer-revision"
+served_model = "replace-with-served-vision-reviewer"
+timeout_seconds = 90.0
+max_request_bytes = 8388608
+max_response_bytes = 1048576
+max_header_bytes = 65536
+max_input_chars = 100000
+max_output_tokens = 16384
+temperature = 0.0
+top_p = 1.0
+response_format = "json_object"
+require_usage = true
+
+[pages.reviewer.context]
+schema = "chimera.evidence-context/1"
+max_documents = 1
+max_chars = 100000
+window_chars = 20000
+max_windows_per_document = 1
+overlap_chars = 0

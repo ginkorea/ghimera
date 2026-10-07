@@ -28,6 +28,9 @@ from ghimera.mcp_lead_config import McpLeadConfig
 from ghimera.mcp_leads import McpLeadClient, McpLeadSearch
 from ghimera.model_client import SelfHostedModels
 from ghimera.models import Goal, Harvest, Scope
+from ghimera.page_renderer import PdfPageRenderer
+from ghimera.page_transcriber import LocalPageTranscriber
+from ghimera.pdf_transcription import PdfTranscriptionStage
 from ghimera.ports import Extractor
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research import ResearchLoop
@@ -67,6 +70,8 @@ class Collector:
         discovery_credentials: Mapping[str, SecretStr] | None = None,
         vision_credential: SecretStr | None = None,
         visual_reviewer_credential: SecretStr | None = None,
+        transcription_credential: SecretStr | None = None,
+        transcription_reviewer_credential: SecretStr | None = None,
         corpus: EvidenceCorpus | None = None,
         discovery_corpora: Mapping[str, EvidenceCorpus] | None = None,
     ) -> None:
@@ -204,6 +209,21 @@ class Collector:
         if config.document_extraction is not None:
             extractor = DocumentExtractionSuite(html=extractor, documents=DocumentExtractor(config))
         renderer = IsolatedBrowserRenderer(config) if config.browser is not None else None
+        transcription = None
+        if config.pdf_transcription is not None:
+            transcription = PdfTranscriptionStage(
+                config.pdf_transcription,
+                renderer=PdfPageRenderer(config.pdf_transcription.pages.renderer),
+                transcriber=LocalPageTranscriber(
+                    config.pdf_transcription.pages,
+                    transcription_credential=transcription_credential,
+                    review_credential=transcription_reviewer_credential,
+                ),
+            )
+        elif transcription_credential is not None or transcription_reviewer_credential is not None:
+            raise ValueError(
+                "transcription credentials require their explicit private service recipe"
+            )
         visuals = None
         if config.visuals is not None:
             visuals = VisualStage(
@@ -227,6 +247,7 @@ class Collector:
             scorer=scorer,
             judge=models.judge,
             visual_stage=visuals,
+            pdf_transcription=transcription,
             semantic_extractor=models.service(config.semantics.model_role)
             if config.semantics is not None
             else None,
@@ -263,6 +284,8 @@ class Collector:
         discovery_credentials: Mapping[str, SecretStr] | None = None,
         vision_credential: SecretStr | None = None,
         visual_reviewer_credential: SecretStr | None = None,
+        transcription_credential: SecretStr | None = None,
+        transcription_reviewer_credential: SecretStr | None = None,
         corpus: EvidenceCorpus | None = None,
         discovery_corpora: Mapping[str, EvidenceCorpus] | None = None,
     ) -> "Collector":
@@ -281,6 +304,8 @@ class Collector:
             discovery_credentials=discovery_credentials,
             vision_credential=vision_credential,
             visual_reviewer_credential=visual_reviewer_credential,
+            transcription_credential=transcription_credential,
+            transcription_reviewer_credential=transcription_reviewer_credential,
             corpus=corpus,
             discovery_corpora=discovery_corpora,
         )

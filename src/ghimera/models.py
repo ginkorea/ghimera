@@ -25,6 +25,8 @@ from ghimera.human_browser_types import (
 )
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.model_types import ModelCallEvidence
+from ghimera.page_transcription_config import PdfTranscriptionConfig
+from ghimera.page_transcription_types import PageTranscriptionCall, ReviewedPageTranscription
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.scoring_types import SimilarityEvidence
@@ -213,10 +215,21 @@ class Extracted(Record):
     extraction: ExtractionEvidence | None = None
     document_parse: DocumentParseEvidence | None = None
     document_layout: DocumentLayout | None = None
+    pdf_transcription: "PdfTranscriptionEvidence | None" = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     references: tuple[DocumentReference, ...] = ()
 
     @model_validator(mode="after")
     def text_binding(self) -> "Extracted":
+        if self.pdf_transcription is not None and (
+            self.text != self.pdf_transcription.text
+            or self.language != self.pdf_transcription.config.language_hint
+            or self.document_parse is not None
+            or self.document_layout is not None
+            or self.extraction is not None
+        ):
+            raise ValueError("generated PDF reading must remain distinct from native extraction")
         eligible = {(link.url, link.anchor) for link in self.links}
         if any(
             (item.target_url, item.anchor) not in eligible
@@ -239,6 +252,62 @@ class Extracted(Record):
             if self.document_parse.layout_sha256 != self.document_layout.sha256:
                 raise ValueError("document conversion must bind retained layout")
         return self
+
+
+class PdfTranscriptionEvidence(Record):
+    schema_version: Literal["ghimera.pdf-transcription-evidence/1"] = Field(alias="schema")
+    source_url: NonEmpty
+    source_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    config: PdfTranscriptionConfig
+    pages: Annotated[tuple[ReviewedPageTranscription, ...], Field(min_length=1)]
+    native_reading: Extracted | None
+    native_refusal: Literal[RefusalCode.EXTRACTION_FAILED] | None
+
+    @property
+    def text(self) -> str:
+        return "\n\n".join(page.proposal.text for page in self.pages)
+
+    def cited_pages(self, start: int, end: int) -> tuple[int, ...]:
+        offset = 0
+        indices = []
+        for page in self.pages:
+            stop = offset + len(page.proposal.text)
+            if start < stop and end > offset:
+                indices.append(page.page.page_index)
+            offset = stop + 2
+        return tuple(indices)
+
+    @model_validator(mode="after")
+    def complete_source(self) -> "PdfTranscriptionEvidence":
+        if (self.native_reading is None) != (self.native_refusal is not None):
+            raise ValueError("retain the original extraction or its exact eligible refusal")
+        if self.native_reading is not None and (
+            self.native_reading.pdf_transcription is not None
+            or self.native_reading.document_parse is None
+            or self.native_reading.document_parse.source_sha256 != self.source_sha256
+            or self.native_reading.document_parse.source_url != self.source_url
+        ):
+            raise ValueError("native reading must bind this original PDF without recursion")
+        render = self.config.pages.renderer
+        if (
+            len(self.pages) > render.max_pages
+            or sum(len(page.page.png) for page in self.pages) > render.max_total_image_bytes
+            or len(self.text) > self.config.max_document_text_chars
+            or any(
+                not page.accepted
+                or page.page.page_index != index
+                or page.page.page_count != len(self.pages)
+                or page.page.source_sha256 != self.source_sha256
+                or page.config != self.config.pages
+                or page.language_hint != self.config.language_hint
+                for index, page in enumerate(self.pages)
+            )
+        ):
+            raise ValueError("PDF reading requires complete, ordered and reviewed source pages")
+        return self
+
+
+Extracted.model_rebuild()
 
 
 class Verdict(Record):
@@ -288,6 +357,16 @@ class DocumentSource(Record):
     images: tuple[ImageEvidence, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     def validate_policy(self, config: GhimeraConfig) -> None:
+        transcription = self.extracted.pdf_transcription
+        if transcription is not None:
+            if transcription.config != config.pdf_transcription:
+                raise ValueError("PDF transcription must bind the effective run recipe")
+            if len(self.raw) > transcription.config.pages.renderer.max_input_bytes:
+                raise ValueError("PDF transcription must respect its original-byte bound")
+            if transcription.native_reading is not None:
+                self.model_copy(update={"extracted": transcription.native_reading}).validate_policy(
+                    config
+                )
         if self.images:
             if config.visuals is None:
                 raise ValueError("retained images require the effective visual recipe")
@@ -406,6 +485,13 @@ class DocumentSource(Record):
         digest = hashlib.sha256(self.raw).hexdigest()
         if self.sha256 != digest:
             raise ValueError("document digest must bind retained source bytes")
+        transcription = self.extracted.pdf_transcription
+        if transcription is not None and (
+            transcription.source_sha256 != digest
+            or transcription.source_url != self.url
+            or not self.raw.startswith(b"%PDF-")
+        ):
+            raise ValueError("reviewed PDF transcription must bind this original source")
         if self.rendered is not None and (
             self.rendered.source_sha256 != digest or self.rendered.source_url != self.url
         ):
@@ -500,6 +586,8 @@ class LedgerRow(Record):
         "semantic_review",
         "visual",
         "visual_model",
+        "transcription_model",
+        "transcription",
     ]
     url: str | None = None
     route: str | None = None
@@ -521,6 +609,9 @@ class LedgerRow(Record):
     )
     document_parse: DocumentParseEvidence | None = None
     dedup: DedupEvidence | None = None
+    transcription_call: PageTranscriptionCall | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     content_drift: ContentDrift | None = None
     rendered: RenderResult | None = None
     encoding_call: EncodingCall | None = None
@@ -555,6 +646,8 @@ class LedgerRow(Record):
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if (self.event == "transcription") != (self.transcription_call is not None):
+            raise ValueError("completed transcription calls require their exact typed evidence")
         if self.browser_action is not None and (
             self.event != "policy"
             or self.url != self.browser_action.url
@@ -778,6 +871,16 @@ class Harvest(Record):
             if row.local_input is not None:
                 row.local_input.validate_policy(input_policy)
         for document in self.source_documents:
+            transcription = document.extracted.pdf_transcription
+            if transcription is not None and any(
+                not any(
+                    row.url == document.url and row.transcription_call == call
+                    for row in self.ledger
+                )
+                for page in transcription.pages
+                for call in page.calls
+            ):
+                raise ValueError("PDF reading must retain every original model-call observation")
             if document.local_input is not None and not any(
                 row.local_input == document.local_input for row in inputs
             ):
@@ -875,6 +978,7 @@ class Harvest(Record):
                 "semantic",
                 "semantic_review",
                 "visual_model",
+                "transcription_model",
             }
             for row in self.ledger
         ):
