@@ -95,6 +95,9 @@ preserved native reading and explicitly labelled generated citations. It is
 not yet published or language-quality accepted. Its combined development gate
 passed 1,023 tests under Python 3.11.16 with no failures/skips; see
 PDF_TRANSCRIPTION.md for the distinction between protocol and quality acceptance.
+The subsequent corpus projection fix retains generated reading basis and exact
+source-page indices through storage and retrieval; its 45 focused tests passed,
+but it is not covered by the preceding combined gate.
 
 1. Discover image candidates from retained HTML/DOM: actual source URL, parent
    document hash, native caption/alt/surrounding text, element locator and declared

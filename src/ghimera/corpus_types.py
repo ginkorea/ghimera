@@ -12,6 +12,7 @@ from ghimera.visual_types import ImageRegion
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Count = Annotated[int, Field(strict=True, ge=0)]
+PassageKind = Literal["native", "reviewed_pdf_transcription", "image_ocr", "visual_claim"]
 
 
 class CorpusRecord(BaseModel):
@@ -37,7 +38,7 @@ class CorpusPassage(CorpusRecord):
     document_id: Digest
     source_url: str
     source_sha256: Digest
-    kind: Literal["native", "image_ocr", "visual_claim"]
+    kind: PassageKind
     image_sha256: Digest | None
     claim_index: Count | None
     start: Count
@@ -45,18 +46,22 @@ class CorpusPassage(CorpusRecord):
     text: Annotated[str, Field(min_length=1)]
     language: str
     regions: tuple[ImageRegion, ...]
+    page_indices: tuple[Count, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     @model_validator(mode="after")
     def shape(self) -> "CorpusPassage":
+        document_text = self.kind in {"native", "reviewed_pdf_transcription"}
         if (
             self.end <= self.start
             or len(self.text) != self.end - self.start
             or not self.text.strip()
-            or (self.kind == "native") != (self.image_sha256 is None)
+            or document_text != (self.image_sha256 is None)
             or (self.kind == "visual_claim") != (self.claim_index is not None)
-            or (self.kind == "native" and self.regions)
+            or (document_text and self.regions)
+            or (self.kind == "reviewed_pdf_transcription") != bool(self.page_indices)
+            or tuple(sorted(set(self.page_indices))) != self.page_indices
         ):
-            raise ValueError("passages require an exact native or explicitly visual text span")
+            raise ValueError("passages require an exact source-bound reading or visual text span")
         return self
 
     def validate_source(self, document: Document) -> None:
@@ -72,8 +77,14 @@ class CorpusPassage(CorpusRecord):
             or self.language != document.verdict.language
         ):
             raise ValueError("passage identity must bind the accepted original document")
-        if self.kind == "native":
+        if self.kind in {"native", "reviewed_pdf_transcription"}:
             native = document.extracted.text
+            transcription = document.extracted.pdf_transcription
+            expected_kind = "reviewed_pdf_transcription" if transcription is not None else "native"
+            if self.kind != expected_kind or self.page_indices != (
+                transcription.cited_pages(self.start, self.end) if transcription is not None else ()
+            ):
+                raise ValueError("passage must preserve the actual reading basis and source pages")
         else:
             image = next((row for row in document.images if row.sha256 == self.image_sha256), None)
             if image is None:

@@ -15,6 +15,7 @@ from ghimera.corpus_types import (
     CorpusPassage,
     CorpusQuery,
     CorpusReceipt,
+    PassageKind,
 )
 from ghimera.embedding_types import EncodingBatch, EncodingCall
 from ghimera.models import Document, Harvest
@@ -31,7 +32,7 @@ def document_passages(document: Document, config: CorpusConfig) -> tuple[CorpusP
 
     def add(
         text: str,
-        kind: str,
+        kind: PassageKind,
         image: str | None = None,
         claim: int | None = None,
         regions: tuple[ImageRegion, ...] = (),
@@ -53,6 +54,10 @@ def document_passages(document: Document, config: CorpusConfig) -> tuple[CorpusP
                     "text": text[start:end],
                     "language": document.verdict.language,
                     "regions": regions,
+                    "page_indices": document.extracted.pdf_transcription.cited_pages(start, end)
+                    if kind == "reviewed_pdf_transcription"
+                    and document.extracted.pdf_transcription is not None
+                    else (),
                 }
             )
             passage.validate_binding(source)
@@ -60,7 +65,12 @@ def document_passages(document: Document, config: CorpusConfig) -> tuple[CorpusP
             if len(output) > config.max_chunks:
                 raise ValueError("document passages exceed configured corpus capacity")
 
-    add(document.extracted.text, "native")
+    add(
+        document.extracted.text,
+        "reviewed_pdf_transcription"
+        if document.extracted.pdf_transcription is not None
+        else "native",
+    )
     for image in document.images:
         add(
             image.ocr.text,

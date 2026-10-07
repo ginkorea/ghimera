@@ -66,6 +66,17 @@ cannot be relabelled as native citations. These are citations into a reviewed
 machine reading of retained pixels, not proof that the model recognized them
 correctly. Ordinary native citation wire identities remain unchanged.
 
+Corpus passage projection also preserves the selected reading basis:
+`kind="reviewed_pdf_transcription"` carries the exact ordered `page_indices`
+intersected by each text chunk. Stored documents retain the full page/model
+evidence. Corpus binding validation rejects a generated reading labelled as
+native or a passage naming different source pages, including after SQLite
+reopen and vector query. Ordinary native passages omit the empty page field,
+preserving their existing wire identities. The downstream corpus change passed
+45 focused tests under Python 3.11.16; a fresh combined gate is still required
+for that change. These persistence tests use scripted model responses, not a
+claim of Chinese recognition accuracy.
+
 ## Acceptance still required
 
 Run the unchanged controlled Chinese scanned pages against an admitted, pinned
