@@ -138,6 +138,12 @@ similarity queries. These additions are not in the published 0.4.0 wheel yet;
 representative Pacific-language quality and the full infrastructure tracker
 remain explicit acceptance work.
 
+An explicitly composed `PersistentCollector` automatically appends completed
+collection/research evidence to that corpus and returns its acknowledgement
+beside the unchanged original result. Failed handoffs retain completed source
+work for persistence-only retry; operation-level crash recovery and an unattended
+service are still separate requirements. See the corpus documentation for usage.
+
 Use a dedicated virtual environment:
 
 ```bash

@@ -1,6 +1,8 @@
 # Durable native evidence corpus
 
-Status: source candidate; bounded contract checks passed, full gate pending. This
+Status: native corpus source at `7733285` passed the full gate; the subsequent
+automatic collector handoff is a separate candidate with bounded checks passed
+and its own full gate pending. This
 does not close the infrastructure PRD's language/model quality, operation
 recovery, service, refresh or delivery-outbox requirements.
 
@@ -51,6 +53,48 @@ from the immutable passage recipe, and retain the stable corpus identity.
 Relocating the private directory does not itself change the recipe identity.
 
 ## Durable truth and indexing
+
+### Automatic handoff from configured collection
+
+The unreleased `PersistentCollector` facade composes an existing configured
+`Collector` with an explicitly created/reopened `EvidenceCorpus`:
+
+```python
+from ghimera import PersistentCollector, CorpusHandoffFailure
+
+service = PersistentCollector(collector, corpus)
+try:
+    completed = await service.run("Find evidence about these ports")
+except CorpusHandoffFailure as failed:
+    # Preserve failed.result with the application's durable result archive.
+    # After correcting the corpus/model issue, retry persistence alone:
+    completed = await service.persist(failed.result)
+
+print(completed.corpus.generation, completed.corpus.added_passages)
+# completed.result is the unchanged original ResearchResult or Harvest.
+```
+
+`run`, `collect`, and `resume` acknowledge completion only after the corpus
+append returns. The new outer `ghimera.persistent-collection/1` record binds the
+exact harvest digest to its corpus receipt; it does not alter existing harvest,
+research, journal or graph identities. Collection and corpus encoding spend
+remain separately attributable. An unchanged retry is idempotent.
+
+The facade borrows both components; the caller owns their configuration,
+credentials, archive policy and closure. It refuses overlapping operations
+instead of creating an unbounded implicit queue. Closed/replaced corpus storage
+refuses before starting new source work. Research suspension retains the existing
+checkpoint behavior; persistence happens when resumed research returns a result.
+Cancellation during handoff raises `CorpusHandoffCancelled`, a `CancelledError`
+subclass carrying the completed source result, after corpus cleanup has drained.
+It must be retained by the caller just like an ordinary handoff failure.
+
+This is automatic **completion-time** handoff, not an unattended service, a
+per-source crash-durable frontier or a delivery outbox. A process crash can still
+lose an unarchived exception result; operation recovery remains I03. Existing
+configured journals and application-owned archives must not be discarded merely
+because corpus indexing failed. Automatic collection does not yet consult the
+corpus during research planning or answer composition.
 
 SQLite owns accepted document snapshots including exact raw bytes, parser/source
 provenance and retained relevant images. It also owns all native passage spans,
@@ -107,6 +151,33 @@ faiss-cpu 1.15.1 and NumPy 2.4.6. The broader corpus/encoding/collector/executio
 selection passed 74 tests in 64.70 seconds before the final identity, off-loop
 reconstruction and recipe/config separation changes. After those changes, all
 15 corpus witnesses passed in 13.92 seconds, no skips.
+
+The full `scripts/gate.sh` at frozen `7733285` then returned **860 passed in
+709.94 seconds**, no failures or skips, on Python 3.11.16 at that same
+interpreter and corpus checkout. Ruff and formatting passed over 194 files;
+strict mypy passed over 129 source files; the offline lock checked 142 packages.
+The gate used explicitly configured installed Chromium, bubblewrap, Tesseract,
+English traineddata and fixture font. This covers software contracts, not real
+embedding accuracy or representative Pacific OCR. The subsequently added
+`PersistentCollector` facade was not present in that frozen gate.
+
+The facade and its corpus/collector/continuation importers subsequently returned
+**49 passed in 71.73 seconds**, no failures or skips, under Python 3.11.16 at
+`/tmp/chimera-c0-20261006/.venv/bin/python`, importing
+`/tmp/ghimera-automatic-corpus-20261007/src/ghimera`. Five new witnesses exercise
+automatic configured research handoff, exact result/receipt bindings and fresh
+corpus reopening; cancellation retaining completed source work and releasing the
+facade; closed-store preflight before source/model calls; checkpoint resume
+without source refetch; and persistence-only retry after a configured encoding
+capacity refusal. All use credential-free local protocol fixtures, not actual
+model-quality claims. Ruff/format passed over 196 files and strict mypy over
+130 source files.
+
+The first facade-only run returned four passes and one failed retrieval assertion:
+the protocol fixture assigns orthogonal vectors to plural `ports` and the source's
+singular `port`. The corrected witness queries retained native text and validates
+each returned passage against its original; no threshold, source binding or
+quality criterion was relaxed. Full release/package acceptance remains pending.
 
 Witnesses include actual SQLite/compiled FAISS, fresh-process query and original
 readback, idempotent appends, native Japanese span coverage, pending append

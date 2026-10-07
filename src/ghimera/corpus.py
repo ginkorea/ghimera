@@ -138,6 +138,11 @@ class EvidenceCorpus:
             self._closed = True
             self._index = None
 
+    def check_ready(self) -> None:
+        """Validate open, owned storage before a caller starts new source work."""
+        with self._operation():
+            pass
+
     def document(self, document_id: str) -> Document:
         with self._operation():
             return self._storage.document(document_id)

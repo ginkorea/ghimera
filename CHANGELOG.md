@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add an explicitly composed persistent collector: collection/research/resume
+  automatically appends accepted evidence and returns a digest-bound corpus
+  acknowledgement beside the unchanged original result. Failed/cancelled handoff
+  retains completed source work for persistence-only retry; it is not yet a
+  crash-recovery service or outbox.
+
 - A standalone owner-private native evidence corpus: transactional originals,
   complete text/OCR/reviewed-visual passages, exact model-bound vectors and
   durable encoding audit. Optional compiled FAISS cosine queries preserve
