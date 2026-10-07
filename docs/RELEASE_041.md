@@ -1,8 +1,9 @@
 # ghimera 0.4.1 release acceptance
 
-Status: **CANDIDATE**, not published. Package metadata and the lock name 0.4.1;
-the combined full gate, independent built-wheel installation and public artifact
-readback must still complete. Existing 0.4.0 artifacts/tags remain immutable.
+Status: **SOURCE AND INSTALLED ARTIFACT VERIFIED**, not yet published. Package
+metadata and the lock name 0.4.1. The combined full gate and independent wheel
+checks passed; public publication/readback are still required. Existing 0.4.0
+artifacts/tags remain immutable.
 
 ## Scope
 
@@ -91,6 +92,22 @@ The final source archive must be rebuilt after adding this evidence, and the
 final wheel's equality/acceptance checked before publication.
 
 ## Publication requirements
+
+The corrected frozen source `7de2be3ae85b3923fe7fac277e2f759e807f7645`
+passed the entire `scripts/gate.sh`: **927 passed in 796.73 seconds**, exit zero,
+no failures/skips. Python 3.11.16:
+`/tmp/chimera-c0-20261006/.venv/bin/python`; import:
+`/tmp/ghimera-delivery-outbox-20261007/src/ghimera`. Ruff/format passed across
+214 files; strict mypy passed across 144 source files; offline lock checked
+142 packages. No source/tests/examples/metadata changed during the run. This
+evidence update changes documentation only. Final archive inspection must verify
+tracked contents against the tagged checkout and unchanged production modules
+against that gated source. The wheel must remain byte-identical to the
+independently accepted wheel above.
+
+The pre-publication read of GitHub found main still at `3e193f55` and no
+v0.4.1 tag; official PyPI's version-specific metadata returned HTTP 404.
+Those checks are not publication evidence.
 
 Commit the exact candidate, run `scripts/gate.sh` with the declared installed
 fixtures, then build a wheel/source archive. Inspect metadata/contents and
