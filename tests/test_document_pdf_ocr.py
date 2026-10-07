@@ -69,6 +69,8 @@ def test_pdf_pacific_policy_preserves_packs_order_path_and_no_cli(tmp_path):
     assert options["ocr_options"]["path"] == str(cfg.artifacts_directory / "tessdata")
     assert options["ocr_options"]["psm"] == 6
     assert options["ocr_options"]["mode"] == "full_page"
+    assert not options["ocr_options"]["detect_orientation"]
+    assert options["ocr_options"]["minimum_orientation_confidence"] == 15.0
     assert not options["enable_remote_services"]
     assert not options["allow_external_plugins"]
     assert options["accelerator_options"]["device"] == "cpu"

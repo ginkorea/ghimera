@@ -71,6 +71,8 @@ class OfflineTesseract(BaseModel):
     data_directory: str
     native_version: Annotated[str, Field(pattern=r"^tesseract [0-9]+\.[0-9]+\.[0-9]+$")]
     page_segmentation: Literal[1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    orientation: Literal["preserve", "detect"]
+    minimum_orientation_confidence: Annotated[float, Field(ge=0, allow_inf_nan=False)]
     mode: Literal["full_page", "default", "layout_regions", "pdf_aware_layout_regions"]
     scale: Annotated[float, Field(gt=0, allow_inf_nan=False)]
 

@@ -190,6 +190,8 @@ def tesseract_policy(**updates):
         data_directory="tessdata",
         native_version="tesseract 5.5.1",
         page_segmentation=6,
+        orientation="preserve",
+        minimum_orientation_confidence=15.0,
         mode="full_page",
         scale=3.0,
     )

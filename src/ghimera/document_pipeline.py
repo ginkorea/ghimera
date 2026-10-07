@@ -1,6 +1,7 @@
 """Worker-only vendor construction from the lightweight, explicit PDF policy."""
 
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 from docling.datamodel.accelerator_options import AcceleratorOptions
 from docling.datamodel.object_detection_engine_options import (
@@ -18,6 +19,7 @@ from docling.datamodel.pipeline_options import (
     ThreadedPdfPipelineOptions,
 )
 from docling.datamodel.stage_model_specs import ObjectDetectionModelSpec
+from docling.models.base_ocr_model import BaseOcrModel
 from docling.models.postprocessing.reading_order_rb import (
     PageElement,
     ReadingOrderPredictor,
@@ -107,6 +109,23 @@ class ConfiguredPdfPipeline(StandardPdfPipeline):
                 pipeline_options.reading_order_policy
             )
 
+    def _make_ocr_model(self, art_path: Path | None) -> BaseOcrModel:
+        options = self.pipeline_options.ocr_options
+        if isinstance(options, TesseractOcrOptions):
+            from ghimera.document_ocr import PageRecognitionOcr, PageRecognitionOptions
+
+            if isinstance(options, PageRecognitionOptions):
+                return PageRecognitionOcr(
+                    enabled=self.pipeline_options.do_ocr,
+                    artifacts_path=art_path,
+                    options=options,
+                    accelerator_options=self.pipeline_options.accelerator_options,
+                )
+        model = super()._make_ocr_model(art_path)
+        if not isinstance(model, BaseOcrModel):
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        return model
+
 
 def pdf_options(config: DocumentExtractionConfig) -> PdfPipelineOptions:
     models, root = config.pdf_models, config.artifacts_directory
@@ -181,14 +200,18 @@ def pdf_options(config: DocumentExtractionConfig) -> PdfPipelineOptions:
     elif isinstance(models.ocr, OfflineTesseract):
         from tesserocr import tesseract_version
 
+        from ghimera.document_ocr import PageRecognitionOptions
+
         ocr_native = models.ocr
         if tesseract_version().splitlines()[0] != ocr_native.native_version:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-        options.ocr_options = TesseractOcrOptions(
+        options.ocr_options = PageRecognitionOptions(
             lang=list(ocr_native.languages),
             path=str(root / ocr_native.data_directory),
             psm=ocr_native.page_segmentation,
             mode=OcrMode(ocr_native.mode),
             scale=ocr_native.scale,
+            detect_orientation=ocr_native.orientation == "detect",
+            minimum_orientation_confidence=ocr_native.minimum_orientation_confidence,
         )
     return options

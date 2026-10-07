@@ -49,6 +49,51 @@ Controlled outputs/configuration/probe are retained in the owned
 the command sandbox's separately observed child-process timeout; timeout
 results are not counted as completed extraction.
 
+## One-pass recognition correction
+
+The candidate now uses an owned `BaseOcrModel` adapter, reusing Docling's
+region selection, source geometry conversion and PDF/OCR cell merge. A single
+`Recognize` call supplies each selected region's text, boxes and confidence
+through `GetIterator`. No tight-line `SetRectangle` re-recognition occurs.
+The legacy RapidOCR path does not import the optional native binding.
+Orientation is an explicit preserve/detect policy with a finite confidence
+threshold; the sample preserves source orientation.
+
+The same five controlled raster-only inputs ran through `DocumentExtractor`
+with the private Python 3.11.16 worker above. Chinese packs were explicitly
+changed to the immutable `tessdata_best` revision
+`e12c65a915945e4c28e237a9b52bc4a8f39a0cec`, not substituted at runtime.
+The complete revised artifact manifest verified as
+`01ea2d7c9a2f37b2e1b844d930cfca589228ea77bb9efe956a016c349b3e1240`.
+
+| Input | Required-term check | Seconds including worker startup |
+|---|---|---:|
+| Simplified Chinese | Failed: `台湾` misread; `码头` recovered | 21.516 |
+| Traditional Chinese | `臺灣`, `碼頭` recovered | 22.309 |
+| Japanese | `日本`, `政府`, `港湾` recovered | 21.093 |
+| Korean | `한국`, `항만`, `정부` recovered | 21.531 |
+| Tagalog | `daungan`, `pamahalaan`, `mananaliksik` recovered | 19.660 |
+
+These checks test selected terms, not full transcription correctness or a
+language accuracy benchmark. All five language labels matched the intended
+language (both Chinese scripts return `zh`). The aggregate acceptance remains
+**failed** because of Simplified Chinese. A native comparison on its unchanged
+PDF with `chi_sim` versus `chi_sim+eng`, and segmentation 3, 6 and 11,
+also misread that title: neither dropping English nor changing those modes
+closed the gap. Do not correct OCR by guessing the expected source text.
+
+Inputs, exact configurations, extracted documents and reports are retained in
+the owned `.codex-tmp/ghimera-pacific-pdf-best-20261007/page-iterator` tree.
+The adapter's child-process contract checks passed 13 tests in 15.98 seconds
+under the isolated gate Python 3.11.16; this is not a full-package gate.
+The final combined document/model/media/order regressions passed **43 tests
+in 83.37 seconds**, without skips, under that same interpreter importing the
+candidate source. Ruff and formatting passed; strict mypy passed across 122
+source modules. Source/tests/examples were frozen during the reported run.
+The first attempted regression command named two nonexistent test files and
+ran no tests; only the corrected, completed command is counted above. The full
+package gate and publication have not been run for this candidate.
+
 ## Bounded next actions
 
 Local regression evidence (not a full-package gate): Python 3.11.16 at
@@ -59,11 +104,10 @@ the final example/segmentation restriction. After that small addition, the
 Ruff/format and strict mypy on the two changed production modules passed.
 No source/test edits were made during either reported passing run.
 
-1. Correct the pinned OCR adapter's line handling while retaining source-bound
-   boxes and the existing worker lifecycle; compare whole-page recognition
-   with re-recognition and do not globally patch vendor classes.
-2. Re-run all five authored Chinese-script/Japanese/Korean/Tagalog raster-PDF
-   checks. Add vertical and mixed-script inputs separately.
+1. Investigate the remaining Simplified Chinese title error with unchanged
+   source bytes and explicit recognizer settings; do not weaken its witness.
+2. Add vertical and mixed-script inputs separately; installed `jpn_vert` is
+   not evidence of accepted vertical-layout quality.
 3. Require representative publisher scans and semantic extraction/retrieval
    evidence before claiming language quality. Keep OCR availability, language
    identification and semantic-model admission distinct.

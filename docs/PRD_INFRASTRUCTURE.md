@@ -63,6 +63,17 @@ Record admission and actual quality separately for each language/script and
 layout, including mixed-script and vertical material. Missing models fail
 preflight; unvalidated quality remains an explicit acceptance gap.
 
+These languages are requirements for the collector as a whole, not just its
+image OCR: discovery, native HTML/PDF extraction, relevant-image selection,
+OCR, semantic entity/relation extraction, embeddings and retrieval, and cited
+answer generation must each report coverage independently. Simplified and
+Traditional Chinese must have distinct script-qualified acceptance cases even
+when the language detector reports `zh` for both. Tagalog's language identifier
+`tl` and the OCR package label `fil` are explicit adapter names, not a claim of
+coverage for every language spoken in the Philippines. An absent or unvalidated
+stage must surface its coverage gap rather than silently translate, drop native
+material or claim end-to-end support.
+
 The scanned-PDF candidate adds an explicit `ghimera.pdf-models/2` native OCR
 engine and Pacific traineddata manifest beside the unchanged English `/1`
 recipe. It shares the existing owned Docling worker and source/parse receipts.

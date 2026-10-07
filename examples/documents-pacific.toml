@@ -4,7 +4,7 @@
 # Prefer a source-specific subset in pdf_models.ocr.languages for each run;
 # changing languages produces a new configuration digest. All admitted files
 # below must remain in the artifact manifest, including auxiliary osd data.
-# Japanese packs: tessdata_best e12c65a915945e4c28e237a9b52bc4a8f39a0cec.
+# Chinese/Japanese packs: tessdata_best e12c65a915945e4c28e237a9b52bc4a8f39a0cec.
 # Other packs: tessdata_fast 87416418657359cb625c412a48b6e1d6d41c29bd.
 schema = "chimera.document-extraction/1"
 worker_python = "/path/to/private/ghimera-documents/bin/python"
@@ -58,12 +58,12 @@ sha256 = "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
 size_bytes = 4113088
 [[artifacts]]
 path = "tessdata/chi_sim.traineddata"
-sha256 = "a5fcb6f0db1e1d6d8522f39db4e848f05984669172e584e8d76b6b3141e1f730"
-size_bytes = 2469156
+sha256 = "4fef2d1306c8e87616d4d3e4c6c67faf5d44be3342290cf8f2f0f6e3aa7e735b"
+size_bytes = 13077423
 [[artifacts]]
 path = "tessdata/chi_tra.traineddata"
-sha256 = "529c5b5797d64b126065cd55f2bb4c7fd7b15790798091b1ff259941a829330b"
-size_bytes = 2366642
+sha256 = "1aa60488574cafa69486d919284f079ca9b68fcc7f6ad8dc1ff1b318dfd97028"
+size_bytes = 12985735
 [[artifacts]]
 path = "tessdata/jpn.traineddata"
 sha256 = "36bdf9ac823f5911e624c30d0553e890b8abc7c31a65b3ef14da943658c40b79"
@@ -137,6 +137,8 @@ languages = ["chi_sim", "chi_tra", "jpn", "jpn_vert", "kor", "fil", "eng", "ind"
 data_directory = "tessdata"
 native_version = "tesseract 5.5.1"
 page_segmentation = 6
+orientation = "preserve"
+minimum_orientation_confidence = 15.0
 mode = "full_page"
 scale = 3.0
 

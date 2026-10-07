@@ -58,8 +58,8 @@ there is no automatic language/model substitution.
 
 ### Pacific scanned-PDF candidate (not yet published)
 
-`examples/documents-pacific.toml` selects `ghimera.pdf-models/2` and Docling's
-in-process `tesserocr` adapter. It declares Simplified Chinese (`chi_sim`),
+`examples/documents-pacific.toml` selects `ghimera.pdf-models/2` and an owned
+in-process `tesserocr` adapter inside the existing Docling worker. It declares Simplified Chinese (`chi_sim`),
 Traditional Chinese (`chi_tra`), Japanese (`jpn` and `jpn_vert`), Korean (`kor`),
 Tagalog/Filipino (`fil`), English, Indonesian, Malay, Vietnamese and Thai packs.
 These are native OCR inputs, not translations. Select a source-specific subset
@@ -68,7 +68,11 @@ Keep the artifact manifest complete even when a run selects a subset.
 
 The new contract requires the Python binding's exact package version and native
 engine version, an artifact-relative data directory, nonempty ordered language
-packs, page segmentation, OCR mode and scale. All selected `.traineddata` files
+packs, page segmentation, orientation policy, OCR mode and scale. Orientation
+may preserve the source or use explicitly thresholded native detection; a weak
+orientation signal never silently rotates a page. Text and source boxes come
+from one recognition result, not a second recognition of tightly cropped lines.
+All selected `.traineddata` files
 and the pinned vendor's auxiliary `osd.traineddata` must be admitted by size and
 SHA-256. There is no system tessdata or guessed-language fallback. Native OCR
 executes inside the existing bounded parser worker, not an unmanaged CLI child.
@@ -88,10 +92,13 @@ Burmese image packs do not imply this document detector can identify them.
 
 Representative publisher scans, vertical/mixed-script layouts, semantic entity
 extraction and retrieval quality remain separate acceptance requirements.
-The first actual Chinese raster-PDF check **failed**: whole-image native OCR
-read substantially more source text than the vendor's tight per-line
-re-recognition. See `PACIFIC_PDF_CANDIDATE.md`; pack admission and passing
-configuration tests must not be reported as accepted document quality.
+The first actual Chinese raster-PDF check **failed**. The owned one-pass adapter
+fixes the observed tight-line re-recognition corruption. Subsequent controlled
+scans recovered the required terms in Traditional Chinese, Japanese, Korean
+and Tagalog; Simplified Chinese still misread a title term. This is neither
+representative language accuracy nor complete acceptance. See
+`PACIFIC_PDF_CANDIDATE.md`; pack admission and passing configuration tests
+must not be reported as accepted document quality.
 
 The worker needs the package's lightweight core (`pydantic`, `curl-cffi`,
 `protego`) as well as the declared document dependencies. Install into a private
