@@ -220,6 +220,8 @@ class Collector:
         discovery_clients: Mapping[str, McpLeadClient] | None = None,
         ahmia_credential: SecretStr | None = None,
         discovery_credentials: Mapping[str, SecretStr] | None = None,
+        vision_credential: SecretStr | None = None,
+        visual_reviewer_credential: SecretStr | None = None,
     ) -> "Collector":
         return cls(
             GhimeraConfig.from_toml(path, max_bytes=max_config_bytes),
@@ -233,6 +235,8 @@ class Collector:
             discovery_clients=discovery_clients,
             ahmia_credential=ahmia_credential,
             discovery_credentials=discovery_credentials,
+            vision_credential=vision_credential,
+            visual_reviewer_credential=visual_reviewer_credential,
         )
 
     @property

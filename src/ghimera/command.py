@@ -118,6 +118,41 @@ class ResolvedCredentials:
     encoder: SecretStr | None = field(repr=False)
     sources: Mapping[str, SourceCredentials] = field(repr=False)
 
+    def completion_roles(
+        self, config: GhimeraConfig
+    ) -> tuple[Mapping[str, SecretStr], SecretStr | None, SecretStr | None]:
+        services = config.models
+        text_endpoints = (
+            {
+                service.endpoint
+                for service in (
+                    services.planner,
+                    services.analyst,
+                    services.reviewer,
+                    services.judge,
+                )
+            }
+            if services is not None
+            else set()
+        )
+        visual = config.visuals
+        vision = visual.vision if visual is not None else None
+        reviewer = visual.reviewer if visual is not None else None
+        visual_endpoints = {
+            service.endpoint for service in (vision, reviewer) if service is not None
+        }
+        if not set(self.models) <= text_endpoints | visual_endpoints:
+            raise ValueError("completion credentials require an explicit recipe endpoint")
+        return (
+            {
+                endpoint: secret
+                for endpoint, secret in self.models.items()
+                if endpoint in text_endpoints
+            },
+            self.models.get(vision.endpoint) if vision is not None else None,
+            self.models.get(reviewer.endpoint) if reviewer is not None else None,
+        )
+
 
 class CredentialBindings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
@@ -206,10 +241,15 @@ async def execute(
         if options.references_path is not None
         else None
     )
+    model_credentials, vision_credential, visual_reviewer_credential = bindings.completion_roles(
+        config
+    )
     collector = Collector(
         config,
         references=references,
-        model_credentials=bindings.models,
+        model_credentials=model_credentials,
+        vision_credential=vision_credential,
+        visual_reviewer_credential=visual_reviewer_credential,
         encoder_credential=bindings.encoder,
         source_credentials=bindings.sources,
         source_resolver=source_resolver,

@@ -91,7 +91,7 @@ is inspected separately from schema-valid fixture replies.
 
 | ID | Requirement | Current state | Closure evidence |
 |---|---|---|---|
-| I01 | Configurable pacing, nonnegative jitter, origin cooldown and `Retry-After` | Implementing | Deterministic scheduler and real HTTP checks; robots/global floors preserved; cooled origin cannot monopolize global slots |
+| I01 | Configurable pacing, nonnegative jitter, origin cooldown and `Retry-After` | Built in release candidate; final combined gate pending | Deterministic scheduler and real HTTP checks; robots/global floors preserved; cooled origin cannot monopolize global slots |
 | I02 | Concurrent fetch/extract/encode/review stages | Missing | Slow-stage acceptance demonstrates unrelated source progress with bounded resource use, exact accounting and cancellation |
 | I03 | Durable operation frontier and uncertain-call reconciliation | Round checkpoints built; operation recovery missing | Crash before/after source/model/graph acknowledgement resumes without lost or duplicate evidence and preserves actual spend |
 | I04 | Durable original/chunk/vector store and query interface | Native scoring built; corpus vector index missing | Fresh-process native passage retrieval, exact chunk/source/model bindings, index generation isolation and rebuild |

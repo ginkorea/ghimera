@@ -100,6 +100,18 @@ def test_missing_pacific_language_pack_fails_admission(tmp_path):
         TesseractOcr(VisualConfig.model_validate(raw))
 
 
+def test_pacific_profile_distinguishes_scripts_and_declares_japanese_dependencies():
+    config = VisualConfig.model_validate(
+        tomllib.loads(Path("examples/visuals-pacific.toml").read_text())
+    )
+    assert config.language_routes["zh-CN"] == config.language_routes["zh-Hans"]
+    assert config.language_routes["zh-TW"] == config.language_routes["zh-Hant"]
+    assert config.language_routes["zh-Hans"] != config.language_routes["zh-Hant"]
+    assert config.language_routes["tl"] == config.language_routes["fil"] == ("fil", "eng")
+    assert config.language_routes["ja"] == ("jpn", "jpn_vert", "eng")
+    assert config.language_routes["ko"] == ("kor", "eng")
+
+
 @pytest.mark.parametrize("kind", ["tiny", "oversized", "invalid", "animated"])
 def test_decode_refuses_small_bomb_malformed_and_animated_images(tmp_path, kind):
     config = recipe(tmp_path)

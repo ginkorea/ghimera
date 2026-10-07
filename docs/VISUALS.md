@@ -12,7 +12,9 @@ The Pacific recipe declares Simplified Chinese (`chi_sim`), Traditional Chinese
 Indonesian, Malay, Vietnamese, Thai, Khmer, Lao, Burmese and Māori. Native
 document language selects a configured subset, with an explicit fallback set
 for unknown language. An unqualified `zh` selects both Chinese packs; a script
-hint selects the requested script. Language configuration is not an accuracy
+hint selects the requested script; the example also maps `zh-CN`/`zh-SG` to
+Simplified and `zh-TW`/`zh-HK` to Traditional. Tagalog `tl` and Filipino `fil`
+share the declared Filipino pack. Language configuration is not an accuracy
 guarantee, particularly for mixed scripts, low resolution and vertical text.
 Vertical layouts may need the corresponding upstream vertical model and a
 separate segmentation recipe; do not pretend a horizontal model validated them.
@@ -20,8 +22,12 @@ separate segmentation recipe; do not pretend a horizontal model validated them.
 Official pack names and available models:
 [Tesseract language data](https://tesseract-ocr.github.io/tessdoc/Data-Files-in-different-versions.html)
 and [tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast).
-For a reproducible deployment acquire packs from one immutable upstream revision
-and retain their licence and acquisition manifest. Every OCR result records
+For a reproducible deployment acquire packs from immutable upstream revisions
+and retain their licences and acquisition manifest. The controlled Japanese
+fixture required `tessdata_best` rather than `tessdata_fast`; its `jpn_vert`
+supporting pack must also be installed and declared. This is not evidence that
+all Japanese layouts or Pacific languages meet a production quality threshold.
+Every OCR result records
 the executable and selected pack content hashes. Missing declared packs fail
 initial adapter admission; changed bytes refuse subsequent work.
 
@@ -48,6 +54,10 @@ initial adapter admission; changed bytes refuse subsequent work.
    `vision_credential` and `visual_reviewer_credential` inputs. Actual original
    pixels plus OCR go to interpretation and a separate review request; wrong
    image/proposal hashes, truncated replies and unsupported claims refuse.
+   The command's existing environment bindings can name these exact completion
+   endpoints too; they are partitioned by configured role, never discovered or
+   forwarded to another endpoint. `Collector.from_toml` accepts the same
+   explicit memory-only visual credentials.
 7. Only accepted original bytes and source-bound regions survive as
    `Document.images`. Rejected bytes are removed from the conditional fetch
    cache and worker files are cleaned. This path creates no image vectors; an

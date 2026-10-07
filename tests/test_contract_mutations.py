@@ -32,7 +32,7 @@ import pytest
         ),
         (
             "politeness",
-            "host.next_start = loop.time() + spacing",
+            "host.next_start = now + spacing",
             "host.next_start = 0.0",
             "test_http_fetch.py::test_global_and_host_limits_allow_parallel_work_with_delay",
         ),

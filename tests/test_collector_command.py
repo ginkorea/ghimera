@@ -240,6 +240,46 @@ def test_credential_bindings_are_explicit_and_separate(monkeypatch):
             bindings.resolve()
 
 
+def test_completion_credentials_partition_visual_roles_and_refuse_unbound_endpoints(tmp_path):
+    from pydantic import SecretStr
+
+    from ghimera.command import ResolvedCredentials
+    from ghimera.config import GhimeraConfig
+    from tests.test_served_models import service
+    from tests.test_visuals import recipe, run_config
+
+    text, vision, reviewer = service(8101), service(8102), service(8103)
+    configured_visual = recipe(tmp_path)
+    raw = run_config(configured_visual).model_dump()
+    visual = configured_visual.model_dump()
+    visual.update(vision=vision, reviewer=reviewer)
+    raw.update(
+        models={
+            "schema": "chimera.model-bindings/1",
+            "planner": text,
+            "analyst": text,
+            "reviewer": text,
+            "judge": text,
+        },
+        visuals=visual,
+    )
+    cfg = GhimeraConfig.model_validate(raw)
+    secrets = {
+        s.endpoint: SecretStr(f"fixture-{i}") for i, s in enumerate((text, vision, reviewer))
+    }
+    bindings = ResolvedCredentials(models=secrets, encoder=None, sources={})
+    text_bound, vision_bound, reviewer_bound = bindings.completion_roles(cfg)
+    assert text_bound == {text.endpoint: secrets[text.endpoint]}
+    assert vision_bound == secrets[vision.endpoint] and reviewer_bound == secrets[reviewer.endpoint]
+    with pytest.raises(ValueError, match="explicit recipe endpoint"):
+        ResolvedCredentials(
+            models={**secrets, "https://unbound.example/": SecretStr("fixture")},
+            encoder=None,
+            sources={},
+        ).completion_roles(cfg)
+    assert "fixture-" not in repr(bindings)
+
+
 def test_cli_help_and_safe_invalid_input_do_not_echo_values(tmp_path, capsys):
     job = tmp_path / "bad.toml"
     job.write_text('schema = "SECRET-INVALID-SCHEMA"')
