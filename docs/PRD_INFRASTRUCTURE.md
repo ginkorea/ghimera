@@ -121,7 +121,7 @@ is inspected separately from schema-valid fixture replies.
 | ID | Requirement | Current state | Closure evidence |
 |---|---|---|---|
 | I01 | Configurable pacing, nonnegative jitter, origin cooldown and `Retry-After` | Source-complete; included in combined 825-pass gate | Deterministic scheduler and real HTTP checks; robots/global floors preserved; cooled origin cannot monopolize global slots |
-| I02 | Concurrent fetch/extract/encode/review stages | Missing | Slow-stage acceptance demonstrates unrelated source progress with bounded resource use, exact accounting and cancellation |
+| I02 | Concurrent fetch/extract/encode/review stages | Configured source/stage concurrency candidate built; full gate/publication pending | Slow-stage, actual loopback libcurl, byte-reservation, cancellation and interleaved semantic-review witnesses; see CONCURRENT_COLLECTION.md |
 | I03 | Durable operation frontier and uncertain-call reconciliation | Round checkpoints built; operation recovery missing | Crash before/after source/model/graph acknowledgement resumes without lost or duplicate evidence and preserves actual spend |
 | I04 | Durable original/chunk/vector store and query interface | Native scoring built; corpus vector index missing | Fresh-process native passage retrieval, exact chunk/source/model bindings, index generation isolation and rebuild |
 | I05 | Evidence context retrieval/reranking and multilingual discovery | Native bounded selection and provider routing built; richer ranking/query strategies missing | Real cross-language intent finds retained native evidence, with measurable omissions and independent review |

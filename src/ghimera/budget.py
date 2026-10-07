@@ -1,5 +1,6 @@
 """Reserve before spend; the run owns one budget shared by its injected collaborators."""
 
+import asyncio
 from collections.abc import Callable
 
 from ghimera.config import GhimeraConfig
@@ -24,6 +25,7 @@ class RunBudget:
         self.encoding_calls = 0
         self.encoding_chars = 0
         self._bytes_reserved = 0
+        self._bytes_released = asyncio.Event()
 
     @property
     def elapsed(self) -> float:
@@ -97,6 +99,24 @@ class RunBudget:
         self._bytes_reserved -= allowance
         if self._bytes_reserved < 0:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        self._bytes_released.set()
+
+    async def wait_bytes(self, maximum: int) -> int:
+        """Temporary in-flight reservations are backpressure, not actual spend.
+
+        Checking/clearing/reserving is atomic on this run's asyncio loop. A
+        released reservation wakes waiters, which recheck actual available bytes
+        before claiming them. No source/model call begins without its allowance.
+        """
+        while True:
+            self.check_time()
+            if self.remaining_bytes - self._bytes_reserved > 0:
+                return self.reserve_bytes(maximum)
+            if self._bytes_reserved == 0 or self.remaining_bytes == 0:
+                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            self._bytes_released.clear()
+            async with asyncio.timeout(self.remaining_seconds):
+                await self._bytes_released.wait()
 
     def reserve_judge(self) -> None:
         self.check_time()

@@ -16,6 +16,7 @@ from ghimera.continuation_config import ContinuationConfig
 from ghimera.dedup_config import DedupConfig
 from ghimera.discovery_config import DiscoveryConfig
 from ghimera.document_config import DocumentExtractionConfig
+from ghimera.execution_config import ExecutionConfig
 from ghimera.extraction_config import ExtractionConfig
 from ghimera.graph_types import GraphConfig
 from ghimera.human_browser_types import HumanBrowserConfig
@@ -129,6 +130,7 @@ class GhimeraConfig(BaseModel):
     model_policy: Literal["self_hosted_only"]
     http: HttpPolicy | None = None
     cadence: CadenceConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+    execution: ExecutionConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     visuals: VisualConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     graph: GraphConfig | None = None
     journal: JournalConfig | None = Field(default=None, exclude_if=lambda value: value is None)

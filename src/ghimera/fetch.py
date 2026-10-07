@@ -342,7 +342,7 @@ class FetchLadder:
     ) -> Page:
         policy = budget.config.http if route.uses_http else None
         maximum = policy.max_response_bytes if policy else budget.remaining_bytes
-        allowance = budget.reserve_bytes(maximum)
+        allowance = await budget.wait_bytes(maximum)
         try:
             budget.reserve_fetch()
         except GhimeraRefused:

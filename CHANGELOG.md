@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Explicit `ghimera.execution/1` source concurrency and independent parser,
+  scoring, judge, semantic and visual capacities. Reuse the existing frontier,
+  spend boundaries, origin scheduler and graph writer; do not dispatch batches
+  serially or checkpoint in-flight work. Temporary byte reservations produce
+  bounded backpressure, not false exhaustion; cancellation drains owned tasks.
+- Native Pacific scanned-PDF candidate using one Tesseract recognition for text
+  and source boxes, with explicit packs and orientation settings. Legacy PDF
+  recipes retain their identities. Controlled term checks pass Traditional
+  Chinese/Japanese/Korean/Tagalog; a Simplified Chinese title error and broader
+  representative quality acceptance remain open.
+
 ## 0.4.0 — 2026-10-07
 
 - Typed browsing-cadence recipe with nonnegative spacing jitter, shared-origin

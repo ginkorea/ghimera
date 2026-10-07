@@ -4,12 +4,14 @@ import asyncio
 import hashlib
 import heapq
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Literal
 
 from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.content_dedup import ContentIndex
+from ghimera.execution import StageSlots
 from ghimera.extraction_attempts import (
     ExtractionCancelled,
     ExtractionFailure,
@@ -23,6 +25,7 @@ from ghimera.local_inputs import LocalInputFailure, LocalInputLoader
 from ghimera.models import (
     Document,
     DuplicateOccurrence,
+    Extracted,
     Goal,
     Harvest,
     LedgerRow,
@@ -32,11 +35,12 @@ from ghimera.models import (
     Receipt,
     Scope,
     StopReason,
+    Verdict,
 )
 from ghimera.ports import Extractor, Judge
 from ghimera.reference_types import DocumentReference, SearchReference
 from ghimera.references import ReferenceBook
-from ghimera.refusals import GhimeraRefused, ModelFailure, RefusalCode
+from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from ghimera.scoring import Scorer
 from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, SemanticStage
 from ghimera.semantic_recovery import SemanticRecoveryStopped
@@ -63,6 +67,9 @@ class CollectionSession:
         self._reference_origins: dict[str, str] = {}
         self._window_start, self._window_new, self._last_grade = 0, 0, 0
         self._closed = False
+        self._operating = False
+        self._slots = StageSlots(budget.config.execution, budget)
+        self._semantic_locks: dict[str, asyncio.Lock] = {}
         self._semantic_sources: set[str] = set()
         self._content = (
             ContentIndex(budget.config.dedup) if budget.config.dedup is not None else None
@@ -98,7 +105,7 @@ class CollectionSession:
         return self._reference_book.claim_query(document)
 
     def checkpoint_state(self) -> SessionState:
-        if self._closed or not self.budget.quiescent:
+        if self._closed or self._operating or not self.budget.quiescent:
             raise ValueError("checkpoint requires a quiescent live collection session")
         return SessionState(
             frontier=tuple(self._frontier),
@@ -113,6 +120,17 @@ class CollectionSession:
             semantic_sources=tuple(sorted(self._semantic_sources)),
             content_revisions=self._content.revisions if self._content is not None else (),
         )
+
+    @contextmanager
+    def operation(self) -> Iterator[None]:
+        """One driver per run; no checkpoint/finish over unacknowledged tasks."""
+        if self._closed or self._operating:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        self._operating = True
+        try:
+            yield
+        finally:
+            self._operating = False
 
     def restore_state(self, state: SessionState, harvest: Harvest) -> None:
         self._documents = {doc.sha256: doc for doc in harvest.documents}
@@ -270,6 +288,12 @@ class GoalLoop:
     async def import_local(
         self, session: CollectionSession, seeds: tuple[LocalDocumentSeed, ...]
     ) -> None:
+        with session.operation():
+            await self._import_local(session, seeds)
+
+    async def _import_local(
+        self, session: CollectionSession, seeds: tuple[LocalDocumentSeed, ...]
+    ) -> None:
         """Admit local snapshots before planning, through the shared document pipeline."""
         if session._closed or session.budget.config != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -372,12 +396,30 @@ class GoalLoop:
         fetch_limit: int | None = None,
         allow_grade: bool = True,
     ) -> CollectionStop:
+        with session.operation():
+            if self._config.execution is not None:
+                return await self._collect_parallel(
+                    session, scope, seeds, fetch_limit=fetch_limit, allow_grade=allow_grade
+                )
+            return await self._collect_serial(
+                session, scope, seeds, fetch_limit=fetch_limit, allow_grade=allow_grade
+            )
+
+    async def _collect_serial(
+        self,
+        session: CollectionSession,
+        scope: Scope,
+        seeds: tuple[str, ...],
+        *,
+        fetch_limit: int | None,
+        allow_grade: bool,
+    ) -> CollectionStop:
         if session._closed or session.budget.config != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if fetch_limit is not None and fetch_limit <= 0:
             raise ValueError("collection quantum must be positive")
-        goal, budget, ledger = session.goal, session.budget, session.ledger
-        documents, frontier, visited = session._documents, session._frontier, session._visited
+        budget = session.budget
+        frontier, visited = session._frontier, session._visited
         for seed in seeds:
             if seed not in visited:
                 heapq.heappush(frontier, (-1.0, seed, 0))
@@ -391,87 +433,245 @@ class GoalLoop:
             if url in visited:
                 continue
             visited.add(url)
-            try:
-                budget.check_time()
-                active_scope = session._reference_scopes.get(url, scope)
-                parent_hops = session._reference_hops.get(url, 0)
-                if depth > active_scope.max_depth or not active_scope.permits(url):
-                    raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
-                page = await self._fetcher.fetch(url, active_scope, budget, ledger)
-                if parent_hops:
-                    session._reference_hops[page.final_url] = parent_hops
-                    session._reference_origins[page.final_url] = session._reference_origins[url]
-                await self._process_page(session, page, url, depth, active_scope, parent_hops)
-            except (GhimeraRefused, TimeoutError) as exc:
-                if isinstance(exc, ExtractionFailure):
-                    self._record_parse_attempts(ledger, exc.attempts)
-                code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
-                if code in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}:
-                    raise
-                ledger.append(
-                    LedgerRow(
-                        sequence=ledger.next_sequence,
-                        event="refusal",
-                        url=url,
-                        refusal=code,
-                        reason=code.value,
-                    )
-                )
-                if code == RefusalCode.BUDGET_EXHAUSTED:
-                    stop = "budget_exhausted"
-                    break
-                if isinstance(exc, SemanticRecoveryStopped) or code in {
-                    RefusalCode.ADAPTER_CONTRACT,
-                    RefusalCode.MODEL_UNAVAILABLE,
-                }:
-                    stop = "failed"
-                    break
+            result = await self._collect_source(session, scope, url, depth)
+            if result is not None:
+                stop = result
+                break
             if budget.fetches - session._window_start >= self._config.saturation_window:
                 if session._window_new < self._config.saturation_min_new:
                     stop = "saturated"
                     break
                 session._window_start, session._window_new = budget.fetches, 0
             if allow_grade and budget.fetches - session._last_grade >= self._config.grade_interval:
-                try:
-                    budget.reserve_judge()
-                except GhimeraRefused:
-                    stop = "budget_exhausted"
+                result = await self._grade_prefix(session, session.documents, budget.fetches)
+                if result is not None:
+                    stop = result
                     break
-                try:
-                    async with asyncio.timeout(budget.remaining_seconds):
-                        grade = await self._judge.grade(goal, tuple(documents.values()))
-                except (GhimeraRefused, TimeoutError) as exc:
-                    code = (
-                        exc.code
-                        if isinstance(exc, GhimeraRefused)
-                        else RefusalCode.BUDGET_EXHAUSTED
-                    )
-                    ledger.append(
-                        LedgerRow(
-                            sequence=ledger.next_sequence,
-                            event="grade",
-                            refusal=code,
-                            model=self._judge.model,
-                            model_call=exc.model_call if isinstance(exc, ModelFailure) else None,
-                            reason="served_grade_failed",
+        return stop
+
+    async def _collect_source(
+        self, session: CollectionSession, scope: Scope, url: str, depth: int
+    ) -> CollectionStop | None:
+        budget, ledger = session.budget, session.ledger
+        try:
+            budget.check_time()
+            active_scope = session._reference_scopes.get(url, scope)
+            parent_hops = session._reference_hops.get(url, 0)
+            if depth > active_scope.max_depth or not active_scope.permits(url):
+                raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+            page = await self._fetcher.fetch(url, active_scope, budget, ledger)
+            if parent_hops:
+                session._reference_hops[page.final_url] = parent_hops
+                session._reference_origins[page.final_url] = session._reference_origins[url]
+            await self._process_page(session, page, url, depth, active_scope, parent_hops)
+        except asyncio.CancelledError:
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="refusal",
+                    url=url,
+                    refusal=RefusalCode.EXTRACTION_FAILED,
+                    reason="source_processing_cancelled",
+                )
+            )
+            raise
+        except (GhimeraRefused, TimeoutError) as exc:
+            if isinstance(exc, ExtractionFailure):
+                self._record_parse_attempts(ledger, exc.attempts)
+            code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+            if code in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}:
+                raise
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="refusal",
+                    url=url,
+                    refusal=code,
+                    reason=code.value,
+                )
+            )
+            if code == RefusalCode.BUDGET_EXHAUSTED:
+                return "budget_exhausted"
+            if isinstance(exc, SemanticRecoveryStopped) or code in {
+                RefusalCode.ADAPTER_CONTRACT,
+                RefusalCode.MODEL_UNAVAILABLE,
+            }:
+                return "failed"
+        return None
+
+    async def _collect_parallel(
+        self,
+        session: CollectionSession,
+        scope: Scope,
+        seeds: tuple[str, ...],
+        *,
+        fetch_limit: int | None,
+        allow_grade: bool,
+    ) -> CollectionStop:
+        policy = self._config.execution
+        if policy is None or session._closed or session.budget.config != self._config:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        if fetch_limit is not None and fetch_limit <= 0:
+            raise ValueError("collection quantum must be positive")
+        budget, frontier, visited = session.budget, session._frontier, session._visited
+        for seed in seeds:
+            if seed not in visited:
+                heapq.heappush(frontier, (-1.0, seed, 0))
+        start = budget.fetches
+        sources: dict[asyncio.Task[CollectionStop | None], int] = {}
+        grade: asyncio.Task[CollectionStop | None] | None = None
+        graded_documents: int | None = None
+        grading_stopped = False
+        admitted = 0
+        halt: CollectionStop | None = None
+        try:
+            while True:
+                # Never infer saturation from pages still being processed.
+                window_due = budget.fetches - session._window_start >= (
+                    self._config.saturation_window
+                )
+                draining_window = window_due and session._window_new < (
+                    self._config.saturation_min_new
+                )
+                if window_due and not draining_window:
+                    session._window_start, session._window_new = budget.fetches, 0
+                if draining_window and not sources:
+                    return "saturated"
+                if halt is None:
+                    if budget.remaining_seconds <= 0 or budget.remaining_bytes <= 0:
+                        halt = "budget_exhausted"
+                    elif budget.fetches >= self._config.page_budget:
+                        halt = "budget_exhausted"
+                    elif fetch_limit is not None and budget.fetches - start >= fetch_limit:
+                        halt = "round_limit"
+                while frontier and len(sources) < policy.active_sources and halt is None:
+                    if draining_window or (
+                        fetch_limit is not None
+                        and budget.fetches - start + len(sources) >= fetch_limit
+                    ):
+                        break
+                    _, url, depth = heapq.heappop(frontier)
+                    if url in visited:
+                        continue
+                    # Reserve identity before the task's first await. Discovered
+                    # links cannot dispatch a second copy of an in-flight URL.
+                    visited.add(url)
+                    task = asyncio.create_task(self._collect_source(session, scope, url, depth))
+                    sources[task] = admitted
+                    admitted += 1
+                if (
+                    grade is None
+                    and allow_grade
+                    and not grading_stopped
+                    and budget.remaining_seconds > 0
+                    and (
+                        budget.fetches - session._last_grade >= self._config.grade_interval
+                        or (
+                            not frontier
+                            and not sources
+                            and graded_documents is not None
+                            and len(session.documents) > graded_documents
                         )
                     )
-                    stop = "budget_exhausted" if code == RefusalCode.BUDGET_EXHAUSTED else "failed"
-                    break
+                ):
+                    # The immutable accepted-document prefix is graded while
+                    # independent source tasks continue, not after a full drain.
+                    grade = asyncio.create_task(
+                        self._grade_prefix(session, session.documents, budget.fetches)
+                    )
+                    graded_documents = len(session.documents)
+                tasks = set(sources)
+                if grade is not None:
+                    tasks.add(grade)
+                if not tasks:
+                    return halt or "frontier_empty"
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                decision: CollectionStop | None = None
+                for task in sorted(done, key=lambda item: sources.get(item, -1)):
+                    result = task.result()
+                    if task is grade:
+                        grade = None
+                        if result == "budget_exhausted":
+                            grading_stopped = True
+                    else:
+                        del sources[task]
+                    if result == "failed":
+                        decision = result
+                    elif result == "goal_satisfied" and decision is None:
+                        decision = result
+                    if result == "budget_exhausted":
+                        halt = result
+                if decision is not None:
+                    return decision
+        finally:
+            # Cancellation/early satisfaction never leaves fetch/model/parser
+            # work detached from this run. Owners record actual spent work and
+            # finish shielded graph acknowledgements before we return.
+            pending = set(sources)
+            if grade is not None:
+                pending.add(grade)
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            if pending:
+                outcomes = await asyncio.gather(*pending, return_exceptions=True)
+                for outcome in outcomes:
+                    if isinstance(outcome, Exception):
+                        # A concurrent storage/contract failure cannot disappear
+                        # behind another task's goal-satisfied observation.
+                        raise outcome
+
+    async def _grade_prefix(
+        self, session: CollectionSession, documents: tuple[Document, ...], fetches: int
+    ) -> CollectionStop | None:
+        budget, ledger = session.budget, session.ledger
+        reserved = False
+        try:
+            async with session._slots.slot("judge"):
+                budget.reserve_judge()
+                reserved = True
+                async with asyncio.timeout(budget.remaining_seconds):
+                    grade = await self._judge.grade(session.goal, documents)
+        except asyncio.CancelledError as exc:
+            if reserved:
                 ledger.append(
                     LedgerRow(
                         sequence=ledger.next_sequence,
                         event="grade",
+                        refusal=RefusalCode.MODEL_UNAVAILABLE,
                         model=self._judge.model,
-                        model_call=grade.model_call,
-                        reason=f"{grade.satisfied}: {grade.reason}",
+                        model_call=exc.model_call if isinstance(exc, ModelCancelled) else None,
+                        reason="served_grade_cancelled",
                     )
                 )
-                session._last_grade = budget.fetches
-                if grade.satisfied and grade.confidence >= self._config.grade_threshold:
-                    stop = "goal_satisfied"
-                    break
-        return stop
+            raise asyncio.CancelledError from None
+        except (GhimeraRefused, TimeoutError) as exc:
+            code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+            if reserved:
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="grade",
+                        refusal=code,
+                        model=self._judge.model,
+                        model_call=exc.model_call if isinstance(exc, ModelFailure) else None,
+                        reason="served_grade_failed",
+                    )
+                )
+            return "budget_exhausted" if code == RefusalCode.BUDGET_EXHAUSTED else "failed"
+        ledger.append(
+            LedgerRow(
+                sequence=ledger.next_sequence,
+                event="grade",
+                model=self._judge.model,
+                model_call=grade.model_call,
+                reason=f"{grade.satisfied}: {grade.reason}",
+            )
+        )
+        session._last_grade = fetches
+        if grade.satisfied and grade.confidence >= self._config.grade_threshold:
+            return "goal_satisfied"
+        return None
 
     async def _process_page(
         self,
@@ -486,7 +686,7 @@ class GoalLoop:
         goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
         documents, frontier, visited = session._documents, session._frontier, session._visited
         extraction_started = self._clock()
-        async with asyncio.timeout(budget.remaining_seconds):
+        async with session._slots.slot("extraction"), asyncio.timeout(budget.remaining_seconds):
             try:
                 extracted = await self._extractor.extract(page)
             except ExtractionCancelled as exc:
@@ -532,52 +732,27 @@ class GoalLoop:
             )
         # Score native evidence before the judge. Similarity guides the frontier,
         # but never replaces a document verdict or factual source evidence.
-        ranked = await self._scorer.score(goal, extracted, budget, ledger)
+        async with session._slots.slot("scoring"):
+            ranked = await self._scorer.score(goal, extracted, budget, ledger)
         verdict = None
         for second_look in (False, True):
-            budget.reserve_judge()
-            try:
-                async with asyncio.timeout(budget.remaining_seconds):
-                    verdict = await self._judge.document(goal, extracted, second_look=second_look)
-            except (GhimeraRefused, TimeoutError) as exc:
-                code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
-                ledger.append(
-                    LedgerRow(
-                        sequence=ledger.next_sequence,
-                        event="verdict",
-                        url=url,
-                        refusal=code,
-                        model=self._judge.model,
-                        model_call=exc.model_call if isinstance(exc, ModelFailure) else None,
-                        reason="served_judge_failed",
-                    )
-                )
-                raise GhimeraRefused(code) from None
-            ledger.append(
-                LedgerRow(
-                    sequence=ledger.next_sequence,
-                    event="verdict",
-                    model=self._judge.model,
-                    model_call=verdict.model_call,
-                    url=url,
-                    reason=f"{verdict.decision}: {verdict.reason}",
-                )
-            )
+            verdict = await self._document_verdict(session, extracted, url, second_look)
             if verdict.decision != "hold":
                 break
         if verdict is not None and verdict.decision == "accept":
             digest = hashlib.sha256(page.body).hexdigest()
             images: tuple[ImageEvidence, ...] = ()
             if self._visuals is not None and active_scope is not None:
-                images = await self._visuals.collect(
-                    goal=goal,
-                    parent=page,
-                    scope=active_scope,
-                    fetcher=self._fetcher,
-                    budget=budget,
-                    ledger=ledger,
-                    language_hint=extracted.language,
-                )
+                async with session._slots.slot("visual"):
+                    images = await self._visuals.collect(
+                        goal=goal,
+                        parent=page,
+                        scope=active_scope,
+                        fetcher=self._fetcher,
+                        budget=budget,
+                        ledger=ledger,
+                        language_hint=extracted.language,
+                    )
             candidate = Document(
                 url=page.final_url,
                 sha256=digest,
@@ -651,11 +826,14 @@ class GoalLoop:
             if self._semantics is not None:
                 if graph is None or document_node_id is None:
                     raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
-                if document_node_id not in session._semantic_sources:
-                    await self._semantics.extract(
-                        goal.text, candidate, document_node_id, graph, budget, ledger
-                    )
-                    session._semantic_sources.add(document_node_id)
+                lock = session._semantic_locks.setdefault(document_node_id, asyncio.Lock())
+                async with asyncio.timeout(budget.remaining_seconds), lock:
+                    if document_node_id not in session._semantic_sources:
+                        async with session._slots.slot("semantic"):
+                            await self._semantics.extract(
+                                goal.text, candidate, document_node_id, graph, budget, ledger
+                            )
+                        session._semantic_sources.add(document_node_id)
             reference_policy = self._config.references
             if (
                 reference_policy is not None
@@ -692,6 +870,56 @@ class GoalLoop:
                     session._reference_origins.setdefault(
                         link.url, session._reference_origins.get(url, url)
                     )
+
+    async def _document_verdict(
+        self, session: CollectionSession, extracted: Extracted, url: str, second_look: bool
+    ) -> Verdict:
+        budget, ledger = session.budget, session.ledger
+        async with session._slots.slot("judge"):
+            budget.reserve_judge()
+            try:
+                async with asyncio.timeout(budget.remaining_seconds):
+                    verdict = await self._judge.document(
+                        session.goal, extracted, second_look=second_look
+                    )
+            except asyncio.CancelledError as exc:
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="verdict",
+                        url=url,
+                        refusal=RefusalCode.MODEL_UNAVAILABLE,
+                        model=self._judge.model,
+                        model_call=exc.model_call if isinstance(exc, ModelCancelled) else None,
+                        reason="served_judge_cancelled",
+                    )
+                )
+                raise asyncio.CancelledError from None
+            except (GhimeraRefused, TimeoutError) as exc:
+                code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="verdict",
+                        url=url,
+                        refusal=code,
+                        model=self._judge.model,
+                        model_call=exc.model_call if isinstance(exc, ModelFailure) else None,
+                        reason="served_judge_failed",
+                    )
+                )
+                raise GhimeraRefused(code) from None
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="verdict",
+                    model=self._judge.model,
+                    model_call=verdict.model_call,
+                    url=url,
+                    reason=f"{verdict.decision}: {verdict.reason}",
+                )
+            )
+        return verdict
 
     def _record_parse_attempts(
         self, ledger: Ledger, attempts: tuple[HtmlExtractionAttempt, ...]
@@ -780,7 +1008,7 @@ class GoalLoop:
         return True
 
     def finish(self, session: CollectionSession, stop: StopReason) -> Harvest:
-        if session._closed or session.budget.config != self._config:
+        if session._closed or session._operating or session.budget.config != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         session._closed = True
         ledger = session.ledger
@@ -791,6 +1019,8 @@ class GoalLoop:
 
     def snapshot(self, session: CollectionSession, stop: StopReason = "frontier_empty") -> Harvest:
         """Validated partial evidence; does not append stop or seal the journal."""
+        if session._operating or not session.budget.quiescent:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
         return Harvest(
             schema="chimera.harvest/1",

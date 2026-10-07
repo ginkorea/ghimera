@@ -416,7 +416,9 @@ class SemanticStage:
                     tuple(
                         row.sequence
                         for row in ledger.snapshot()
-                        if row.event == "semantic_review" and row.sequence >= first_review_sequence
+                        if row.event == "semantic_review"
+                        and row.sequence >= first_review_sequence
+                        and row.url == document.url
                     ),
                     ledger.snapshot(),
                     code,

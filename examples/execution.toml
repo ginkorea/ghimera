@@ -1,0 +1,10 @@
+# Non-active fragment for GhimeraConfig.execution. Choose capacities for your
+# parser/runtime/model services; the HTTP scheduler still owns origin pacing,
+# global network concurrency and robots. All values enter effective_config.
+schema = "ghimera.execution/1"
+active_sources = 8
+extraction_workers = 4
+scoring_workers = 2
+judge_workers = 2
+semantic_workers = 2
+visual_workers = 2
