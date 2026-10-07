@@ -46,6 +46,24 @@ no failures or skips, including the destination-loss pruning refusal. The final
 versioned source still needs its combined gate. Do not infer real Pacific
 OCR/semantic/retrieval accuracy from deterministic fixture replies.
 
+## Combined candidate and independent artifact observations
+
+The complete gate at `348a522` returned **926 passed, one failed in 813.85
+seconds**, no skips, on Python 3.11.16 at
+`/tmp/chimera-c0-20261006/.venv/bin/python`, importing
+`/tmp/ghimera-delivery-outbox-20261007/src/ghimera`. Ruff/format and strict mypy
+passed. The failure was the release metadata witness still asserting 0.4.0
+against the declared 0.4.1 candidate. Its assertion is corrected to the exact
+new release; no production behavior or other acceptance assertion changed.
+A new combined gate is required before publication.
+
+The first built candidate wheel/source archive passed Twine metadata checks
+and archive-member inspection (no private stores, weights, environment or Git
+metadata). The exact wheel installed with `images,corpus` extras into the
+task-owned release `wheel-env`; its Python 3.11.16 import resolves installed
+`site-packages/ghimera`, not a source/editable path. These initial build checks
+are not a full gate, public readback or multilingual quality acceptance.
+
 ## Publication requirements
 
 Commit the exact candidate, run `scripts/gate.sh` with the declared installed
