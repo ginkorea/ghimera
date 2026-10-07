@@ -49,10 +49,16 @@ import pytest
             "test_served_models.py::test_bad_model_responses_refuse_without_fallback_and_preserve_evidence[truncated]",
         ),
         (
-            "model_http",
-            "address not in self._config.approved_addresses for address in addresses",
+            "private_json",
+            "address not in self.config.approved_addresses for address in addresses",
             "False for address in addresses",
             "test_served_models.py::test_model_dns_must_match_every_approved_address_before_post",
+        ),
+        (
+            "private_json",
+            "address not in self.config.approved_addresses for address in addresses",
+            "False for address in addresses",
+            "test_ahmia.py::test_credentials_are_exact_private_binding_inputs_and_dns_is_checked_before_contact",
         ),
         (
             "search",

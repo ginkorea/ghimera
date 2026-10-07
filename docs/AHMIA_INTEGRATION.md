@@ -147,6 +147,17 @@ expansion against its byte cap, and archive replay rejecting forged index
 metadata even after the normalized response digest is re-sealed. The complete
 package gate remains pending on the current source.
 
+The first complete Ahmia package gate returned **792 passed, 1 failed in
+697.42 seconds**, no skips reported, using the same Python 3.11.16 interpreter
+and owned source path above. Offline lock, Ruff/format and strict mypy passed.
+The failure was an obsolete mutation-test anchor: it attempted to disable the
+private DNS guard in `model_http.py` after that guard moved to `private_json.py`.
+The witness is retargeted to the actual guard, not skipped or relaxed; a second
+witness verifies the Ahmia client uses it too. The complete mutation module
+then returned **18 passed in 45.46 seconds**, no skips reported, using the same
+interpreter and source path. A fresh complete gate is still required; the failed
+earlier run is not relabeled green.
+
 ## Future downstream architecture: external Ahmia MCP, governed results
 
 Status: design only, requested by the owner. This section does not authorize

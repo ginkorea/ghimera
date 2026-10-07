@@ -260,6 +260,11 @@ bounded DOM reads, page-script encoder tampering and caller-browser survival.
 Ambient platform tokens were unset. No external collection, model/GPU calls,
 pool changes, publication or deployment occurred.
 
+For bounded real English and Traditional Chinese public-publisher captures and
+fresh-process paired evidence readback, see
+[public-document evidence](C1_HUMAN_PUBLIC_EVIDENCE.md). That acceptance does not
+extend to human login/challenges, representative publishers or browser Tor.
+
 ## Vendor interface evidence
 
 Official Playwright documentation inspected 7 October 2026 describes

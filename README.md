@@ -4,7 +4,8 @@ Intent-driven web research: discover sources, collect native-language documents,
 follow evidence gaps, and return a source-cited answer—or an explicit partial
 result when the evidence or budget is insufficient.
 
-**v0.3.0 consolidates the repository, distribution and import as `ghimera`.**
+**v0.4.0 adds human-assisted collection, resumable research and routed discovery.**
+The repository, distribution and import use `ghimera`.
 It succeeds the `go-spider` distribution and `chimera` implementation. It is not
 backward-compatible with v0.1.0's `spider_core` API or `spider` CLI. Python
 **3.11+** is required. Some planned browser/document adapters and public-corpus
@@ -18,21 +19,21 @@ self-hosted model services, extraction policies and graph profile.
 - **Goal and intent loops.** Collect from configured seeds with `GoalLoop`, or
   use `ResearchLoop` to plan questions, discover sources through an injected
   search provider, assess gaps, and draft/review an evidence-cited answer.
-- **MCP discovery (development source).** Borrow an explicitly bound MCP
+- **MCP discovery.** Borrow an explicitly bound MCP
   session to obtain source leads; default mappings support the `web_search`
   envelope. Other tools and result paths are configurable. See
   [MCP leads](docs/MCP_LEADS.md).
-- **Configurable discovery routing (development source).** Combine explicit
+- **Configurable discovery routing.** Combine explicit
   open-web and onion lead providers, with per-provider budgets, concurrent
   fan-out or ordered fallback, and bounded switching when research stalls.
   Continuation retains spent budgets and each provider's original response.
   See [discovery routing](docs/DISCOVERY_ROUTING.md). An onion-index service
   is not bundled.
-- **Ahmia index leads (development source).** Query an explicitly configured,
+- **Ahmia index leads.** Query an explicitly configured,
   operator-owned index, or expose its lead payload through an application-owned
   `onion_search` MCP tool. Retain index provenance and fetch original documents
   separately through Tor. See [Ahmia integration](docs/AHMIA_INTEGRATION.md).
-- **Human-proxy browser interaction (development source).** An explicitly
+- **Human-proxy browser interaction.** An explicitly
   configured CLI can pause while you act in the selected browser, then resume
   native capture with request-bound terminal input. See
   [interactive collection](docs/TERMINAL_ASSISTANCE.md).
@@ -49,7 +50,7 @@ self-hosted model services, extraction policies and graph profile.
   Linux worker; the parent fetch boundary handles its permitted HTTP resources,
   redirects and accounting. Browser binaries are explicitly configured and
   verified, not downloaded on import. Alternate passive renderers remain planned;
-  post-release source also supports separately deployed challenge gateways.
+  separately deployed challenge gateways are explicitly supported.
 - **Native extraction.** Configured HTML fit-Markdown, adaptive locator
   profiles, language detection, DOCX tables and native PDF text preserve raw
   bytes beside extracted native-language text. Full PDF/OCR and Marker
@@ -93,9 +94,9 @@ challenges, and a refusal is not a successful research result.
 Representative-corpus accuracy and Marker acceptance remain open; passing a
 controlled document check is not a universal quality claim.
 
-### Unreleased additions after 0.3.0
+### Additions in 0.4.0
 
-The feature branch adds explicitly configured local challenge recovery with
+This release adds explicitly configured local challenge recovery with
 FlareSolverr or Byparr (including its Camoufox-backed 2.x wire),
 private, origin-scoped clearance and guarded content verification; this is
 not a universal CAPTCHA solver. See [challenge recovery](docs/CHALLENGES.md).
@@ -104,7 +105,9 @@ human assistance port: finish ordinary login or a challenge in that browser,
 then continue collection in the same session. DOM acquisition remains distinct
 from HTTP responses throughout extraction, graph evidence, private archives and
 completed-round resume. Browser egress is operator-managed; verified browser
-Tor routing and real-publisher acceptance remain open. See
+Tor routing and representative-publisher acceptance remain open. A bounded
+English/Traditional Chinese public-document capture is recorded in
+[publisher evidence](docs/C1_HUMAN_PUBLIC_EVIDENCE.md). See
 [human-assisted collection](docs/HUMAN_BROWSER.md).
 It also admits hash-pinned owned PDF/DOCX seeds before intent planning through
 the same document pipeline. See [local inputs](docs/LOCAL_INPUTS.md).
@@ -113,7 +116,7 @@ native entity/relationship observations as source-local model assertions.
 Explicit [identity-aware planning](docs/IDENTITY_PLANNING.md) can turn repeated
 names, asserted aliases and potentially competing dated claims into source-bound
 follow-up research questions without merging the original nodes.
-These additions are not in the immutable `ghimera==0.3.0` artifacts. Alias
+These additions were not in the immutable `ghimera==0.3.0` artifacts. Alias
 resolution, graph-driven network expansion and organizational accuracy
 acceptance remain open, not claims of the existing research graph.
 
@@ -124,13 +127,13 @@ Use a dedicated virtual environment:
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'ghimera==0.3.0'
+python -m pip install 'ghimera==0.4.0'
 ```
 
 Install the adapters you intend to configure:
 
 ```bash
-python -m pip install 'ghimera[html,documents,browser]==0.3.0'
+python -m pip install 'ghimera[html,documents,browser]==0.4.0'
 ```
 
 The base package contains the typed core, HTTP/Tor transport, research/search
@@ -147,7 +150,7 @@ scope, budgets, endpoints, model identities/revisions, thresholds, private
 worker directories, browser provenance and direct/Tor policy. Parse once with
 `GhimeraConfig.from_toml(Path(...))`; inject the matching collaborators.
 
-The [examples](https://github.com/ginkorea/ghimera/tree/v0.3.0/examples) are non-active templates. Replace invalid endpoints,
+The [examples](https://github.com/ginkorea/ghimera/tree/v0.4.0/examples) are non-active templates. Replace invalid endpoints,
 contact information, private paths and model identifiers; reference-vector
 fixtures are **not** production relevance data. Adapter blocks belong in the
 main configuration under their named keys, not as unrelated root settings.
@@ -158,7 +161,7 @@ Download the starter configuration, or copy it from the repository:
 
 ```bash
 curl --fail --proto '=https' --tlsv1.2 \
-  https://raw.githubusercontent.com/ginkorea/ghimera/v0.3.0/examples/chimera.toml \
+  https://raw.githubusercontent.com/ginkorea/ghimera/v0.4.0/examples/chimera.toml \
   --output chimera.toml
 ```
 

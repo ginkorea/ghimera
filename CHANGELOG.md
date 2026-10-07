@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.4.0 — 2026-10-07
+
+- Configurable MCP discovery with compatible `web_search` lead envelopes;
+  multi-provider open-web/onion routing, concurrent fan-out or ordered fallback,
+  per-provider budgets and bounded discovery switching after research stalls.
+- Read-only Ahmia index adapter with configured index identity, freshness,
+  query fields, bounded transport and explicit credential injection. Its
+  application-callable `onion_search` payload does not deploy an MCP server or
+  supply an index corpus; snippets remain leads, not collected source evidence.
+- Explicit same-target Chromium human assistance, including a configured
+  terminal command. Login/challenge interaction remains in the operator's
+  browser; native DOM provenance, target continuity, shared capture budgets,
+  archive validation and caller-browser lifetime stay distinct from HTTP fetches.
+- Independent semantic verification and explicit failure/gap records;
+  configurable batched review, native-quote grounding, date assertion review
+  and identity-first graph research planning. Bounded real-model failures are
+  retained, not relabeled as organizational extraction accuracy.
+
 - Explicit version-2 local model-service generation controls: typed reasoning
   effort or thinking-template selection, exact wire/request-hash provenance,
   pre-I/O refusal of ambiguous controls and unchanged legacy recipes. No hidden
