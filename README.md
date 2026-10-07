@@ -241,6 +241,11 @@ verification, quarantined proposals and source-bound coverage gaps that can
 motivate follow-up discovery. See [semantic verification](docs/SEMANTIC_VERIFICATION.md).
 Model agreement is not corroboration; real organizational extraction quality
 remains an open acceptance item.
+An explicit `ghimera.semantic-verification/2` recipe additionally separates
+named-instance/type checks from relationship entailment, direction and dates.
+Contradictory summaries refuse instead of overriding a failed dimension;
+the original review recipe remains unchanged. See the non-active
+[dimensioned example](examples/semantics-factorized.toml).
 
 The unreleased semantic extraction stage can also feed a configured, bounded
 graph view into follow-up research planning. Queries retain references to the

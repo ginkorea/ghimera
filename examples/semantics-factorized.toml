@@ -1,0 +1,43 @@
+# NON-ACTIVE [semantics] block: merge into a complete collector recipe.
+# Explicit opt-in to dimensioned review; legacy verification/1 is unchanged.
+# Bind analyst and reviewer to distinct pinned self-hosted services.
+# No model server, credentials, GPU admission or graph publication is implicit.
+schema = "ghimera.semantics/4"
+prompt_profile = "defined_ontology"
+model_role = "analyst"
+window_chars = 1500
+max_windows_per_document = 64
+max_calls_per_run = 256
+max_mentions_per_window = 32
+max_relations_per_window = 32
+entity_roles = ["person", "organization", "position"]
+relation_rules = ["reports_to", "holds_position", "member_of"]
+mention_rule = "mentions"
+
+[[role_definitions]]
+name = "person"
+definition = "A specifically named individual human, not an unnamed group."
+[[role_definitions]]
+name = "organization"
+definition = "A specifically named institution or organized body, not a country, ideology, generic population or institutional class."
+[[role_definitions]]
+name = "position"
+definition = "A named institutional office or post, distinct from its incumbent, a committee, assembly or other organizational body."
+
+[[relation_definitions]]
+name = "reports_to"
+definition = "The source explicitly states that this source organization reports to this target organization. Co-occurrence and generic job descriptions are insufficient."
+[[relation_definitions]]
+name = "holds_position"
+definition = "The source explicitly identifies this source person as holding this target position."
+[[relation_definitions]]
+name = "member_of"
+definition = "The source explicitly identifies membership of this source person in this target organization."
+
+[verification]
+schema = "ghimera.semantic-verification/2"
+model_role = "reviewer"
+max_calls_per_run = 256
+
+# Increase the configured output budget if actual dimensioned replies truncate.
+# Do not infer calibrated probability or corroboration from model agreement.

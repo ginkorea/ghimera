@@ -27,6 +27,7 @@ MENTION_KEY_PROMPT_REVISION = "ghimera-semantic-extraction/2"
 NATIVE_SPAN_PROMPT_REVISION = "ghimera-semantic-extraction/3"
 DEFINED_ONTOLOGY_PROMPT_REVISION = "ghimera-semantic-extraction/4"
 SEMANTIC_REVIEW_REVISION = "ghimera-semantic-verification/1"
+FACTORIZED_REVIEW_REVISION = "ghimera-semantic-verification/2"
 SEMANTIC_PROFILES = MappingProxyType(
     {
         "ghimera.semantics/1": (None, SEMANTIC_PROMPT_REVISION),
@@ -49,9 +50,19 @@ class SemanticDefinition(GraphRecord):
 
 
 class SemanticVerificationConfig(GraphRecord):
-    schema_version: Literal["ghimera.semantic-verification/1"] = Field(alias="schema")
+    schema_version: Literal[
+        "ghimera.semantic-verification/1", "ghimera.semantic-verification/2"
+    ] = Field(alias="schema")
     model_role: Literal["analyst", "reviewer", "judge"]
     max_calls_per_run: Positive
+
+    @property
+    def effective_prompt_revision(self) -> str:
+        return (
+            FACTORIZED_REVIEW_REVISION
+            if self.schema_version == "ghimera.semantic-verification/2"
+            else SEMANTIC_REVIEW_REVISION
+        )
 
 
 class SemanticConfig(GraphRecord):
@@ -202,6 +213,80 @@ class SemanticReview(GraphRecord):
         return self
 
 
+class SemanticCheck(GraphRecord):
+    verdict: ReviewVerdict
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+
+    @model_validator(mode="after")
+    def explained(self) -> "SemanticCheck":
+        if not self.reason.strip():
+            raise ValueError("semantic check requires a nonblank dimension-specific reason")
+        return self
+
+
+class MentionChecks(GraphRecord):
+    named_entity: SemanticCheck
+    role: SemanticCheck
+
+
+class RelationChecks(GraphRecord):
+    entailment: SemanticCheck
+    direction: SemanticCheck
+    validity: SemanticCheck
+
+
+class FactorizedMentionAssessment(MentionAssessment):
+    checks: MentionChecks
+
+
+class FactorizedRelationAssessment(RelationAssessment):
+    checks: RelationChecks
+
+
+def combined_verdict(checks: tuple[SemanticCheck, ...]) -> ReviewVerdict:
+    """A failed dimension dominates; uncertainty can never become support."""
+    if any(check.verdict == "unsupported" for check in checks):
+        return "unsupported"
+    if any(check.verdict == "ambiguous" for check in checks):
+        return "ambiguous"
+    return "supported"
+
+
+class FactorizedSemanticReview(SemanticReview):
+    schema_version: Literal["ghimera.semantic-review/2"] = Field(alias="schema")
+    mentions: tuple[FactorizedMentionAssessment, ...]
+    relations: tuple[FactorizedRelationAssessment, ...]
+
+    @model_validator(mode="after")
+    def consistent_dimensions(self) -> "FactorizedSemanticReview":
+        for mention in self.mentions:
+            if mention.verdict != combined_verdict(
+                (mention.checks.named_entity, mention.checks.role)
+            ):
+                raise ValueError("mention summary must match every explicit review dimension")
+        for relation in self.relations:
+            if relation.verdict != combined_verdict(
+                (relation.checks.entailment, relation.checks.direction, relation.checks.validity)
+            ):
+                raise ValueError("relation summary must match every explicit review dimension")
+        return self
+
+
+def restore_review(review: SemanticReview) -> SemanticReview:
+    """Revalidate known versioned data without erasing subclass evidence."""
+    if isinstance(review, FactorizedSemanticReview):
+        return FactorizedSemanticReview.model_validate(review.model_dump())
+    return SemanticReview.model_validate(review.model_dump())
+
+
+def review_profile_matches(
+    verification: SemanticVerificationConfig, review: SemanticReview
+) -> bool:
+    return isinstance(review, FactorizedSemanticReview) == (
+        verification.schema_version == "ghimera.semantic-verification/2"
+    )
+
+
 ExclusionReason = Literal[
     "native_span_missing",
     "unknown_role",
@@ -241,7 +326,9 @@ class SemanticWindow(GraphRecord):
     nodes: tuple[GraphNode, ...]
     edges: tuple[GraphEdge, ...]
     held_edges: tuple[GraphEdge, ...]
-    review: SemanticReview | None = Field(default=None, exclude_if=lambda v: v is None)
+    review: FactorizedSemanticReview | SemanticReview | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     excluded_mentions: tuple[MentionExclusion, ...] = Field(default=(), exclude_if=lambda v: not v)
     excluded_relations: tuple[RelationExclusion, ...] = Field(
         default=(), exclude_if=lambda v: not v

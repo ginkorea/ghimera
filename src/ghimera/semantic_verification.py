@@ -6,7 +6,7 @@ from ghimera.model_config import ModelServiceConfig
 from ghimera.models import Document
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_types import Citation
-from ghimera.semantic_types import SEMANTIC_REVIEW_REVISION, SemanticProposal, SemanticReview
+from ghimera.semantic_types import SemanticProposal, SemanticReview, review_profile_matches
 
 
 def validate_proposal(
@@ -62,6 +62,9 @@ def validate_review(
     intent: str,
 ) -> None:
     service = review_service(config)
+    policy = config.semantics
+    if policy is None or policy.verification is None:
+        raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
     call = review.model_call
     citation = native_citation(document, start, end)
     context = ContextSelector(
@@ -71,7 +74,8 @@ def validate_review(
         call is None
         or call.service != service
         or call.task != "semantic_review"
-        or call.prompt_revision != SEMANTIC_REVIEW_REVISION
+        or call.prompt_revision != policy.verification.effective_prompt_revision
+        or not review_profile_matches(policy.verification, review)
         or call.outcome != "success"
         or call.context_sha256 != context.content_digest()
         or call.selected_spans != ((citation.document_id, start, end),)

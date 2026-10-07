@@ -22,7 +22,6 @@ from ghimera.model_types import ModelCallEvidence
 from ghimera.models import Document, Harvest, LedgerRow, ModelIdentity
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from ghimera.semantic_types import (
-    SEMANTIC_REVIEW_REVISION,
     ExclusionReason,
     MentionExclusion,
     RelationExclusion,
@@ -31,6 +30,8 @@ from ghimera.semantic_types import (
     SemanticProposal,
     SemanticReview,
     SemanticWindow,
+    restore_review,
+    review_profile_matches,
 )
 from ghimera.semantic_verification import review_service, validate_proposal, validate_review
 
@@ -92,7 +93,7 @@ def project(
     if (policy.verification is not None) != (review is not None):
         raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
     if review is not None:
-        review = SemanticReview.model_validate(review.model_dump())
+        review = restore_review(review)
         validate_review(config, proposal, review, document, start, end, intent)
     citation = validate_proposal(config, proposal, document, start, end, intent)
     reference = citation_id(citation)
@@ -373,7 +374,7 @@ class SemanticStage:
                     intent, document, start, end, policy, proposal
                 )
             call = review.model_call
-            review = SemanticReview.model_validate(review.model_dump())
+            review = restore_review(review)
             validate_review(self._config, proposal, review, document, start, end, intent)
             return review
         except ModelCancelled as exc:
@@ -444,11 +445,16 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
                 row.model != identity
                 or row.url is None
                 or (
+                    row.semantic_review is not None
+                    and not review_profile_matches(policy.verification, row.semantic_review)
+                )
+                or (
                     row.model_call is not None
                     and (
                         row.model_call.service != service
                         or row.model_call.task != "semantic_review"
-                        or row.model_call.prompt_revision != SEMANTIC_REVIEW_REVISION
+                        or row.model_call.prompt_revision
+                        != policy.verification.effective_prompt_revision
                     )
                 )
             ):

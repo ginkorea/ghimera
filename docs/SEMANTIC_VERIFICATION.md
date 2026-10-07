@@ -22,6 +22,58 @@ bounds, generation controls and deadlines use the existing completion client.
 Legacy semantic profiles 1–3 retain their prompts, serialization and refusal
 behavior; they do not silently acquire quarantine or a second model call.
 
+## Explicit dimensioned review
+
+Select `schema="ghimera.semantic-verification/2"` in `[semantics.verification]`
+to opt into the new `ghimera-semantic-verification/2` prompt and
+`ghimera.semantic-review/2` response. The non-active
+[factorized example](../examples/semantics-factorized.toml) supplies the same
+defined-ontology extraction policy with this explicit choice. It changes no
+running configuration and starts no model or GPU job.
+
+This addresses a failure seen in the actual
+[independent native-document trial](ORGANIZATION_INDEPENDENT_EVIDENCE.md): a
+reviewer accepted abstract concepts as organizations because the strings were
+present, and accepted relationships without establishing their specific
+predicate and direction. A single verdict/reason hid which judgment was made.
+
+Every mention now retains two separate checks:
+
+- `named_entity`: a specific named instance, not an abstract concept, generic
+  class, unnamed population or phrase fragment;
+- `role`: that instance satisfies the configured type definition, preserving
+  distinctions such as institution, office and incumbent.
+
+Every relationship retains three separate checks:
+
+- `entailment`: the native source asserts this predicate for these endpoints;
+- `direction`: the proposed source and target have the stated roles in it;
+- `validity`: asserted dates have source support; unknown dates remain null.
+
+Each check requires a supported/unsupported/ambiguous judgment and its own
+nonblank reason. The summary verdict must equal their deterministic aggregate:
+any unsupported check means unsupported; otherwise any ambiguous check means
+ambiguous; only all-supported checks permit supported. An inconsistent summary,
+missing check or undimensioned response refuses before graph projection.
+Unsupported and ambiguous items use the existing quarantine behavior, including
+relationships whose endpoint is quarantined. Literal presence or confidence
+cannot override a failed dimension. Exact native matching remains independent.
+
+The new response extends the existing review data contract; it does not replace
+the model port, graph owner, budget, journal or archive. The original unversioned
+review response/schema, verification/1 prompt and serialization remain unchanged.
+Ledger/window readers retain and revalidate the dimensioned subtype rather
+than silently discarding its extra evidence. A verification/1 recipe cannot
+silently accept a verification/2 response, or vice versa.
+
+Dimensioned reasons consume the existing configured request/response, output
+token, call and wall budgets. Large proposals may need a smaller configured
+window/list limit or a larger admitted output allowance; there is no hidden
+budget increase, repair or fallback. Original model agreement still can be
+wrong on every dimension. This contract makes the judgment explicit and
+auditable; real-model role/entailment accuracy and calibration require fresh
+source-bound acceptance, not merely a passing schema or fixture.
+
 ## What is checked
 
 Each original extraction proposal remains unchanged in the retained window.
@@ -78,6 +130,35 @@ The planner receives `ghimera-graph-planning/2`, explicitly marking gaps as
 assessments, never facts. Existing planning/1 identities remain unchanged.
 
 ## Acceptance still required
+
+For the dimensioned extension, tests first demonstrated that verification/2
+was absent (configuration refused before any model call). The bounded expanded
+semantic/graph/archive checks then passed **76 tests, zero failed, zero skipped**
+in 7.94 seconds using `/tmp/chimera-c0-20261006/.venv/bin/python`, Python
+3.11.16, importing this checkout's `src/ghimera`. They cover every failed or
+uncertain dimension, inconsistent summaries, missing dimensions, downgrade
+refusal, original proposals, serialized windows, full loop archive/journal
+retention and call-budget restoration. A frozen schema digest checks that the
+legacy model response is unchanged. One added test initially used the wrong
+serialization alias; that test was corrected rather than changing the wire.
+The sandboxed fixture run timed out at asynchronous journal/thread work and
+was not counted as passing; the bounded native-thread run supplied the result.
+
+A fresh read-only replay of the previous real-document trial also passed with
+the changed readers: 15 retained windows, 32 ledger rows and 15 graph batches
+on the same Python 3.11.16 interpreter. No model call was repeated and no
+retained response was rewritten. This verifies legacy compatibility, not the
+new prompt's accuracy. The dimensioned recipe still needs a fresh admitted
+real-model trial against positive/negative native role and relationship cases.
+
+The complete dimensioned-extension `scripts/gate.sh` run completed on 7 October
+2026 UTC (6 October in Hawaii) with that same owned Python 3.11.16 interpreter
+and checkout: **535 passed, zero failed, zero skipped**, 516.15 seconds.
+Offline lock validation resolved 137 packages; lint passed, formatting passed
+for all 130 checked files and strict typing passed for 90 source files.
+The installed Chromium ran through the existing isolated local browser fixtures.
+No public CAPTCHA gateway, public-corpus collection or real inference service
+was used in this gate. This verifies implementation and compatibility only.
 
 The complete `scripts/gate.sh` run on 6 October 2026 used
 `/tmp/chimera-c0-20261006/.venv/bin/python`, Python 3.11.16, importing this
