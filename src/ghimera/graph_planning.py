@@ -41,6 +41,14 @@ def policy_of(config: GhimeraConfig) -> GraphPlanningConfig | None:
     return config.research.graph_context if config.research is not None else None
 
 
+def planning_call_revision(config: GhimeraConfig, context: PlanningGraph) -> str:
+    """Pin the combined prompt without rewriting the published graph-view identity."""
+    retained = config.research is not None and config.research.retained_evidence is not None
+    return (
+        context.prompt_revision + "+retained-snapshots/1" if retained else context.prompt_revision
+    )
+
+
 def evidence_size(
     entities: tuple[PlanningEntity, ...],
     relations: tuple[GraphEdge, ...],
@@ -289,30 +297,36 @@ def validate_context(
         policy.identity, tuple(item.node for item in context.entities), context.relations
     ):
         raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
-    docs = {(doc.url, doc.sha256): doc for doc in documents}
-    sources = {source.document_id: source for source in context.sources}
+    docs: dict[str, tuple[Document, ...]] = {}
     for source in context.sources:
-        document = docs.get((source.source_url, source.document_sha256))
-        if (
-            document is None
-            or hashlib.sha256(document.raw).hexdigest() != source.document_sha256
-            or hashlib.sha256(document.extracted.text.encode()).hexdigest() != source.text_sha256
-        ):
+        readings = tuple(
+            doc
+            for doc in documents
+            if doc.url == source.source_url
+            and doc.sha256 == source.document_sha256
+            and hashlib.sha256(doc.raw).hexdigest() == source.document_sha256
+            and hashlib.sha256(doc.extracted.text.encode()).hexdigest() == source.text_sha256
+        )
+        if not readings:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+        docs[source.document_id] = readings
     for span in (
         *(entity.evidence for entity in context.entities),
         *(span for edge in context.relations for span in edge.evidence),
     ):
-        source = sources[span.document_id]
-        document = docs[(source.source_url, source.document_sha256)]
-        text = document.extracted.text
-        proof = document.extracted.pdf_transcription
-        if not span.matches_reading(
-            document.sha256, text, pdf_reading=proof.graph_reading() if proof is not None else None
+        if not any(
+            span.matches_reading(
+                doc.sha256,
+                doc.extracted.text,
+                pdf_reading=doc.extracted.pdf_transcription.graph_reading()
+                if doc.extracted.pdf_transcription is not None
+                else None,
+            )
+            for doc in docs[span.document_id]
         ):
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
     for gap in context.gaps:
-        document = docs[(gap.source.source_url, gap.source.document_sha256)]
+        document = docs[gap.source.document_id][0]
         text = document.extracted.text
         if not 0 <= gap.start < gap.end <= len(text) or gap.omitted_chars not in {
             0,
@@ -352,7 +366,8 @@ def validate_rows(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> None:
             if config.models is None or (
                 row.model_call.service != config.models.planner
                 or row.model_call.task != "plan"
-                or row.model_call.prompt_revision != row.planning_graph.prompt_revision
+                or row.model_call.prompt_revision
+                != planning_call_revision(config, row.planning_graph)
             ):
                 raise ValueError("graph-aware planning calls must bind their configured planner")
         prefix.append(row)

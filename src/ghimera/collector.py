@@ -10,6 +10,7 @@ from ghimera.ahmia_config import AhmiaConfig
 from ghimera.browser import IsolatedBrowserRenderer
 from ghimera.config import GhimeraConfig
 from ghimera.corpus import EvidenceCorpus
+from ghimera.corpus_evidence import CorpusEvidenceReader
 from ghimera.corpus_search import CorpusLeadSearch
 from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.discovery import DiscoveryProviders
@@ -74,6 +75,7 @@ class Collector:
         transcription_reviewer_credential: SecretStr | None = None,
         corpus: EvidenceCorpus | None = None,
         discovery_corpora: Mapping[str, EvidenceCorpus] | None = None,
+        retained_reader: CorpusEvidenceReader | None = None,
     ) -> None:
         # Revalidate injected models: model_copy(update=...) can bypass guards.
         config = GhimeraConfig.model_validate(config.model_dump())
@@ -262,6 +264,7 @@ class Collector:
             planner=models.planner,
             analyst=models.analyst,
             reviewer=models.reviewer,
+            retained_reader=retained_reader,
         )
         self._config, self._collection, self._research = config, collection, research
 
@@ -288,6 +291,7 @@ class Collector:
         transcription_reviewer_credential: SecretStr | None = None,
         corpus: EvidenceCorpus | None = None,
         discovery_corpora: Mapping[str, EvidenceCorpus] | None = None,
+        retained_reader: CorpusEvidenceReader | None = None,
     ) -> "Collector":
         return cls(
             GhimeraConfig.from_toml(path, max_bytes=max_config_bytes),
@@ -308,6 +312,7 @@ class Collector:
             transcription_reviewer_credential=transcription_reviewer_credential,
             corpus=corpus,
             discovery_corpora=discovery_corpora,
+            retained_reader=retained_reader,
         )
 
     @property

@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from ghimera.corpus_config import CorpusConfig
@@ -166,7 +166,12 @@ class EvidenceCorpus:
             return await off_loop(read)
 
     async def _encode(
-        self, texts: tuple[str, ...], encoder: EvidenceEncoder, operation: str, purpose: str
+        self,
+        texts: tuple[str, ...],
+        encoder: EvidenceEncoder,
+        operation: str,
+        purpose: str,
+        observer: Callable[[EncodingCall], None] | None = None,
     ) -> tuple[EncodingBatch, int]:
         service = encoder.config
         expected = tuple(digest((service.text_prefix + text).encode()) for text in texts)
@@ -209,7 +214,11 @@ class EvidenceCorpus:
             elif not successful and call.outcome == "success":
                 call = call.model_copy(update={"outcome": "refused"})
             call = EncodingCall.model_validate(call.model_dump())
-            identity = self._storage.audit(operation, purpose, call)
+            try:
+                identity = self._storage.audit(operation, purpose, call)
+            finally:
+                if observer is not None:
+                    observer(call)
         return batch, identity
 
     def _batches(
@@ -335,7 +344,12 @@ class EvidenceCorpus:
             storage.close()
 
     async def search(
-        self, text: str, *, top_k: int, languages: tuple[str, ...] = ()
+        self,
+        text: str,
+        *,
+        top_k: int,
+        languages: tuple[str, ...] = (),
+        encoding_observer: Callable[[EncodingCall], None] | None = None,
     ) -> CorpusQuery:
         with self._operation():
             if (
@@ -352,7 +366,9 @@ class EvidenceCorpus:
             try:
                 async with asyncio.timeout(self.config.operation_timeout_seconds):
                     generation, ids, index = await self._snapshot()
-                    batch, _ = await self._encode((text,), self._query_encoder, operation, "query")
+                    batch, _ = await self._encode(
+                        (text,), self._query_encoder, operation, "query", encoding_observer
+                    )
                     hits: list[CorpusHit] = []
                     neighbors = await off_loop(
                         lambda: index.search(

@@ -1,8 +1,9 @@
 # Retained evidence context and research reuse
 
 Development candidate, not included in the immutable 0.4.5 artifacts. This
-implements the direct-context boundary of I05, not full research-loop reuse,
-freshness, reranking or representative multilingual quality acceptance.
+implements the direct-context boundary and configured research-loop reuse of
+I05. Freshness, reranking, retained-source graph projection and representative
+multilingual quality acceptance still require further work.
 
 `CorpusEvidenceReader(policy, corpus)` borrows an explicitly opened corpus and
 returns ranked original passages with their full original `Document` objects.
@@ -44,32 +45,85 @@ browser observations remain within originals; they are not appended as current
 run events or charged as new model calls. An oversized bundle refuses rather
 than silently truncating provenance; its already-issued query remains audited.
 
-## Required next integration, not optional closure
+## Configured research reuse
 
-1. Add an explicit research reuse policy and retained-source capsule to the run
-   result/checkpoint. Keep fresh `Harvest` and historical originals distinct;
-   neither their provenance nor their budgets may masquerade as the other.
-2. Run relevance/evidence assessment against the **new intent**, retaining actual
-   current model calls. The original corpus acceptance is not this assessment.
-3. Bind cited answers and graph nodes to the retained source representation,
+The `ghimera.research-reuse/1` policy is `research.retained_evidence` in the
+ordinary collector recipe. See `examples/research-reuse.toml`; replace its
+placeholder identities before use. Inject `retained_reader=reader` into
+`Collector` or `Collector.from_toml`. Reader/store lifetime remains caller-owned.
+Missing or mismatched bindings refuse before research model work; there is no
+implicit corpus discovery, credential lookup or second crawler.
+
+The normal research loop queries the original intent and then planned queries.
+It supplies retained originals, not search snippets, to the current planner,
+analyst and independent reviewer. Explicit unknown-age notices bind the whole
+source representation and its text hash. The served-model prompt requires
+reassessment for the new question, and asks for new sources when unknown-age
+snapshots cannot support a time-sensitive answer. An old relevance verdict is
+never taken as current question coverage. Only newly assessed, exactly cited and
+independently reviewed coverage can finish a run.
+
+With `assess_before_discovery=true`, sufficient retained text/PDF evidence can
+answer without contacting its original hosts. Insufficient/empty/unavailable
+retrieval continues the normal discovery and acquisition paths. Explicit source
+seeds are still visited even if cached material covers the question. Disabling
+early assessment still supplies originals but does not skip web discovery.
+Local retrieval does not grant permission to contact source hosts; discovery
+continues to enforce its own source scope.
+
+Graph-aware planning keeps its published graph-view identity unchanged. With a
+configured retained-evidence recipe, the actual planning call pins the combined
+prompt as `<graph prompt revision>+retained-snapshots/1`; ledger replay checks
+the same revision. Ordinary graph-only planning retains its original prompt pin.
+
+`chimera.research-result/3` keeps `retrieval` beside the fresh `harvest`:
+
+- The fresh harvest contains only current acquisition and model events. Its
+  fetch/encoding counters do not relabel corpus reads as source HTTP work.
+- `ghimera.research-retrieval/1` contains actual current query observations,
+  separately configured query/character/snapshot/document bounds and admitted
+  `ghimera.corpus-evidence/1` capsules. A successful encoding whose context
+  delivery fails remains spent; cancellation preserves its actual observation.
+- Historical local imports, page renders, OCR and reviews stay in each retained
+  original. They are neither replayed nor charged as new collection work.
+- `result.evidence_documents` joins fresh and retained originals by full
+  representation identity. Different readings of identical URL/bytes remain
+  distinct; citation text hash, reading basis and page indices remain checked.
+- Completed-round checkpoints pin these admitted originals and retrieval spend.
+  Resume does not repeat successful queries, including empty ones, or replace
+  already admitted originals with a new corpus generation. Operation-level
+  crash/uncertain-ack recovery remains I03, not a property of round checkpoints.
+
+The query allowance is explicit and distinct from collection-scoring and
+source-discovery allowances. Global research wall time still bounds everything.
+Exhausting a local retrieval allowance does not forbid remaining source work.
+Do not interpret cosine as calibrated answer confidence or independent review
+as proof of freshness. Real-model multilingual/temporal quality still needs
+acceptance; protocol fixtures establish wiring and provenance, not accuracy.
+
+## Remaining required integration, not optional closure
+
+1. Bind graph nodes and semantic extraction to the retained source representation,
    including reviewed-PDF page/model records and image regions. Preserve native
    wire identities and do not reinterpret old extraction under today's recipe.
-4. Pause/resume and cancellation must preserve admitted snapshots, current spend
-   and query observations without a duplicate source fetch or fabricated model
-   call. New graph processing must remain current work, not recycled assertions.
-5. Add acquisition observations for future records before enabling age-bounded
+   The current fresh-harvest graph does not project historical originals; no old
+   local import, browser action or semantic assessment is invented in that graph.
+2. Extend answer/context citations to visual claims and image regions (I10).
+   Retaining image passages is not yet visual-answer or visual-graph acceptance.
+3. Add acquisition observations for future records before enabling age-bounded
    fresh-cache behavior. Old records remain unknown-age; never backfill invented
    timestamps. Hybrid/rerank and multilingual acceptance are separate I05 work.
 
 Acceptance for this boundary uses real SQLite/FAISS persistence, fresh decode,
 source/query/selection mutations, response limits and exact reviewed-PDF page
 provenance, with scripted encoding/transcription replies. It is not evidence
-that a served model answers correctly or that automatic research reuse is live.
+that a served model answers correctly or that automatic research reuse is
+deployed. The research-loop candidate also needs its own focused and full gates.
 
 ## Integration contract
 
-The next implementation belongs in `ResearchLoop`, assembled through `Collector`,
-not in a second crawler or an application-specific wrapper. A run must bind the
+Reuse belongs in `ResearchLoop`, assembled through `Collector`, not in a second
+crawler or an application-specific wrapper. A run must bind the
 caller-owned reader to its typed research configuration before any model spend.
 The context remains an explicit snapshot capsule alongside the fresh harvest.
 

@@ -16,7 +16,9 @@ from pydantic import ValidationError
 
 from ghimera.config import GhimeraConfig
 from ghimera.continuation import CheckpointStore, ResearchCheckpoint, ResearchSuspended
+from ghimera.corpus_evidence import CorpusEvidenceReader
 from ghimera.corpus_search_config import CorpusSearchConfig
+from ghimera.corpus_types import BoundCorpusDocument
 from ghimera.discovery import DiscoveryProviders
 from ghimera.discovery_config import DiscoveryProgress
 from ghimera.graph_planning import build_context
@@ -35,6 +37,7 @@ from ghimera.models import (
 from ghimera.reference_types import ReferenceQuery, ReferenceSource, SearchReference
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from ghimera.research_config import ResearchConfig
+from ghimera.research_reuse import RetainedResearchSession, RetainedSourceNotice
 from ghimera.research_types import (
     AnswerDraft,
     AnswerRequest,
@@ -99,12 +102,11 @@ def citation_for(document: Document, start: int, end: int) -> Citation:
 
 class CitationValidator:
     def __init__(self, documents: tuple[Document, ...]) -> None:
-        self._documents = {(doc.sha256, doc.url): doc for doc in documents}
+        self._documents = documents
 
     def validate(self, citations: tuple[Citation, ...]) -> None:
         for citation in citations:
-            doc = self._documents.get((citation.document_sha256, citation.source_url))
-            if doc is None or not citation.matches(doc):
+            if not any(citation.matches(doc) for doc in self._documents):
                 raise GhimeraRefused(RefusalCode.UNSUPPORTED_ANSWER)
 
 
@@ -262,10 +264,17 @@ class ResearchLoop:
         planner: IntentPlanner,
         analyst: ResearchAnalyst,
         reviewer: AnswerReviewer,
+        retained_reader: CorpusEvidenceReader | None = None,
     ) -> None:
         policy = config.research
         if policy is None or collector.config != config:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+        if (policy.retained_evidence is not None) != (retained_reader is not None) or (
+            policy.retained_evidence is not None
+            and retained_reader is not None
+            and retained_reader.policy != policy.retained_evidence.reader
+        ):
+            raise ValueError("retained research requires its exact configured corpus reader")
         if isinstance(search, DiscoveryProviders):
             if config.discovery != search.policy:
                 raise ValueError("discovery ports require the exact effective strategy recipe")
@@ -289,6 +298,7 @@ class ResearchLoop:
         self._config, self._policy = config, policy
         self._collector, self._search = collector, search
         self._planner, self._analyst, self._reviewer = planner, analyst, reviewer
+        self._retained_reader = retained_reader
         if config.graph is not None and config.graph.enabled:
             roles = {role.name for role in config.graph.roles}
             if not {"question", "query"} <= roles:
@@ -544,28 +554,83 @@ class ResearchLoop:
         finally:
             session.ledger.close()
 
+    @staticmethod
+    def _documents(
+        session: CollectionSession, reuse: RetainedResearchSession | None
+    ) -> tuple[Document, ...]:
+        if reuse is None:
+            return session.evidence_documents
+        originals = {
+            BoundCorpusDocument(doc).identity: doc
+            for doc in session.evidence_documents + reuse.report.documents
+        }
+        return tuple(originals.values())
+
+    @staticmethod
+    def _notices(reuse: RetainedResearchSession | None) -> tuple[RetainedSourceNotice, ...]:
+        return reuse.report.notices if reuse is not None else ()
+
+    async def _retrieve(
+        self, session: CollectionSession, reuse: RetainedResearchSession | None, text: str
+    ) -> None:
+        if reuse is None:
+            return
+        # Exhausting the separate cache-search allowance does not exhaust source
+        # discovery. A global wall-budget expiry still stops all further work.
+        if session.budget.remaining_seconds <= 0:
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        try:
+            await reuse.query(text, remaining_seconds=session.budget.remaining_seconds)
+        except GhimeraRefused as exc:
+            self._refuse(session, exc.code)
+            if session.budget.remaining_seconds <= 0:
+                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED) from exc
+
+    async def _assess(
+        self,
+        session: CollectionSession,
+        reuse: RetainedResearchSession | None,
+        request: ResearchRequest,
+        questions: tuple[Question, ...],
+    ) -> Assessment:
+        documents = self._documents(session, reuse)
+        evidence = EvidenceRequest(
+            intent=request.intent,
+            questions=questions,
+            documents=documents,
+            retained_sources=self._notices(reuse),
+        )
+        result = await ModelCalls(session, self._policy).invoke(
+            "assessment", self._analyst.model, evidence, self._analyst.assess
+        )
+        self._validate_assessment(result, questions, documents)
+        return result
+
     async def _answer(
         self,
         session: CollectionSession,
         request: ResearchRequest,
         questions: tuple[Question, ...],
         assessment: Assessment,
+        reuse: RetainedResearchSession | None = None,
     ) -> tuple[AnswerDraft, AnswerReview]:
         calls = ModelCalls(session, self._policy)
         answering = AnswerRequest(
             intent=request.intent,
             questions=questions,
-            documents=session.evidence_documents,
+            documents=self._documents(session, reuse),
+            retained_sources=self._notices(reuse),
             assessment=assessment,
         )
         candidate = await calls.invoke(
             "answer", self._analyst.model, answering, self._analyst.answer
         )
-        self._validate_answer(candidate, questions, session.evidence_documents)
+        self._validate_answer(candidate, questions, self._documents(session, reuse))
         reviewing = ReviewRequest(
             intent=request.intent,
             questions=questions,
-            documents=session.evidence_documents,
+            documents=self._documents(session, reuse),
+            retained_sources=self._notices(reuse),
             answer=candidate,
         )
         checked = await calls.invoke(
@@ -594,6 +659,7 @@ class ResearchLoop:
         assessment: Assessment | None,
         *,
         suspend: bool,
+        reuse: RetainedResearchSession | None = None,
     ) -> None:
         if self._config.continuation is None:
             return
@@ -601,7 +667,9 @@ class ResearchLoop:
             raise ValueError("checkpoint requires its original run identity")
         saved_at = time.time()
         progress = ResearchResult(
-            schema="chimera.research-result/2",
+            schema="chimera.research-result/3"
+            if reuse is not None
+            else "chimera.research-result/2",
             status="partial",
             stop_reason="rounds_exhausted",
             harvest=self._collector.snapshot(session),
@@ -617,6 +685,7 @@ class ResearchLoop:
             search_revision=self._search.identity[1],
             search_calls=session.budget.search_calls,
             search_observations=history.observations,
+            retrieval=reuse.report if reuse is not None else None,
         )
         saved = ResearchCheckpoint(
             schema="ghimera.research-checkpoint/1",
@@ -646,6 +715,16 @@ class ResearchLoop:
         suspend_after_rounds: int | None = None,
     ) -> ResearchResult:
         calls, compiler = ModelCalls(session, self._policy), ResearchScopeCompiler(self._policy)
+        reuse = (
+            RetainedResearchSession(
+                self._policy.retained_evidence,
+                self._retained_reader,
+                request.intent,
+                restored=checkpoint.progress.retrieval if checkpoint is not None else None,
+            )
+            if self._policy.retained_evidence is not None and self._retained_reader is not None
+            else None
+        )
         history = SearchHistory(
             self._search,
             session.budget,
@@ -656,6 +735,9 @@ class ResearchLoop:
         rounds = list(checkpoint.progress.rounds) if checkpoint is not None else []
         initial_rounds = len(rounds)
         assessment = checkpoint.assessment if checkpoint is not None else None
+        # A rejected retained-only answer must seek new evidence next, not use
+        # the same apparently complete assessment to skip discovery again.
+        allow_retained_completion = True
         answer: AnswerDraft | None = None
         review: AnswerReview | None = None
         reason: Literal["answered", "rounds_exhausted", "budget_exhausted", "failed"] = (
@@ -665,7 +747,9 @@ class ResearchLoop:
             compiler.restore_hosts(checkpoint)
             if checkpoint.next_action == "answer" and assessment is not None:
                 try:
-                    answer, review = await self._answer(session, request, questions, assessment)
+                    answer, review = await self._answer(
+                        session, request, questions, assessment, reuse
+                    )
                     reason = "answered"
                 except GhimeraRefused as exc:
                     self._refuse(session, exc.code)
@@ -673,6 +757,7 @@ class ResearchLoop:
                         review = exc.review
                     if exc.code == RefusalCode.UNSUPPORTED_ANSWER:
                         assessment = None
+                        allow_retained_completion = False
                     else:
                         reason = (
                             "budget_exhausted"
@@ -682,6 +767,7 @@ class ResearchLoop:
         else:
             try:
                 await self._collector.import_local(session, request.local_documents)
+                await self._retrieve(session, reuse, request.intent)
             except GhimeraRefused as exc:
                 self._refuse(session, exc.code)
                 reason = (
@@ -694,7 +780,8 @@ class ResearchLoop:
                 planning = PlanningRequest(
                     intent=request.intent,
                     questions=questions,
-                    documents=session.evidence_documents,
+                    documents=self._documents(session, reuse),
+                    retained_sources=self._notices(reuse),
                     assessment=assessment,
                     max_questions=self._policy.max_questions,
                     max_queries=self._policy.max_queries_per_round,
@@ -718,6 +805,45 @@ class ResearchLoop:
                     if prior_assessment
                     else set()
                 )
+                for query in plan.queries:
+                    await self._retrieve(session, reuse, query.text)
+                if (
+                    reuse is not None
+                    and reuse.report.documents
+                    and reuse.report.policy.assess_before_discovery
+                    and allow_retained_completion
+                    and not request.seeds
+                ):
+                    assessment = await self._assess(session, reuse, request, questions)
+                    if questions and all(item.status == "answered" for item in assessment.coverage):
+                        rounds.append(
+                            ResearchRound(
+                                number=number,
+                                queries=plan.queries,
+                                discovered_urls=(),
+                                assessment=assessment,
+                                collection_stop="retained_evidence",
+                            )
+                        )
+                        self._save(
+                            request,
+                            session,
+                            run_id,
+                            compiler,
+                            history,
+                            questions,
+                            rounds,
+                            assessment,
+                            suspend=suspend_after_rounds is not None
+                            and len(rounds) - initial_rounds >= suspend_after_rounds,
+                            reuse=reuse,
+                        )
+                        allow_retained_completion = False
+                        answer, review = await self._answer(
+                            session, request, questions, assessment, reuse
+                        )
+                        reason = "answered"
+                        break
                 urls = await self._discover(session, plan.queries, compiler, trace, history)
                 if number == 1:
                     allowed_seeds: list[str] = []
@@ -765,16 +891,7 @@ class ResearchLoop:
                     )
                     reason = "failed" if collection_stop == "failed" else "budget_exhausted"
                     break
-                evidence = EvidenceRequest(
-                    intent=request.intent, questions=questions, documents=session.evidence_documents
-                )
-                assessment = await calls.invoke(
-                    "assessment",
-                    self._analyst.model,
-                    evidence,
-                    self._analyst.assess,
-                )
-                self._validate_assessment(assessment, questions, session.evidence_documents)
+                assessment = await self._assess(session, reuse, request, questions)
                 rounds.append(
                     ResearchRound(
                         number=number,
@@ -811,10 +928,11 @@ class ResearchLoop:
                     assessment,
                     suspend=suspend_after_rounds is not None
                     and len(rounds) - initial_rounds >= suspend_after_rounds,
+                    reuse=reuse,
                 )
                 if not questions or any(item.status != "answered" for item in assessment.coverage):
                     continue
-                answer, review = await self._answer(session, request, questions, assessment)
+                answer, review = await self._answer(session, request, questions, assessment, reuse)
                 reason = "answered"
                 break
             except GhimeraRefused as exc:
@@ -841,7 +959,9 @@ class ResearchLoop:
         )
         harvest = self._collector.finish(session, stop)
         return ResearchResult(
-            schema="chimera.research-result/2",
+            schema="chimera.research-result/3"
+            if reuse is not None
+            else "chimera.research-result/2",
             status="answered"
             if answer is not None
             else "failed"
@@ -861,6 +981,7 @@ class ResearchLoop:
             search_revision=self._search.identity[1],
             search_calls=session.budget.search_calls,
             search_observations=history.observations,
+            retrieval=reuse.report if reuse is not None else None,
         )
 
     async def _cited_by(

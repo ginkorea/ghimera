@@ -11,12 +11,14 @@ from ghimera.ahmia_config import AhmiaConfig
 from ghimera.ahmia_wire import AhmiaHitEvidence, decode_ahmia
 from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.corpus_search_wire import CorpusSearchWire
+from ghimera.corpus_types import BoundCorpusDocument
 from ghimera.discovery_config import DiscoveryProgress
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.local_input_types import LocalDocumentSeed
 from ghimera.model_types import ModelCallEvidence
 from ghimera.models import Document, Harvest, ModelIdentity, Record
 from ghimera.reference_types import SearchReference
+from ghimera.research_reuse import ResearchRetrievalReport, RetainedSourceNotice, validate_notices
 from ghimera.transport_types import TransportEvidence
 
 Text = Annotated[str, Field(min_length=1)]
@@ -210,12 +212,28 @@ class PlanningRequest(ResearchRecord):
     max_queries: Annotated[int, Field(strict=True, gt=0)]
     max_query_chars: Annotated[int, Field(strict=True, gt=0)]
     graph_context: PlanningGraph | None = Field(default=None, exclude_if=lambda v: v is None)
+    retained_sources: tuple[RetainedSourceNotice, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+
+    @model_validator(mode="after")
+    def source_notices(self) -> "PlanningRequest":
+        validate_notices(self.retained_sources, self.documents)
+        return self
 
 
 class EvidenceRequest(ResearchRecord):
     intent: Text
     questions: tuple[Question, ...]
     documents: tuple[Document, ...]
+    retained_sources: tuple[RetainedSourceNotice, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+
+    @model_validator(mode="after")
+    def source_notices(self) -> "EvidenceRequest":
+        validate_notices(self.retained_sources, self.documents)
+        return self
 
 
 class AnswerRequest(EvidenceRequest):
@@ -238,9 +256,9 @@ class ResearchRound(ResearchRecord):
 
 
 class ResearchResult(ResearchRecord):
-    schema_version: Literal["chimera.research-result/1", "chimera.research-result/2"] = Field(
-        alias="schema"
-    )
+    schema_version: Literal[
+        "chimera.research-result/1", "chimera.research-result/2", "chimera.research-result/3"
+    ] = Field(alias="schema")
     status: Literal["answered", "partial", "failed"]
     stop_reason: Literal["answered", "rounds_exhausted", "budget_exhausted", "failed"]
     harvest: Harvest
@@ -258,6 +276,53 @@ class ResearchResult(ResearchRecord):
     search_observations: tuple[SearchObservation, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
+    retrieval: ResearchRetrievalReport | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @property
+    def evidence_documents(self) -> tuple[Document, ...]:
+        # Raw bytes or URL alone cannot distinguish different retained readings.
+        retained = self.retrieval.documents if self.retrieval is not None else ()
+        originals = {
+            BoundCorpusDocument(doc).identity: doc
+            for doc in self.harvest.source_documents + retained
+        }
+        return tuple(originals.values())
+
+    @model_validator(mode="after")
+    def bound_retrieval(self) -> "ResearchResult":
+        research = self.harvest.receipt.effective_config.research
+        configured = research.retained_evidence if research is not None else None
+        if (
+            (configured is not None) != (self.retrieval is not None)
+            or (self.retrieval is not None) != (self.schema_version == "chimera.research-result/3")
+            or (
+                self.retrieval is not None
+                and (
+                    self.retrieval.policy != configured
+                    or self.retrieval.intent != self.harvest.goal.text
+                )
+            )
+        ):
+            raise ValueError(
+                "retained research requires its exact intent, policy and result schema"
+            )
+        if self.retrieval is not None:
+            ids = {question.id for question in self.questions}
+            for round_ in self.rounds:
+                if round_.assessment is None:
+                    continue
+                coverage = round_.assessment.coverage
+                if (
+                    {item.question_id for item in coverage} != ids
+                    or len(coverage) != len(ids)
+                    or any(
+                        not any(citation.matches(doc) for doc in self.evidence_documents)
+                        for item in coverage
+                        for citation in item.citations
+                    )
+                ):
+                    raise ValueError("retained research assessments require source-bound coverage")
+        return self
 
     @model_validator(mode="after")
     def retained_discovery(self) -> "ResearchResult":
@@ -475,11 +540,9 @@ class ResearchResult(ResearchRecord):
                 or {qid for claim in self.answer.claims for qid in claim.question_ids} != ids
             ):
                 raise ValueError("answered research requires a complete bound support review")
-            documents = {(doc.sha256, doc.url): doc for doc in self.harvest.source_documents}
             for claim in self.answer.claims:
                 for citation in claim.citations:
-                    document = documents.get((citation.document_sha256, citation.source_url))
-                    if document is None or not citation.matches(document):
+                    if not any(citation.matches(doc) for doc in self.evidence_documents):
                         raise ValueError("answer citations must match retained native evidence")
         elif self.answer is not None:
             raise ValueError("partial or failed research must not expose a completed answer")

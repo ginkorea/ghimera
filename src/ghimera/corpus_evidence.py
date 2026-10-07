@@ -1,6 +1,7 @@
 """Retained originals and ranked passages, never a pretend fresh fetch or verdict."""
 
 import asyncio
+from collections.abc import Callable
 from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
@@ -9,6 +10,7 @@ from ghimera.corpus import EvidenceCorpus
 from ghimera.corpus_bindings import validate_query, validate_reader
 from ghimera.corpus_evidence_config import CorpusEvidenceConfig
 from ghimera.corpus_types import BoundCorpusDocument, CorpusHit, CorpusQuery, CorpusRecord
+from ghimera.embedding_types import EncodingCall
 from ghimera.models import Document
 
 PassageId = Annotated[int, Field(strict=True, gt=0)]
@@ -107,14 +109,19 @@ class CorpusEvidenceReader:
             minimum_cosine=policy.minimum_cosine,
         )
 
-    async def read(self, text: str) -> CorpusEvidenceBundle:
+    async def read(
+        self, text: str, *, encoding_observer: Callable[[EncodingCall], None] | None = None
+    ) -> CorpusEvidenceBundle:
         self._check()
         policy = self.policy
         if not text.strip() or len(text) > policy.max_query_chars:
             raise ValueError("retained evidence query exceeds its declared bounds")
         async with asyncio.timeout(policy.timeout_seconds):
             query = await self._corpus.search(
-                text, top_k=policy.max_passage_hits, languages=policy.languages
+                text,
+                top_k=policy.max_passage_hits,
+                languages=policy.languages,
+                encoding_observer=encoding_observer,
             )
             bundle = CorpusEvidenceBundle(
                 schema="ghimera.corpus-evidence/1",

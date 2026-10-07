@@ -38,6 +38,8 @@ from ghimera.persistent_collector import (
     PersistentCollection,
     PersistentCollector,
 )
+from ghimera.research_reuse import ResearchRetrievalReport
+from ghimera.research_reuse_config import ResearchReuseConfig
 
 __all__ = [
     "GhimeraConfig",
@@ -58,6 +60,8 @@ __all__ = [
     "CorpusEvidenceConfig",
     "CorpusEvidenceBundle",
     "CorpusEvidenceReader",
+    "ResearchReuseConfig",
+    "ResearchRetrievalReport",
     "CorpusLeadSearch",
     "CorpusSearchConfig",
     "PersistentCollector",
