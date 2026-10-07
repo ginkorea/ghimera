@@ -53,6 +53,47 @@ Relocating the private directory does not itself change the recipe identity.
 
 ## Durable truth and indexing
 
+### Corpus-backed research discovery
+
+The unreleased `CorpusLeadSearch` implements the existing `GroundedSearch`
+request port, preserving its final spend/ledger template. Configure a
+`CorpusSearchConfig` (`ghimera.corpus-search/1`) using the opened store's
+`identity`, `config.identity` and exact `config.query_encoder`; the non-active
+`examples/corpus-search.toml` contains placeholders, not an admitted model.
+Set that binding as the collector's `search` recipe and explicitly pass the
+borrowed store as `Collector(config, corpus=store)`. A discovery strategy instead
+uses provider-keyed `discovery_corpora`; ordinary CLI invocation does not open
+an implicit store or discover credentials.
+
+Query length, passage hits, result count, original/response bytes, title/snippet
+length, cosine threshold and optional language filter are explicit policy.
+These limits cannot widen the corpus's configured query bounds or lower its
+minimum threshold. Empty `languages` means all retained language identifiers,
+not validated multilingual quality. Cosine is not a probability.
+
+The `ghimera.corpus-leads/1` response retains the actual native query, corpus
+generation/configuration identity, exact encoding call, returned passage hits,
+selected original documents, selected passage IDs and omission codes. A source
+URL yields at most one lead, using its original title and native passage. Invalid
+HTTP(S) URLs are not repaired by a model. Size, threshold, result-limit and
+duplicate exclusions are observable; if even the bounded query observation
+cannot fit, the attempt refuses rather than dropping provenance. Native original
+readback runs on an owned worker connection; cancellation drains it before the
+caller may close the store.
+
+Archived research re-derives the lead projection from these originals and checks
+the exact query/model binding. Strategy domain filtering is also replayed.
+Search calls retain the existing global/provider query, byte and elapsed-time
+accounting; the corpus independently retains its encoding audit. Encoding audit
+is not a new claim of shared token/GPU-budget enforcement.
+
+This deliberately supplies **source leads**, not answer citations: the ordinary
+research pipeline still fetches the original URL, checks scope/entitlement and
+builds new source-bound evidence. Direct cached-source answer reuse, freshness
+policy, lexical/hybrid reranking and representative multilingual retrieval
+quality remain open. A protocol fixture's Chinese passage returned for an
+English query establishes provenance plumbing, not cross-language accuracy.
+
 ### Automatic handoff from configured collection
 
 The unreleased `PersistentCollector` facade composes an existing configured
@@ -185,6 +226,21 @@ in 734.20 seconds**, no failures or skips, on Python 3.11.16 at
 passed, and the offline lock checked 142 packages. This includes the automatic
 handoff; the subsequent responsive-image candidate was not in that gate.
 Versioned package publication and real model/language acceptance remain pending.
+
+The responsive-image build at frozen `b887075` subsequently passed its full
+`scripts/gate.sh`: **886 passed in 750.44 seconds**, no failures or skips, using
+Python 3.11.16 at `/tmp/chimera-c0-20261006/.venv/bin/python`, importing
+`/tmp/ghimera-responsive-visuals-20261007/src/ghimera`. Ruff/format, strict mypy
+and the offline lock check passed. Corpus-backed discovery was not in that gate.
+
+The discovery candidate's first expanded selection returned **20 passed in
+22.76 seconds**, no failures or skips, using that same Python interpreter and
+`/tmp/ghimera-corpus-leads-20261007/src/ghimera`. Real SQLite/FAISS and
+credential-free loopback HTTP fixtures cover native query/original readback,
+wrong-corpus/bounds preflight, language-filtered empty observations, duplicate and
+size omissions, tampered original/query/lead refusal, configured single-provider
+and multi-provider research, and repeated cancellation draining an original-read
+worker. Full gate and versioned publication of discovery are still pending.
 
 Witnesses include actual SQLite/compiled FAISS, fresh-process query and original
 readback, idempotent appends, native Japanese span coverage, pending append

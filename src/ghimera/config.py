@@ -13,6 +13,7 @@ from ghimera.browser_config import BrowserConfig
 from ghimera.cadence_config import CadenceConfig
 from ghimera.challenge_config import ChallengeConfig
 from ghimera.continuation_config import ContinuationConfig
+from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.dedup_config import DedupConfig
 from ghimera.discovery_config import DiscoveryConfig
 from ghimera.document_config import DocumentExtractionConfig
@@ -145,7 +146,7 @@ class GhimeraConfig(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     scoring: ScoringConfig | None = None
-    search: SearxConfig | McpLeadConfig | AhmiaConfig | None = Field(
+    search: SearxConfig | McpLeadConfig | AhmiaConfig | CorpusSearchConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     discovery: DiscoveryConfig | None = Field(default=None, exclude_if=lambda value: value is None)

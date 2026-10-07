@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from ghimera.config import GhimeraConfig
 from ghimera.continuation import CheckpointStore, ResearchCheckpoint, ResearchSuspended
+from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.discovery import DiscoveryProviders
 from ghimera.discovery_config import DiscoveryProgress
 from ghimera.graph_planning import build_context
@@ -279,6 +280,11 @@ class ResearchLoop:
                 raise ValueError("discovery ports require the exact effective strategy recipe")
         elif config.discovery is not None:
             raise ValueError("a discovery recipe requires its bound provider set")
+        if (
+            isinstance(config.search, CorpusSearchConfig)
+            and search.identity != config.search.identity
+        ):
+            raise ValueError("corpus discovery requires its exact configured search identity")
         if any(
             model.location == "external"
             for model in (planner.model, analyst.model, reviewer.model, collector.judge_model)

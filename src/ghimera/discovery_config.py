@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.ahmia_config import AhmiaConfig
+from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.mcp_lead_config import McpLeadConfig
 from ghimera.search_config import SearxConfig
 
@@ -30,7 +31,7 @@ class DiscoveryProvider(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     id: Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")]
     domains: Annotated[tuple[Domain, ...], Field(min_length=1)]
-    binding: SearxConfig | McpLeadConfig | AhmiaConfig
+    binding: SearxConfig | McpLeadConfig | AhmiaConfig | CorpusSearchConfig
     # An operator must approve disclosure and retention separately from fetch scope.
     query_disclosure: Literal["planned_query"]
     use_contract: Literal["crawl_and_retain"]

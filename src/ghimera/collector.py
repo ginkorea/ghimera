@@ -9,6 +9,9 @@ from ghimera.ahmia import AhmiaIndexSearch
 from ghimera.ahmia_config import AhmiaConfig
 from ghimera.browser import IsolatedBrowserRenderer
 from ghimera.config import GhimeraConfig
+from ghimera.corpus import EvidenceCorpus
+from ghimera.corpus_search import CorpusLeadSearch
+from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.discovery import DiscoveryProviders
 from ghimera.documents import DocumentExtractionSuite, DocumentExtractor
 from ghimera.embedding import SelfHostedEncoder
@@ -63,6 +66,8 @@ class Collector:
         discovery_credentials: Mapping[str, SecretStr] | None = None,
         vision_credential: SecretStr | None = None,
         visual_reviewer_credential: SecretStr | None = None,
+        corpus: EvidenceCorpus | None = None,
+        discovery_corpora: Mapping[str, EvidenceCorpus] | None = None,
     ) -> None:
         # Revalidate injected models: model_copy(update=...) can bypass guards.
         config = GhimeraConfig.model_validate(config.model_dump())
@@ -98,6 +103,12 @@ class Collector:
             raise ValueError("single Ahmia credentials require an Ahmia search binding")
         if discovery_credentials is not None and config.discovery is None:
             raise ValueError("discovery credentials require a discovery recipe")
+        if corpus is not None and not isinstance(config.search, CorpusSearchConfig):
+            raise ValueError(
+                "a single discovery corpus requires its explicit corpus-search binding"
+            )
+        if discovery_corpora is not None and config.discovery is None:
+            raise ValueError("discovery corpora require a discovery recipe")
         if config.discovery is not None:
             if mcp_client is not None:
                 raise ValueError("discovery uses explicit provider-keyed MCP clients")
@@ -117,11 +128,23 @@ class Collector:
                 raise ValueError(
                     "every private discovery binding requires exactly its own credential"
                 )
+            corpora = dict(discovery_corpora or {})
+            expected_corpora = {
+                p.id
+                for p in config.discovery.providers
+                if isinstance(p.binding, CorpusSearchConfig)
+            }
+            if set(corpora) != expected_corpora:
+                raise ValueError(
+                    "every corpus discovery binding requires exactly its provider corpus"
+                )
             adapters: dict[str, GroundedSearch] = {}
             for provider in config.discovery.providers:
                 binding = provider.binding
                 if isinstance(binding, McpLeadConfig):
                     adapters[provider.id] = McpLeadSearch(binding, clients[provider.id])
+                elif isinstance(binding, CorpusSearchConfig):
+                    adapters[provider.id] = CorpusLeadSearch(binding, corpora[provider.id])
                 elif isinstance(binding, AhmiaConfig):
                     adapters[provider.id] = AhmiaIndexSearch(
                         binding, credential=credentials.get(provider.id), resolver=source_resolver
@@ -134,6 +157,10 @@ class Collector:
             search = DiscoveryProviders(config.discovery, adapters)
         elif discovery_clients is not None:
             raise ValueError("discovery clients require a discovery recipe")
+        elif isinstance(config.search, CorpusSearchConfig):
+            if corpus is None or mcp_client is not None or ahmia_credential is not None:
+                raise ValueError("corpus discovery requires its own explicit, borrowed corpus")
+            search = CorpusLeadSearch(config.search, corpus)
         elif isinstance(config.search, AhmiaConfig):
             if mcp_client is not None:
                 raise ValueError("Ahmia index search does not borrow an MCP credential/client")
@@ -222,6 +249,8 @@ class Collector:
         discovery_credentials: Mapping[str, SecretStr] | None = None,
         vision_credential: SecretStr | None = None,
         visual_reviewer_credential: SecretStr | None = None,
+        corpus: EvidenceCorpus | None = None,
+        discovery_corpora: Mapping[str, EvidenceCorpus] | None = None,
     ) -> "Collector":
         return cls(
             GhimeraConfig.from_toml(path, max_bytes=max_config_bytes),
@@ -237,6 +266,8 @@ class Collector:
             discovery_credentials=discovery_credentials,
             vision_credential=vision_credential,
             visual_reviewer_credential=visual_reviewer_credential,
+            corpus=corpus,
+            discovery_corpora=discovery_corpora,
         )
 
     @property

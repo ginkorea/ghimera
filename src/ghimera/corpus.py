@@ -147,6 +147,31 @@ class EvidenceCorpus:
         with self._operation():
             return self._storage.document(document_id)
 
+    @property
+    def identity(self) -> str:
+        with self._operation():
+            return self._storage.identity
+
+    async def documents(self, document_ids: tuple[str, ...]) -> tuple[Document, ...]:
+        """Read bounded originals off-loop on a worker-owned SQLite connection."""
+        with self._operation():
+            if len(document_ids) > self.config.max_top_k or len(set(document_ids)) != len(
+                document_ids
+            ):
+                raise ValueError("original lookup requires bounded distinct document identities")
+            identity = self._storage.identity
+
+            def read() -> tuple[Document, ...]:
+                storage = CorpusStorage(self.config, create=False)
+                try:
+                    if storage.identity != identity:
+                        raise ValueError("original lookup cannot switch corpus identity")
+                    return tuple(storage.document(value) for value in document_ids)
+                finally:
+                    storage.close()
+
+            return await off_loop(read)
+
     async def _encode(
         self, texts: tuple[str, ...], encoder: EvidenceEncoder, operation: str, purpose: str
     ) -> tuple[EncodingBatch, int]:

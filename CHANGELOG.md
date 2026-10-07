@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- An explicitly bound retained-corpus discovery provider through the existing
+  grounded search/routing interface. Native query/model observations, selected
+  original documents and deterministic source leads survive archive validation.
+  Corpus/model pins and size/language/threshold omissions are explicit; source
+  leads still undergo normal fetching and citation verification. This is not
+  cached-source answer reuse or measured cross-language retrieval quality.
+
 - Explicit, bounded passive responsive-image selection: lazy `srcset` and
   `<picture>` alternatives retain source descriptors, media conditions and
   markup/policy bindings. Existing logo admission precedes download; retained

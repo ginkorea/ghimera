@@ -3,11 +3,14 @@
 import hashlib
 import json
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from ghimera.ahmia_config import AhmiaConfig
 from ghimera.ahmia_wire import AhmiaHitEvidence, decode_ahmia
+from ghimera.corpus_search_config import CorpusSearchConfig
+from ghimera.corpus_search_wire import CorpusSearchWire
 from ghimera.discovery_config import DiscoveryProgress
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.local_input_types import LocalDocumentSeed
@@ -234,7 +237,7 @@ class ResearchResult(ResearchRecord):
     def retained_discovery(self) -> "ResearchResult":
         if self.schema_version == "chimera.research-result/1":
             if self.harvest.receipt.effective_config.discovery is not None or isinstance(
-                self.harvest.receipt.effective_config.search, AhmiaConfig
+                self.harvest.receipt.effective_config.search, (AhmiaConfig, CorpusSearchConfig)
             ):
                 raise ValueError("bound discovery results require retained discovery responses")
             if self.search_observations:
@@ -267,10 +270,10 @@ class ResearchResult(ResearchRecord):
             raise ValueError("discovery result requires its original strategy identity")
         single_binding = self.harvest.receipt.effective_config.search
         if (
-            isinstance(single_binding, AhmiaConfig)
+            isinstance(single_binding, (AhmiaConfig, CorpusSearchConfig))
             and (self.search_provider, self.search_revision) != single_binding.identity
         ):
-            raise ValueError("Ahmia result requires its recorded index binding identity")
+            raise ValueError("retained index result requires its recorded binding identity")
         if discovery is not None and any(
             row.route not in {f"search:{name}@{revision}" for name, revision in identities}
             for row in attempts
@@ -330,6 +333,37 @@ class ResearchResult(ResearchRecord):
                 )
                 if expected != response.hits:
                     raise ValueError("retained Ahmia hits must match the native index response")
+            if isinstance(binding, CorpusSearchConfig):
+                from ghimera.corpus_search import corpus_leads
+
+                if len(response.raw) > binding.max_response_bytes or response.transport is not None:
+                    raise ValueError(
+                        "corpus discovery is bounded local evidence, not HTTP source transport"
+                    )
+                native_corpus = CorpusSearchWire.model_validate_json(response.raw)
+                native_corpus.validate_policy(binding, observation.query.text)
+                expected_corpus = corpus_leads(native_corpus, binding)
+                if discovery is not None:
+                    selected_provider = next(
+                        p
+                        for p in discovery.providers
+                        if p.identity == (observation.provider, observation.provider_revision)
+                    )
+                    domains = set(selected_provider.domains) & set(discovery.target_domains)
+                    expected_corpus = tuple(
+                        hit
+                        for hit in expected_corpus
+                        if (
+                            "onion"
+                            if (urlsplit(hit.url).hostname or "").endswith(".onion")
+                            else "open_web"
+                        )
+                        in domains
+                    )
+                if response.index_retrieved_at is not None or response.hits != expected_corpus:
+                    raise ValueError(
+                        "corpus leads must match their retained original sources and query"
+                    )
         if discovery is not None:
             for provider in discovery.providers:
                 provider_rows = tuple(

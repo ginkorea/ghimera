@@ -1,6 +1,6 @@
 # Configured discovery routing and stagnation recovery
 
-Status: development source. `Collector` composes multiple concrete SearXNG/MCP
+Status: development source. `Collector` composes multiple concrete SearXNG/MCP/Ahmia
 bindings through its existing research, fetch, extraction, scoring and archive
 owners. It does not deploy a search engine, onion index or MCP server.
 
@@ -44,6 +44,18 @@ endpoint-mismatched clients refuse during assembly. Session lifecycle and
 authentication remain the application's responsibility; there is no ambient
 credential discovery. The ordinary CLI can compose SearXNG-only recipes, but
 does not create MCP sessions. See [MCP composition](MCP_LEADS.md).
+
+The unreleased corpus provider uses the same interface with an explicit
+`ghimera.corpus-search/1` binding. Pass a borrowed corpus as
+`Collector(config, corpus=store)` for a single search binding, or as
+`discovery_corpora={"retained": store}` for that exact strategy provider ID.
+Missing or extra corpus bindings refuse before model/source requests. See
+[the corpus interface](EVIDENCE_CORPUS.md) and the non-active
+[binding example](../examples/corpus-search.toml). The CLI does not implicitly
+open a corpus. A corpus query contacts only its pinned private query encoder;
+retained HTTP(S)/onion URLs remain source leads with the same domain and fetch
+admission as external-provider leads. Native corpus response bytes survive
+domain filtering, so excluded leads remain inspectable rather than disappearing.
 
 ## Shared abstractions and accounting
 

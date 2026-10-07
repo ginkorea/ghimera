@@ -144,6 +144,12 @@ beside the unchanged original result. Failed handoffs retain completed source
 work for persistence-only retry; operation-level crash recovery and an unattended
 service are still separate requirements. See the corpus documentation for usage.
 
+The source candidate can also use an explicitly bound corpus as a discovery
+provider, alone or beside configured web/MCP/onion providers. It preserves native
+query and source observations; returned matches are leads that still go through
+ordinary collection and citation checks. Cross-language quality and direct
+cached-source answer reuse remain separate acceptance work.
+
 Use a dedicated virtual environment:
 
 ```bash
