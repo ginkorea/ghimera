@@ -25,7 +25,7 @@ from ghimera.model_citations import citation_id
 from ghimera.models import Document, LedgerRow
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.semantic_grounding import validate_coverage_findings
-from ghimera.semantic_types import GroundedSemanticReview, OmittedMention
+from ghimera.semantic_types import BatchedSemanticReview, GroundedSemanticReview, OmittedMention
 
 
 class Population(GraphRecord):
@@ -99,7 +99,9 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
                 coverage=review.coverage,
                 coverage_reason=review.coverage_reason,
                 coverage_findings=(
-                    review.coverage_findings if isinstance(review, GroundedSemanticReview) else ()
+                    review.coverage_findings
+                    if isinstance(review, (GroundedSemanticReview, BatchedSemanticReview))
+                    else ()
                 ),
                 excluded_mentions=len(window.excluded_mentions),
                 excluded_relations=len(window.excluded_relations),

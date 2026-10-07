@@ -9,7 +9,10 @@ from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_types import Citation
 from ghimera.semantic_grounding import validate_grounded_review
 from ghimera.semantic_types import (
+    BatchedSemanticReview,
     GroundedSemanticReview,
+    ReviewPart,
+    ReviewSelection,
     SemanticProposal,
     SemanticReview,
     review_profile_matches,
@@ -68,6 +71,77 @@ def validate_review(
     end: int,
     intent: str,
 ) -> None:
+    _validate_review_call(
+        config,
+        proposal,
+        review,
+        document,
+        start,
+        end,
+        intent,
+        {item.key for item in proposal.mentions},
+        set(range(len(proposal.relations))),
+    )
+    policy = config.semantics
+    if policy is None or policy.verification is None:
+        raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+    if policy.verification.schema_version == "ghimera.semantic-verification/4":
+        from ghimera.semantic_batching import review_selections
+
+        if not isinstance(review, BatchedSemanticReview) or tuple(
+            part.selection for part in review.parts
+        ) != review_selections(policy.verification, proposal):
+            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+        for part in review.parts:
+            validate_review_part(
+                config, proposal, part.review, part.selection, document, start, end, intent
+            )
+    elif isinstance(review, BatchedSemanticReview):
+        raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+
+
+def validate_review_part(
+    config: GhimeraConfig,
+    proposal: SemanticProposal,
+    review: GroundedSemanticReview,
+    selection: ReviewSelection,
+    document: Document,
+    start: int,
+    end: int,
+    intent: str,
+) -> None:
+    policy = config.semantics
+    verification = policy.verification if policy is not None else None
+    if policy is None or verification is None:
+        raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+    from ghimera.semantic_batching import validate_selection
+
+    validate_selection(verification, proposal, selection)
+    ReviewPart(selection=selection, review=review)
+    _validate_review_call(
+        config,
+        proposal,
+        review,
+        document,
+        start,
+        end,
+        intent,
+        set(selection.mention_keys),
+        set(selection.relation_indices),
+    )
+
+
+def _validate_review_call(
+    config: GhimeraConfig,
+    proposal: SemanticProposal,
+    review: SemanticReview,
+    document: Document,
+    start: int,
+    end: int,
+    intent: str,
+    mention_keys: set[str],
+    relation_indices: set[int],
+) -> None:
     service = review_service(config)
     policy = config.semantics
     if policy is None or policy.verification is None:
@@ -88,8 +162,8 @@ def validate_review(
         or call.selected_spans != ((citation.document_id, start, end),)
         or call.omitted_chars != len(document.extracted.text) - (end - start)
         or review.proposal_digest != proposal.content_digest()
-        or {item.key for item in review.mentions} != {item.key for item in proposal.mentions}
-        or {item.index for item in review.relations} != set(range(len(proposal.relations)))
+        or {item.key for item in review.mentions} != mention_keys
+        or {item.index for item in review.relations} != relation_indices
     ):
         raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
     if isinstance(review, GroundedSemanticReview):

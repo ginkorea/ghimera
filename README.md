@@ -249,6 +249,10 @@ named-instance/type checks from relationship entailment, direction and dates.
 Contradictory summaries refuse instead of overriding a failed dimension;
 the original review recipe remains unchanged. See the non-active
 [dimensioned example](examples/semantics-factorized.toml).
+An explicit version-4 [batched review profile](docs/SEMANTIC_BATCHING.md)
+preserves the complete original proposal while limiting assessments per answer
+and retaining a separate coverage call. Its bounds and budgets are configured;
+it does not claim to fix a model that returns no final answer.
 
 The unreleased semantic extraction stage can also feed a configured, bounded
 graph view into follow-up research planning. Queries retain references to the

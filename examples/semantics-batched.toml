@@ -1,0 +1,48 @@
+# NON-ACTIVE [semantics] block, appended to a complete caller-owned recipe.
+# Requires distinct pinned extractor/reviewer services and a compatible graph.
+# This does not start services, allocate GPUs, or increase global judge budgets.
+schema = "ghimera.semantics/4"
+prompt_profile = "defined_ontology"
+model_role = "analyst"
+window_chars = 1500
+max_windows_per_document = 64
+max_calls_per_run = 256
+max_mentions_per_window = 32
+max_relations_per_window = 32
+entity_roles = ["person", "organization", "position"]
+relation_rules = ["reports_to", "holds_position", "member_of"]
+mention_rule = "mentions"
+
+[[role_definitions]]
+name = "person"
+definition = "A specifically named individual human, not an unnamed group."
+[[role_definitions]]
+name = "organization"
+definition = "A specifically named institution or organized body, not a country, ideology, generic population or institutional class."
+[[role_definitions]]
+name = "position"
+definition = "A named institutional office, distinct from its incumbent or an organizational body."
+
+[[relation_definitions]]
+name = "reports_to"
+definition = "The source explicitly states that this source organization reports to this target organization. Co-occurrence is insufficient."
+[[relation_definitions]]
+name = "holds_position"
+definition = "The source explicitly identifies this source person as holding this target position."
+[[relation_definitions]]
+name = "member_of"
+definition = "The source explicitly identifies membership of this source person in this target organization."
+
+[verification]
+schema = "ghimera.semantic-verification/4"
+model_role = "reviewer"
+max_calls_per_run = 256
+max_mentions_per_call = 4
+max_relations_per_call = 2
+max_coverage_findings = 4
+
+# With these bounds a full 32-mention/32-relation proposal needs 25 review calls:
+# 8 mention calls, 16 relation calls, and one independent coverage call.
+# Every call includes the original full source context and unchanged proposal.
+# Set caller-owned generation/context/judge budgets coherently before activation.
+# Insufficient remaining review/judge budget refuses BEFORE any partition call.

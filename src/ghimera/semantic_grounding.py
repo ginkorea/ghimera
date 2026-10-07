@@ -56,7 +56,8 @@ def validate_coverage_findings(
     verification = policy.verification
     if (
         verification is None
-        or verification.schema_version != "ghimera.semantic-verification/3"
+        or verification.schema_version
+        not in {"ghimera.semantic-verification/3", "ghimera.semantic-verification/4"}
         or verification.max_coverage_findings is None
         or len(findings) > verification.max_coverage_findings
     ):

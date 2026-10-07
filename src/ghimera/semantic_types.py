@@ -29,6 +29,7 @@ DEFINED_ONTOLOGY_PROMPT_REVISION = "ghimera-semantic-extraction/4"
 SEMANTIC_REVIEW_REVISION = "ghimera-semantic-verification/1"
 FACTORIZED_REVIEW_REVISION = "ghimera-semantic-verification/2"
 GROUNDED_REVIEW_REVISION = "ghimera-semantic-verification/3"
+BATCHED_REVIEW_REVISION = "ghimera-semantic-verification/4"
 SEMANTIC_PROFILES = MappingProxyType(
     {
         "ghimera.semantics/1": (None, SEMANTIC_PROMPT_REVISION),
@@ -55,21 +56,32 @@ class SemanticVerificationConfig(GraphRecord):
         "ghimera.semantic-verification/1",
         "ghimera.semantic-verification/2",
         "ghimera.semantic-verification/3",
+        "ghimera.semantic-verification/4",
     ] = Field(alias="schema")
     model_role: Literal["analyst", "reviewer", "judge"]
     max_calls_per_run: Positive
     max_coverage_findings: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
+    max_mentions_per_call: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
+    max_relations_per_call: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def coverage_bound(self) -> "SemanticVerificationConfig":
-        if (self.schema_version == "ghimera.semantic-verification/3") != (
-            self.max_coverage_findings is not None
+        if (
+            self.schema_version
+            in {"ghimera.semantic-verification/3", "ghimera.semantic-verification/4"}
+        ) != (self.max_coverage_findings is not None):
+            raise ValueError("grounded verification requires an explicit coverage finding limit")
+        batching = self.schema_version == "ghimera.semantic-verification/4"
+        if batching != (self.max_mentions_per_call is not None) or batching != (
+            self.max_relations_per_call is not None
         ):
-            raise ValueError("only verification/3 requires an explicit coverage finding limit")
+            raise ValueError("only verification/4 requires both explicit batch item limits")
         return self
 
     @property
     def effective_prompt_revision(self) -> str:
+        if self.schema_version == "ghimera.semantic-verification/4":
+            return BATCHED_REVIEW_REVISION
         if self.schema_version == "ghimera.semantic-verification/3":
             return GROUNDED_REVIEW_REVISION
         return (
@@ -372,8 +384,89 @@ class GroundedSemanticReview(SemanticReview):
         return self
 
 
+class ReviewSelection(GraphRecord):
+    """Original proposal keys/indices, never renumbered or a reduced proposal."""
+
+    schema_version: Literal["ghimera.review-selection/1"] = Field(alias="schema")
+    mention_keys: tuple[MentionKey, ...]
+    relation_indices: tuple[Count, ...]
+    coverage: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def distinct(self) -> "ReviewSelection":
+        if len(set(self.mention_keys)) != len(self.mention_keys) or len(
+            set(self.relation_indices)
+        ) != len(self.relation_indices):
+            raise ValueError("review selection items must be distinct")
+        if self.coverage == bool(self.mention_keys or self.relation_indices):
+            raise ValueError("whole-window coverage is a separate call from selected assessments")
+        return self
+
+
+class ReviewPart(GraphRecord):
+    selection: ReviewSelection
+    review: GroundedSemanticReview
+
+    @model_validator(mode="after")
+    def selected(self) -> "ReviewPart":
+        selected, review = self.selection, self.review
+        if (
+            {item.key for item in review.mentions} != set(selected.mention_keys)
+            or {item.index for item in review.relations} != set(selected.relation_indices)
+            or (
+                not selected.coverage
+                and (review.coverage != "uncertain" or review.coverage_findings)
+            )
+            or review.model_call is None
+            or review.model_call.task != "semantic_review"
+            or review.model_call.outcome != "success"
+        ):
+            raise ValueError("review part requires exactly its selected successful assessments")
+        return self
+
+
+class BatchedSemanticReview(SemanticReview):
+    """Deterministic assembly; model_call is the actual coverage call, not a synthetic call."""
+
+    schema_version: Literal["ghimera.semantic-review/4"] = Field(alias="schema")
+    mentions: tuple[FactorizedMentionAssessment, ...]
+    relations: tuple[GroundedRelationAssessment, ...]
+    coverage_findings: tuple[CoverageFinding, ...]
+    parts: Annotated[tuple[ReviewPart, ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def complete_parts(self) -> "BatchedSemanticReview":
+        coverage = self.parts[-1]
+        if (
+            not coverage.selection.coverage
+            or any(part.selection.coverage for part in self.parts[:-1])
+            or any(part.review.proposal_digest != self.proposal_digest for part in self.parts)
+            or self.mentions != tuple(item for part in self.parts for item in part.review.mentions)
+            or self.relations
+            != tuple(item for part in self.parts for item in part.review.relations)
+            or self.coverage != coverage.review.coverage
+            or self.coverage_reason != coverage.review.coverage_reason
+            or self.coverage_findings != coverage.review.coverage_findings
+            or self.model_call != coverage.review.model_call
+        ):
+            raise ValueError(
+                "assembled review must preserve its exact parts and final coverage call"
+            )
+        return self
+
+
+def review_observations(review: SemanticReview) -> tuple[SemanticReview, ...]:
+    return (
+        tuple(part.review for part in review.parts)
+        if isinstance(review, BatchedSemanticReview)
+        else (review,)
+    )
+
+
 def restore_review(review: SemanticReview) -> SemanticReview:
     """Revalidate known versioned data without erasing subclass evidence."""
+    if isinstance(review, BatchedSemanticReview):
+        return BatchedSemanticReview.model_validate(review.model_dump())
     if isinstance(review, GroundedSemanticReview):
         return GroundedSemanticReview.model_validate(review.model_dump())
     if isinstance(review, FactorizedSemanticReview):
@@ -384,8 +477,13 @@ def restore_review(review: SemanticReview) -> SemanticReview:
 def review_profile_matches(
     verification: SemanticVerificationConfig, review: SemanticReview
 ) -> bool:
+    if isinstance(review, BatchedSemanticReview):
+        return verification.schema_version == "ghimera.semantic-verification/4"
     if isinstance(review, GroundedSemanticReview):
-        return verification.schema_version == "ghimera.semantic-verification/3"
+        return verification.schema_version in {
+            "ghimera.semantic-verification/3",
+            "ghimera.semantic-verification/4",
+        }
     if isinstance(review, FactorizedSemanticReview):
         return verification.schema_version == "ghimera.semantic-verification/2"
     return verification.schema_version == "ghimera.semantic-verification/1"
@@ -430,9 +528,13 @@ class SemanticWindow(GraphRecord):
     nodes: tuple[GraphNode, ...]
     edges: tuple[GraphEdge, ...]
     held_edges: tuple[GraphEdge, ...]
-    review: GroundedSemanticReview | FactorizedSemanticReview | SemanticReview | None = Field(
-        default=None, exclude_if=lambda v: v is None
-    )
+    review: (
+        BatchedSemanticReview
+        | GroundedSemanticReview
+        | FactorizedSemanticReview
+        | SemanticReview
+        | None
+    ) = Field(default=None, exclude_if=lambda v: v is None)
     excluded_mentions: tuple[MentionExclusion, ...] = Field(default=(), exclude_if=lambda v: not v)
     excluded_relations: tuple[RelationExclusion, ...] = Field(
         default=(), exclude_if=lambda v: not v

@@ -25,6 +25,7 @@ from ghimera.scoring_types import SimilarityEvidence
 from ghimera.semantic_types import (
     FactorizedSemanticReview,
     GroundedSemanticReview,
+    ReviewSelection,
     SemanticReview,
     SemanticWindow,
 )
@@ -438,6 +439,9 @@ class LedgerRow(Record):
     semantic_window: SemanticWindow | None = Field(default=None, exclude_if=lambda v: v is None)
     semantic_review: GroundedSemanticReview | FactorizedSemanticReview | SemanticReview | None = (
         Field(default=None, exclude_if=lambda v: v is None)
+    )
+    semantic_review_selection: ReviewSelection | None = Field(
+        default=None, exclude_if=lambda v: v is None
     )
     planning_graph: PlanningGraph | None = Field(default=None, exclude_if=lambda v: v is None)
 

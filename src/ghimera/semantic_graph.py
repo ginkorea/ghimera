@@ -7,7 +7,7 @@ merge, corroboration upgrade, model fallback or graph store lives here.
 
 import asyncio
 import re
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -21,19 +21,30 @@ from ghimera.model_config import ModelServiceConfig
 from ghimera.model_types import ModelCallEvidence
 from ghimera.models import Document, Harvest, LedgerRow, ModelIdentity
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
+from ghimera.semantic_batching import assemble_review, review_selections
 from ghimera.semantic_types import (
+    BatchedSemanticReview,
     ExclusionReason,
+    GroundedSemanticReview,
     MentionExclusion,
     RelationExclusion,
+    ReviewPart,
+    ReviewSelection,
     SemanticConfig,
     SemanticEntity,
     SemanticProposal,
     SemanticReview,
     SemanticWindow,
     restore_review,
+    review_observations,
     review_profile_matches,
 )
-from ghimera.semantic_verification import review_service, validate_proposal, validate_review
+from ghimera.semantic_verification import (
+    review_service,
+    validate_proposal,
+    validate_review,
+    validate_review_part,
+)
 
 MENTION_REVISION = "ghimera-source-mention/1"
 
@@ -60,6 +71,20 @@ class SemanticReviewer(Protocol):
         policy: SemanticConfig,
         proposal: SemanticProposal,
     ) -> SemanticReview: ...
+
+
+@runtime_checkable
+class PartitionedSemanticReviewer(Protocol):
+    async def semantic_review_part(
+        self,
+        intent: str,
+        document: Document,
+        start: int,
+        end: int,
+        policy: SemanticConfig,
+        proposal: SemanticProposal,
+        selection: ReviewSelection,
+    ) -> GroundedSemanticReview: ...
 
 
 def bound_service(config: GhimeraConfig) -> ModelServiceConfig:
@@ -252,6 +277,13 @@ class SemanticStage:
                 model_id=independent.model_id, revision=independent.revision, location="self_hosted"
             ):
                 raise ValueError("semantic reviewer must bind its configured model")
+            verification = config.semantics.verification
+            if (
+                verification is not None
+                and verification.schema_version == "ghimera.semantic-verification/4"
+                and not isinstance(reviewer, PartitionedSemanticReviewer)
+            ):
+                raise ValueError("version-4 semantic review needs its partitioned reviewer port")
         self._config, self._extractor, self._reviewer = config, extractor, reviewer
 
     async def extract(
@@ -364,18 +396,70 @@ class SemanticStage:
     ) -> SemanticReview | None:
         if self._reviewer is None:
             return None
+        verification = policy.verification
+        if (
+            verification is not None
+            and verification.schema_version == "ghimera.semantic-verification/4"
+        ):
+            selections = review_selections(verification, proposal)
+            if len(selections) > min(
+                verification.max_calls_per_run - budget.semantic_review_calls,
+                budget.config.judge_budget - budget.judge_calls,
+            ):
+                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            parts: list[ReviewPart] = []
+            for selection in selections:
+                review = await self._review_once(
+                    intent, document, start, end, policy, proposal, budget, ledger, selection
+                )
+                if not isinstance(review, GroundedSemanticReview):
+                    raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+                parts.append(ReviewPart(selection=selection, review=review))
+            return assemble_review(proposal, tuple(parts))
+        return await self._review_once(
+            intent, document, start, end, policy, proposal, budget, ledger
+        )
+
+    async def _review_once(
+        self,
+        intent: str,
+        document: Document,
+        start: int,
+        end: int,
+        policy: SemanticConfig,
+        proposal: SemanticProposal,
+        budget: RunBudget,
+        ledger: Ledger,
+        selection: ReviewSelection | None = None,
+    ) -> SemanticReview:
+        if self._reviewer is None:
+            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
         budget.reserve_semantic_review()
         call: ModelCallEvidence | None = None
         review: SemanticReview | None = None
         refusal: RefusalCode | None = None
         try:
             async with asyncio.timeout(budget.remaining_seconds):
-                review = await self._reviewer.semantic_review(
-                    intent, document, start, end, policy, proposal
-                )
+                if selection is not None:
+                    if not isinstance(self._reviewer, PartitionedSemanticReviewer):
+                        raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+                    review = await self._reviewer.semantic_review_part(
+                        intent, document, start, end, policy, proposal, selection
+                    )
+                else:
+                    review = await self._reviewer.semantic_review(
+                        intent, document, start, end, policy, proposal
+                    )
             call = review.model_call
             review = restore_review(review)
-            validate_review(self._config, proposal, review, document, start, end, intent)
+            if selection is not None:
+                if not isinstance(review, GroundedSemanticReview):
+                    raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+                validate_review_part(
+                    self._config, proposal, review, selection, document, start, end, intent
+                )
+            else:
+                validate_review(self._config, proposal, review, document, start, end, intent)
             return review
         except ModelCancelled as exc:
             call, refusal = exc.model_call, RefusalCode.SEMANTIC_EXTRACTION_FAILED
@@ -402,6 +486,7 @@ class SemanticStage:
                     model=self._reviewer.model,
                     model_call=call,
                     semantic_review=review if refusal is None else None,
+                    semantic_review_selection=selection,
                     refusal=refusal,
                     reason="independent_source_check"
                     if refusal is None
@@ -444,6 +529,8 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
             if (
                 row.model != identity
                 or row.url is None
+                or (policy.verification.schema_version == "ghimera.semantic-verification/4")
+                != (row.semantic_review_selection is not None)
                 or (
                     row.semantic_review is not None
                     and not review_profile_matches(policy.verification, row.semantic_review)
@@ -489,18 +576,26 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
             if (policy.verification is not None) != (window.review is not None):
                 raise ValueError("semantic window cannot omit its required independent check")
             if window.review is not None:
-                matches = tuple(
-                    item
-                    for item in reviews
-                    if item.sequence < row.sequence
-                    and item.url == row.url
-                    and item.semantic_review == window.review
+                observations = review_observations(window.review)
+                selections = (
+                    tuple(part.selection for part in window.review.parts)
+                    if isinstance(window.review, BatchedSemanticReview)
+                    else (None,)
                 )
-                if len(matches) != 1 or matches[0].sequence in used_reviews:
-                    raise ValueError(
-                        "reviewed projection requires exactly one earlier review observation"
+                for observation, selection in zip(observations, selections, strict=True):
+                    matches = tuple(
+                        item
+                        for item in reviews
+                        if item.sequence < row.sequence
+                        and item.url == row.url
+                        and item.semantic_review == observation
+                        and item.semantic_review_selection == selection
                     )
-                used_reviews.add(matches[0].sequence)
+                    if len(matches) != 1 or matches[0].sequence in used_reviews:
+                        raise ValueError(
+                            "reviewed projection requires each exact earlier review observation"
+                        )
+                    used_reviews.add(matches[0].sequence)
     return rows
 
 

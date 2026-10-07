@@ -17,7 +17,8 @@ implements the complete workflow.
   as explicitly model-asserted, source-local observations. A configured bounded
   graph view feeds those observations to subsequent within-run planning calls.
 - Not implemented: alias resolution with evidence-preserving merge/split;
-  persistent multi-run expansion; platform graph publication.
+  in-flight external-call reconciliation; platform graph publication.
+  Completed-round graph/frontier continuation is implemented, as detailed below.
 - Not accepted: representative Chinese organization charts, scanned charts,
   diagram topology, entity completeness, temporal hierarchy correctness or
   independent entailment quality. OCR text alone does not recover connecting
@@ -26,7 +27,8 @@ implements the complete workflow.
 The graph records intent, questions, queries, sources and document versions.
 Configured semantic extraction now produces source-local mention/relationship
 observations. This does not equate mentions across sources, corroborate a claim,
-interpret chart arrows or persist an expansion frontier across runs. The
+interpret chart arrows. Completed-round continuation retains the graph and
+research frontier without resolving uncertain in-flight external calls. The
 planner's bounded graph view can motivate within-run follow-up discovery, with
 retained references to the observed entities/relationships and explicit omissions.
 
@@ -139,6 +141,11 @@ that an entire organization has been exhaustively mapped.
    non-secret completion-shape telemetry identifies that failure without
    promoting intermediate reasoning into graph evidence. See
    [ORGANIZATION_GROUNDED_EVIDENCE.md](ORGANIZATION_GROUNDED_EVIDENCE.md).
+   An explicit verification/4 profile now partitions all original assessments
+   plus a separate coverage call, retaining every actual observation and
+   projecting nothing from partial batches. This is implemented source, not a
+   fix claimed for the served-model final-answer defect or quality acceptance;
+   see [SEMANTIC_BATCHING.md](SEMANTIC_BATCHING.md).
 3. Alias/temporal identity and conflict preservation across real documents:
    source now includes an explicit identity-aware planning view with same-name
    and asserted-alias hypotheses, potentially competing dated claims and

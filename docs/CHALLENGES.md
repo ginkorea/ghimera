@@ -200,3 +200,11 @@ requests instead of one). The green run used loopback HTTP fixtures and the
 isolated local Chromium fixture, not a real remote CAPTCHA or installed
 FlareSolverr/Byparr. This was a focused regression run, not a fresh full-package
 gate or publication.
+
+The subsequent full package gate including complete batched semantic review
+passed on 7 October 2026 UTC: **624 passed, zero failed, zero skipped**, in
+533.69 seconds, using `/tmp/chimera-c0-20261006/.venv/bin/python` (Python
+3.11.16), importing this worktree's `src/ghimera`. Lint/formatting passed for
+140 files and strict typing for 95 source files. The challenge regressions used
+local HTTP servers and the installed isolated Chromium fixture. This is still
+not real-provider or remote-site CAPTCHA acceptance.
