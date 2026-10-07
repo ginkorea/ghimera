@@ -125,6 +125,11 @@ Fixtures establish lifecycle and identity contracts; independently inspected
 publisher sources establish compatibility. Human intervention must resume the
 same task/session rather than create a second crawler or reset spent budgets.
 
+The inline-document source candidate now has a separate bounded same-session
+response path; see [inline documents](BROWSER_INLINE_DOCUMENTS.md). It records
+an actual second browser response, not a native download event or PDF-viewer
+HTML. This addition is not retroactively part of the published 0.4.2 artifacts.
+
 ## Controlled native evidence — 7 October 2026
 
 Download and existing human-browser/command regressions: 46 passed in 94.60

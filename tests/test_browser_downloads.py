@@ -61,6 +61,7 @@ def download_site(
     assisted=False,
     slow_body=None,
     landing_html=None,
+    attachment=True,
 ):
     counts = Counter()
 
@@ -91,7 +92,10 @@ def download_site(
             self.send_header("Content-Type", mime)
             if self.path == "/research/report":
                 # A hostile suggested filename cannot select any collector path.
-                self.send_header("Content-Disposition", 'attachment; filename="../../private.pdf"')
+                disposition = "attachment" if attachment else "inline"
+                self.send_header(
+                    "Content-Disposition", disposition + '; filename="../../private.pdf"'
+                )
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             try:
@@ -174,14 +178,27 @@ def test_browser_adapter_cannot_override_shared_scope_budget_and_cancel_order():
         type("UnvalidatedCapture", (HumanBrowserSession,), {"validate_config": lambda *args: None})
 
 
-@pytest.mark.parametrize("mime,click", [("application/pdf", False), (DOCX_TYPE, True)])
-def test_real_download_is_parsed_cited_graphed_journalled_and_archived(tmp_path, mime, click):
+@pytest.mark.parametrize(
+    "mime,click,inline",
+    [("application/pdf", False, False), (DOCX_TYPE, True, False), ("application/pdf", False, True)],
+    ids=["pdf-download", "docx-download", "inline-pdf"],
+)
+def test_real_download_is_parsed_cited_graphed_journalled_and_archived(
+    tmp_path, mime, click, inline
+):
     raw = native_pdf() if mime == "application/pdf" else docx()
-    with download_site(raw) as site:
+    with download_site(
+        raw, media=mime if inline else "application/octet-stream", attachment=not inline
+    ) as site:
         _, _, previous, _, origin = state(site)
 
         async def scenario(selected, page, unrelated):
-            selected = download_policy(selected, origin, mime=mime, click=click)
+            if inline:
+                from tests.test_browser_inline_documents import inline_policy
+
+                selected = inline_policy(selected, origin)
+            else:
+                selected = download_policy(selected, origin, mime=mime, click=click)
             graph = tomllib.loads(Path("examples/research-graph.toml").read_text())
             graph["sink_path"] = str(tmp_path / "graph")
             values = previous.config.model_dump()
@@ -244,15 +261,19 @@ def test_real_download_is_parsed_cited_graphed_journalled_and_archived(tmp_path,
             assert document.raw == raw
             assert "terminal construction" in document.extracted.text
             evidence = document.human_browser
-            assert evidence.acquisition == "browser_download"
+            assert evidence.acquisition == ("browser_response" if inline else "browser_download")
             assert evidence.file_sha256 == hashlib.sha256(raw).hexdigest()
             assert evidence.file_bytes == evidence.collector_file_bytes_read == len(raw)
-            assert (
-                evidence.collector_dom_bytes_read > 0
-                if click
-                else evidence.collector_dom_bytes_read == 0
-            )
-            assert evidence.browser_download_bytes is None
+            if inline:
+                assert evidence.browser_fetch_bytes is None
+                assert evidence.response_status == 200
+            else:
+                assert (
+                    evidence.collector_dom_bytes_read > 0
+                    if click
+                    else evidence.collector_dom_bytes_read == 0
+                )
+                assert evidence.browser_download_bytes is None
             assert "private.pdf" not in evidence.model_dump_json()
             assert document.transport is None and document.local_input is None
             assert document.extracted.document_parse.source_sha256 == evidence.file_sha256
@@ -263,7 +284,7 @@ def test_real_download_is_parsed_cited_graphed_journalled_and_archived(tmp_path,
                 row.bytes_read for row in result.harvest.ledger
             )
             node = next(node for node in result.harvest.graph.nodes if node.role == "document")
-            assert node.human_browser == evidence and ":browser_download:" in node.identity
+            assert node.human_browser == evidence and f":{evidence.acquisition}:" in node.identity
             assert read_journal(cfg.journal, "browser-file-research").rows == result.harvest.ledger
             assert ResearchResult.model_validate_json(result.model_dump_json()) == result
             archive = ResearchResultArchive.create(
@@ -274,7 +295,7 @@ def test_real_download_is_parsed_cited_graphed_journalled_and_archived(tmp_path,
             finally:
                 archive.close()
             assert ResearchResultArchive.read(tmp_path / "archive", max_bytes=4_000_000) == result
-            assert site[1]["/research/report"] == 1
+            assert site[1]["/research/report"] == (2 if inline else 1)
             assert site[1]["/research/landing"] == int(click)
 
             for mutate in ("strip", "bytes", "status", "format"):

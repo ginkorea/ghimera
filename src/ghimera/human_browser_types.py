@@ -71,6 +71,21 @@ class BrowserDownloadAction(BaseModel):
         return self
 
 
+class BrowserInlineConfig(BaseModel):
+    """An explicit second, same-origin browser request for an inline document."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.browser-inline/1"] = Field(alias="schema")
+    adapter_revision: Literal["ghimera-browser-fetch-stream/1"]
+    content_types: Annotated[tuple[DocumentMime, ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def unique_formats(self) -> "BrowserInlineConfig":
+        if len(set(self.content_types)) != len(self.content_types):
+            raise ValueError("inline browser formats must be unique")
+        return self
+
+
 class BrowserDownloadConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["ghimera.browser-downloads/1"] = Field(alias="schema")
@@ -83,6 +98,7 @@ class BrowserDownloadConfig(BaseModel):
     navigation_content_types: tuple[DocumentMime, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
+    inline: BrowserInlineConfig | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def unique_actions(self) -> "BrowserDownloadConfig":
@@ -92,6 +108,10 @@ class BrowserDownloadConfig(BaseModel):
             raise ValueError("each browser download source has one action owner")
         if len(set(self.navigation_content_types)) != len(self.navigation_content_types):
             raise ValueError("navigation download formats must be unique")
+        if self.inline is not None and not set(self.inline.content_types) <= set(
+            self.navigation_content_types
+        ):
+            raise ValueError("inline formats must also be admitted navigation formats")
         return self
 
 
@@ -427,8 +447,86 @@ class BrowserDownloadEvidence(BaseModel):
             raise ValueError("download evidence must bind its effective action and limits")
 
 
+class BrowserResponseEvidence(BaseModel):
+    """Actual same-origin browser fetch, distinct from a native download event."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.browser-response-evidence/1"] = Field(alias="schema")
+    acquisition: Literal["browser_response"]
+    capture_id: Identifier
+    request_url: str
+    final_url: str
+    document_url: str
+    session_id: Identifier
+    target_id: Identifier
+    policy_digest: Digest
+    adapter_revision: Literal["ghimera-human-chromium/1"]
+    response_adapter_revision: Literal["ghimera-browser-fetch-stream/1"]
+    driver_version: Literal["1.63.0"]
+    browser_version: Annotated[str, Field(min_length=1)]
+    lifecycle: Literal["caller_managed"]
+    network_boundary: Literal["operator_managed_browser"]
+    declared_route: Literal["direct"]
+    route_verification: Literal["operator_declaration_only"]
+    browser_subresource_bytes: None
+    browser_subresource_requests: None
+    browser_fetch_bytes: None
+    navigation_status: Literal[200]
+    navigation_content_type: Annotated[str, Field(min_length=1, max_length=512)]
+    response_status: Annotated[int, Field(strict=True, ge=200, le=200)]
+    response_content_type: Annotated[str, Field(min_length=1, max_length=512)]
+    content_type: DocumentMime
+    media_observation: Literal["pdf_header_at_start", "docx_archive_members"]
+    file_sha256: Digest
+    file_bytes: Annotated[int, Field(strict=True, gt=0)]
+    collector_file_bytes_read: Annotated[int, Field(strict=True, gt=0)]
+
+    @property
+    def captured_sha256(self) -> str:
+        return self.file_sha256
+
+    @property
+    def collector_bytes_read(self) -> int:
+        return self.collector_file_bytes_read
+
+    @model_validator(mode="after")
+    def actual_response_binding(self) -> "BrowserResponseEvidence":
+        if (
+            self.request_url != self.final_url
+            or self.document_url != self.request_url
+            or self.collector_file_bytes_read != self.file_bytes
+            or (self.content_type == "application/pdf")
+            != (self.media_observation == "pdf_header_at_start")
+            or any(
+                header.split(";", 1)[0].strip().lower() != self.content_type
+                for header in (self.navigation_content_type, self.response_content_type)
+            )
+        ):
+            raise ValueError("inline bytes must bind actual same-origin responses and format")
+        return self
+
+    def validate_policy(self, policy: HumanBrowserConfig | None) -> None:
+        checked = BrowserResponseEvidence.model_validate(self.model_dump())
+        if policy is None or policy.downloads is None or policy.downloads.inline is None:
+            raise ValueError("inline response requires its explicit effective policy")
+        if (
+            checked.policy_digest != policy.content_digest()
+            or checked.session_id != policy.session_id
+            or checked.target_id != policy.target_id
+            or checked.adapter_revision != policy.adapter_revision
+            or checked.response_adapter_revision != policy.downloads.inline.adapter_revision
+            or checked.driver_version != policy.driver_version
+            or checked.declared_route != policy.declared_route
+            or checked.content_type not in policy.downloads.inline.content_types
+            or not policy.permits(checked.request_url)
+            or checked.file_bytes > policy.downloads.max_file_bytes
+        ):
+            raise ValueError("inline response must bind its selected session, policy and limits")
+
+
 BrowserSourceEvidence = Annotated[
-    HumanBrowserEvidence | BrowserDownloadEvidence, Field(discriminator="acquisition")
+    HumanBrowserEvidence | BrowserDownloadEvidence | BrowserResponseEvidence,
+    Field(discriminator="acquisition"),
 ]
 
 
@@ -468,6 +566,26 @@ class BrowserDownloadCapture(BaseModel):
         checked.evidence.validate_policy(policy)
 
 
+class BrowserResponseCapture(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, ser_json_bytes="base64", val_json_bytes="base64"
+    )
+    body: bytes
+    evidence: BrowserResponseEvidence
+
+    @model_validator(mode="after")
+    def content_binding(self) -> "BrowserResponseCapture":
+        validate_browser_body(self.body, self.evidence)
+        return self
+
+    def validate_policy(self, policy: HumanBrowserConfig) -> None:
+        checked = BrowserResponseCapture.model_validate(self.model_dump())
+        checked.evidence.validate_policy(policy)
+
+
+BrowserAcquisition = BrowserCapture | BrowserDownloadCapture | BrowserResponseCapture
+
+
 class AuthorizedBrowserSession(Protocol):
     """Each capture releases only its owned resources, never a borrowed browser."""
 
@@ -480,4 +598,4 @@ class AuthorizedBrowserSession(Protocol):
         max_bytes: int | None = None,
         timeout_seconds: float | None = None,
         scope: CaptureScope | None = None,
-    ) -> BrowserCapture | BrowserDownloadCapture: ...
+    ) -> BrowserAcquisition: ...

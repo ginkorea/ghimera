@@ -5,6 +5,12 @@ follow evidence gaps, and return a source-cited answer—or an explicit partial
 result when the evidence or budget is insufficient.
 
 **v0.4.2 adds same-session PDF/DOCX downloads and discovered attachments.**
+
+The 0.4.3 candidate adds explicitly configured inline-document collection
+through that same caller-owned browser session. Original file bytes enter the
+existing parsing, citation, graph and archive path; they are not taken from the
+PDF viewer's HTML. See [inline browser documents](docs/BROWSER_INLINE_DOCUMENTS.md)
+for configuration, actual-byte provenance and acceptance status.
 The repository, distribution and import use `ghimera`.
 It succeeds the `go-spider` distribution and `chimera` implementation. It is not
 backward-compatible with v0.1.0's `spider_core` API or `spider` CLI. Python
@@ -124,8 +130,10 @@ An explicit format policy lets scored native links supply previously unknown
 file URLs; the collector does not need a hard-coded attachment list. Original
 file bytes enter the same extraction, citation, graph and archive path.
 Caller-owned tabs remain open, and unknown browser-network usage is not
-represented as zero. Inline PDF viewers and verified entitled-publisher/Tor
-compatibility remain separate acceptance work. See
+represented as zero. The 0.4.3 inline-body candidate makes one separate,
+configured same-origin browser GET; it does not claim navigation bytes were
+intercepted. Redirected files and verified entitled-publisher/Tor compatibility
+remain separate acceptance work. See
 [browser downloads and configuration](docs/BROWSER_DOWNLOADS.md).
 It also admits hash-pinned owned PDF/DOCX seeds before intent planning through
 the same document pipeline. See [local inputs](docs/LOCAL_INPUTS.md).

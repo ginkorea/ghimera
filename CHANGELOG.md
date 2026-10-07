@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.4.3 — release candidate
+
+- Explicit, bounded inline-document body collection in the caller's existing
+  browser session. An admitted inline navigation permits one separate same-origin
+  browser request, with redirects refused. Original bytes and actual response
+  observations use a distinct evidence type through the existing parser/citation/
+  graph/journal/archive path; cookies are never exported. Native regressions
+  passed, including provenance replay; combined gate/publication and
+  representative quality remain open until their acceptance is recorded.
 
 ## 0.4.2 — 2026-10-07
 

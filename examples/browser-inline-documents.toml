@@ -1,0 +1,15 @@
+# Non-active fragment: merge into the explicitly supplied caller-Page policy.
+# Navigation happens first. An admitted inline response then gets one extra
+# same-origin browser GET; credentials remain in that browser. Redirects are
+# refused. Browser egress/storage/traffic quota remains operator-owned.
+[human_browser.downloads]
+schema = "ghimera.browser-downloads/1"
+adapter_revision = "ghimera-patchright-download-stream/1"
+max_file_bytes = 16777216
+read_chunk_bytes = 65536
+navigation_content_types = ["application/pdf"]
+
+[human_browser.downloads.inline]
+schema = "ghimera.browser-inline/1"
+adapter_revision = "ghimera-browser-fetch-stream/1"
+content_types = ["application/pdf"]

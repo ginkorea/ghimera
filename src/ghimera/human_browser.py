@@ -22,11 +22,14 @@ from ghimera.human_browser_errors import HumanCaptureCancelled, HumanCaptureFail
 from ghimera.human_browser_types import (
     AssistanceDecision,
     AssistanceObservation,
+    BrowserAcquisition,
     BrowserAssistanceRequest,
     BrowserCapture,
     BrowserDownloadAction,
     BrowserDownloadCapture,
     BrowserDownloadEvidence,
+    BrowserResponseCapture,
+    BrowserResponseEvidence,
     CaptureScope,
     HumanAssistant,
     HumanBrowserConfig,
@@ -123,7 +126,7 @@ class HumanBrowserSession(ABC):
         max_bytes: int | None = None,
         timeout_seconds: float | None = None,
         scope: CaptureScope | None = None,
-    ) -> BrowserCapture | BrowserDownloadCapture:
+    ) -> BrowserAcquisition:
         if not self.config.permits(url) or (scope is not None and not scope.permits(url)):
             raise HumanCaptureFailure(RefusalCode.OUT_OF_SCOPE, 0, ())
         maximum = self.config.max_dom_bytes * (self.config.max_assistance_attempts + 1)
@@ -152,13 +155,9 @@ class HumanBrowserSession(ABC):
             ) from None
 
     @abstractmethod
-    async def _capture(
-        self, url: str, work: CaptureWork
-    ) -> BrowserCapture | BrowserDownloadCapture: ...
+    async def _capture(self, url: str, work: CaptureWork) -> BrowserAcquisition: ...
 
-    async def _capture_cdp(
-        self, url: str, work: CaptureWork
-    ) -> BrowserCapture | BrowserDownloadCapture:
+    async def _capture_cdp(self, url: str, work: CaptureWork) -> BrowserAcquisition:
         from patchright.async_api import Error, async_playwright
 
         driver: Playwright | None = None
@@ -186,7 +185,7 @@ class HumanBrowserSession(ABC):
 
     async def _capture_page(
         self, browser: BrowserIdentity, page: "Page", url: str, work: CaptureWork
-    ) -> BrowserCapture | BrowserDownloadCapture:
+    ) -> BrowserAcquisition:
         action = (
             next((item for item in self.config.downloads.actions if item.source_url == url), None)
             if self.config.downloads
@@ -251,7 +250,7 @@ class HumanBrowserSession(ABC):
         url: str,
         action: BrowserDownloadAction | None,
         work: CaptureWork,
-    ) -> BrowserCapture | BrowserDownloadCapture:
+    ) -> BrowserAcquisition:
         from patchright.async_api import Error
 
         from ghimera.browser_download_stream import admit_download_media, read_download
@@ -299,7 +298,7 @@ class HumanBrowserSession(ABC):
             else:
                 attachment_navigation = False
                 try:
-                    await page.goto(
+                    response = await page.goto(
                         url,
                         wait_until="domcontentloaded" if action is None else "commit",
                         timeout=self.config.timeout_seconds * 1000,
@@ -311,6 +310,14 @@ class HumanBrowserSession(ABC):
                         raise
                     attachment_navigation = True
                 if action is None and not attachment_navigation and not ready.done():
+                    inline = policy.inline
+                    header = response.headers.get("content-type", "") if response else ""
+                    if inline is not None and header.split(";", 1)[0].strip().lower() in (
+                        inline.content_types
+                    ):
+                        if response is None or response.status != 200 or response.url != url:
+                            raise GhimeraRefused(RefusalCode.FETCH_FAILED)
+                        return await self._inline_response(browser, page, url, header, work)
                     # Ordinary HTML follows its unchanged same-session DOM path:
                     # no timeout waiting for a nonexistent download and no refetch.
                     return await self._capture_dom(browser, page, url, work)
@@ -386,6 +393,69 @@ class HumanBrowserSession(ABC):
     async def _discard_download(self, download: "Download") -> None:
         await download.cancel()
         await download.delete()
+
+    async def _inline_response(
+        self,
+        browser: BrowserIdentity,
+        page: "Page",
+        url: str,
+        navigation_header: str,
+        work: CaptureWork,
+    ) -> BrowserResponseCapture:
+        from ghimera.browser_inline_stream import read_inline
+
+        policy = self.config.downloads
+        if policy is None or policy.inline is None:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        if (
+            page.url != url
+            or not self.config.permits(url)
+            or (work.scope is not None and not work.scope.permits(url))
+        ):
+            raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+        read = await read_inline(
+            page,
+            url,
+            formats=policy.inline.content_types,
+            max_file_bytes=policy.max_file_bytes,
+            spend=work,
+            timeout_seconds=work.deadline - asyncio.get_running_loop().time(),
+            cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
+        )
+        evidence = BrowserResponseEvidence(
+            schema="ghimera.browser-response-evidence/1",
+            acquisition="browser_response",
+            capture_id=uuid.uuid4().hex,
+            request_url=url,
+            final_url=read.reply.url,
+            document_url=read.reply.document_url,
+            session_id=self.config.session_id,
+            target_id=self.config.target_id,
+            policy_digest=self.config.content_digest(),
+            adapter_revision=self.config.adapter_revision,
+            response_adapter_revision=policy.inline.adapter_revision,
+            driver_version=self.config.driver_version,
+            browser_version=browser.version,
+            lifecycle=self.config.lifecycle,
+            network_boundary=self.config.network_boundary,
+            declared_route="direct",
+            route_verification="operator_declaration_only",
+            browser_subresource_bytes=None,
+            browser_subresource_requests=None,
+            browser_fetch_bytes=None,
+            navigation_status=200,
+            navigation_content_type=navigation_header,
+            response_status=read.reply.response_status,
+            response_content_type=read.reply.response_content_type,
+            content_type=read.content_type,
+            media_observation=read.media_observation,
+            file_sha256=hashlib.sha256(read.body).hexdigest(),
+            file_bytes=len(read.body),
+            collector_file_bytes_read=len(read.body),
+        )
+        capture = BrowserResponseCapture(body=read.body, evidence=evidence)
+        capture.validate_policy(self.config)
+        return capture
 
     async def _select(self, browser: "Browser") -> "Page":
         cdp = await browser.new_browser_cdp_session()
@@ -557,9 +627,7 @@ class ChromiumHumanSession(HumanBrowserSession):
         if self.config.adapter != "patchright_cdp":
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
 
-    async def _capture(
-        self, url: str, work: CaptureWork
-    ) -> BrowserCapture | BrowserDownloadCapture:
+    async def _capture(self, url: str, work: CaptureWork) -> BrowserAcquisition:
         return await self._capture_cdp(url, work)
 
 
@@ -580,9 +648,7 @@ class BoundPageHumanSession(HumanBrowserSession):
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         self._page = page
 
-    async def _capture(
-        self, url: str, work: CaptureWork
-    ) -> BrowserCapture | BrowserDownloadCapture:
+    async def _capture(self, url: str, work: CaptureWork) -> BrowserAcquisition:
         from patchright.async_api import Error
 
         try:
