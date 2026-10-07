@@ -1,8 +1,9 @@
 # Reviewed scanned-PDF transcription
 
-Development source, not a published or accuracy-accepted capability. The
-current public release remains 0.4.4; 0.4.5 is in release preparation. Simplified Chinese
-scanned-PDF quality is still unaccepted; protocol fixtures do not change that.
+Published in 0.4.5 with independent installed-artifact acceptance and exact
+public artifact readback; see [release evidence](RELEASE_045.md). Simplified
+Chinese scanned-PDF quality is still unaccepted; protocol fixtures do not
+change that.
 
 The final combined PDF/corpus/graph gate completed under Python 3.11.16 with 1,031 tests
 passed, zero failures/skips, plus Ruff, formatting, strict mypy (158 source files)
@@ -78,7 +79,7 @@ preserving their existing wire identities. The downstream corpus change passed
 persistence tests use scripted model responses, not a
 claim of Chinese recognition accuracy.
 
-The graph integration now has a separate development follow-up: document nodes
+The graph integration, included in 0.4.5, lets document nodes
 retain compact `pdf_reading` references to the ordered page pixels and exact
 transcription/review call records. This avoids duplicating PNG payloads in the
 graph. The reading digest is part of generated representation identity, so the
@@ -94,8 +95,9 @@ regressions passed under Python 3.11.16, including durable replay, semantic
 extraction, planning, page boundaries and native wire identity. The broader
 graph, planning, journal, resume and local-input selection passed 109 tests with
 no failures/skips under the same interpreter. The final combined gate passed
-1,031 tests, zero failures/skips; installed-artifact and publication acceptance
-remain separate.
+1,031 tests, zero failures/skips. Independent installed PDF/graph/corpus and
+legacy browser-archive acceptance also passed; published original artifact
+bytes matched exactly. Neither kind of acceptance measures real OCR accuracy.
 
 ## Acceptance still required
 
