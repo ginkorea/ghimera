@@ -2,6 +2,16 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# These fixture dependencies are operator inputs, never guessed or downloaded.
+# Refuse before a long suite rather than producing dozens of missing-env reds.
+: "${CHIMERA_TEST_BROWSER:?Set CHIMERA_TEST_BROWSER to the installed Chromium executable}"
+: "${CHIMERA_TEST_ISOLATOR:?Set CHIMERA_TEST_ISOLATOR to the installed browser isolator}"
+for gate_fixture_executable in "$CHIMERA_TEST_BROWSER" "$CHIMERA_TEST_ISOLATOR"; do
+  if [[ "$gate_fixture_executable" != /* || ! -f "$gate_fixture_executable" || ! -x "$gate_fixture_executable" ]]; then
+    printf 'Invalid gate fixture executable: %s\n' "$gate_fixture_executable" >&2
+    exit 2
+  fi
+done
 GHIMERA_GATE_PYTHON="${GHIMERA_GATE_PYTHON:-${CHIMERA_GATE_PYTHON:-$PWD/.venv/bin/python}}"
 export PYTHONPATH="$PWD/src"
 export PYTHONDONTWRITEBYTECODE=1

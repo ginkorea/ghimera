@@ -2,11 +2,18 @@
 
 from ghimera.config import GhimeraConfig
 from ghimera.evidence_context import ContextSelector, native_citation
+from ghimera.model_citations import citation_id
 from ghimera.model_config import ModelServiceConfig
 from ghimera.models import Document
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_types import Citation
-from ghimera.semantic_types import SemanticProposal, SemanticReview, review_profile_matches
+from ghimera.semantic_grounding import validate_grounded_review
+from ghimera.semantic_types import (
+    GroundedSemanticReview,
+    SemanticProposal,
+    SemanticReview,
+    review_profile_matches,
+)
 
 
 def validate_proposal(
@@ -85,3 +92,5 @@ def validate_review(
         or {item.index for item in review.relations} != set(range(len(proposal.relations)))
     ):
         raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+    if isinstance(review, GroundedSemanticReview):
+        validate_grounded_review(policy, proposal, review, citation.quote, citation_id(citation))

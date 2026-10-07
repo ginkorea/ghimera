@@ -10,6 +10,7 @@ import hashlib
 from pydantic import Field, ValidationError
 
 from ghimera.config import GhimeraConfig
+from ghimera.evidence_context import native_citation
 from ghimera.graph_planning_types import (
     GraphPlanningConfig,
     PlanningEntity,
@@ -20,8 +21,11 @@ from ghimera.graph_planning_types import (
 from ghimera.graph_types import GraphEdge, GraphRecord
 from ghimera.identity_planning import build_identity_view
 from ghimera.identity_selection import IdentitySelection, SelectionUnit
+from ghimera.model_citations import citation_id
 from ghimera.models import Document, LedgerRow
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.semantic_grounding import validate_coverage_findings
+from ghimera.semantic_types import GroundedSemanticReview, OmittedMention
 
 
 class Population(GraphRecord):
@@ -35,9 +39,23 @@ def policy_of(config: GhimeraConfig) -> GraphPlanningConfig | None:
     return config.research.graph_context if config.research is not None else None
 
 
-def evidence_size(entities: tuple[PlanningEntity, ...], relations: tuple[GraphEdge, ...]) -> int:
-    return sum(len(entity.evidence.quote) for entity in entities) + sum(
-        len(span.quote) for edge in relations for span in edge.evidence
+def evidence_size(
+    entities: tuple[PlanningEntity, ...],
+    relations: tuple[GraphEdge, ...],
+    gaps: tuple[PlanningGap, ...] = (),
+) -> int:
+    return (
+        sum(len(entity.evidence.quote) for entity in entities)
+        + sum(len(span.quote) for edge in relations for span in edge.evidence)
+        + sum(
+            len(finding.surface)
+            if isinstance(finding, OmittedMention)
+            else len(finding.source.surface)
+            + len(finding.target.surface)
+            + len(finding.evidence.surface)
+            for gap in gaps
+            for finding in gap.coverage_findings
+        )
     )
 
 
@@ -80,6 +98,9 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
                 end=window.end,
                 coverage=review.coverage,
                 coverage_reason=review.coverage_reason,
+                coverage_findings=(
+                    review.coverage_findings if isinstance(review, GroundedSemanticReview) else ()
+                ),
                 excluded_mentions=len(window.excluded_mentions),
                 excluded_relations=len(window.excluded_relations),
                 held_edges=len(window.held_edges),
@@ -108,7 +129,7 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
         gaps=tuple(gaps.values()),
     )
     digest = population.content_digest()
-    total_chars = evidence_size(population.entities, population.relations)
+    total_chars = evidence_size(population.entities, population.relations, population.gaps)
     selector = (
         IdentitySelection(
             policy.identity, tuple(item.node for item in population.entities), population.relations
@@ -139,7 +160,7 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
             sources=tuple(source for key, source in sources.items() if key in used),
             omitted_entities=len(entities) - len(selected),
             omitted_relations=len(relations) - len(edges),
-            omitted_evidence_chars=total_chars - evidence_size(selected, edges),
+            omitted_evidence_chars=total_chars - evidence_size(selected, edges, visible_gaps),
             gaps=visible_gaps,
             omitted_gaps=len(gaps) - len(visible_gaps),
             identity=build_identity_view(
@@ -153,7 +174,8 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
         return (
             len(candidate.entities) <= policy.max_entities
             and len(candidate.relations) <= policy.max_relations
-            and evidence_size(candidate.entities, candidate.relations) <= policy.max_evidence_chars
+            and evidence_size(candidate.entities, candidate.relations, candidate.gaps)
+            <= policy.max_evidence_chars
             and len(candidate.model_dump_json()) <= policy.max_context_chars
             and len(candidate.gaps) <= policy.max_gaps
         )
@@ -222,7 +244,8 @@ def validate_context(
         or len(context.entities) > policy.max_entities
         or len(context.relations) > policy.max_relations
         or len(context.gaps) > policy.max_gaps
-        or evidence_size(context.entities, context.relations) > policy.max_evidence_chars
+        or evidence_size(context.entities, context.relations, context.gaps)
+        > policy.max_evidence_chars
         or len(context.model_dump_json()) > policy.max_context_chars
         or any(entity.node.role not in policy.entity_roles for entity in context.entities)
         or any(edge.rule not in policy.relation_rules for edge in context.relations)
@@ -252,12 +275,23 @@ def validate_context(
         if not 0 <= span.start < span.end <= len(text) or text[span.start : span.end] != span.quote:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
     for gap in context.gaps:
-        text = docs[(gap.source.source_url, gap.source.document_sha256)].extracted.text
+        document = docs[(gap.source.source_url, gap.source.document_sha256)]
+        text = document.extracted.text
         if not 0 <= gap.start < gap.end <= len(text) or gap.omitted_chars not in {
             0,
             len(text) - gap.end,
         }:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+        if gap.coverage_findings:
+            if config.semantics is None or gap.coverage != "incomplete":
+                raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+            citation = native_citation(document, gap.start, gap.end)
+            try:
+                validate_coverage_findings(
+                    config.semantics, gap.coverage_findings, citation.quote, citation_id(citation)
+                )
+            except GhimeraRefused:
+                raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT) from None
     if any(entity.node.label != entity.evidence.quote for entity in context.entities):
         raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
 

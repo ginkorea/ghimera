@@ -17,6 +17,7 @@ from ghimera.graph_types import (
     Text,
 )
 from ghimera.identity_planning_types import IdentityPlanningConfig, IdentityPlanningView
+from ghimera.semantic_types import CoverageFinding
 
 GRAPH_PLANNING_REVISION = "ghimera-graph-planning/1"
 GRAPH_GAP_PLANNING_REVISION = "ghimera-graph-planning/2"
@@ -88,6 +89,7 @@ class PlanningGap(GraphRecord):
     end: Positive
     coverage: Literal["adequate", "incomplete", "uncertain"]
     coverage_reason: Annotated[str, Field(min_length=1, max_length=4096)]
+    coverage_findings: tuple[CoverageFinding, ...] = Field(default=(), exclude_if=lambda v: not v)
     excluded_mentions: Count
     excluded_relations: Count
     held_edges: Count

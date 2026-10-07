@@ -149,7 +149,10 @@ that an entire organization has been exhaustively mapped.
    external-call reconciliation and platform output projection remain open.
 6. Independent source-entailment checks and a final coverage/gaps report:
    the configured review/quarantine and within-run planning-gap contract is
-   implemented; real-model entailment/coverage and complete organizational
+   implemented. An explicit verification/3 extension adds concrete native
+   omission witnesses, neutral unasserted dates and evidence-budgeted gap
+   planning; see [SEMANTIC_GROUNDING.md](SEMANTIC_GROUNDING.md). Real-model
+   entailment/coverage and complete organizational
    report acceptance remain open.
 
 The organizational workflow may not be closed by the earlier English graphlib

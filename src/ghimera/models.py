@@ -22,7 +22,12 @@ from ghimera.model_types import ModelCallEvidence
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.scoring_types import SimilarityEvidence
-from ghimera.semantic_types import FactorizedSemanticReview, SemanticReview, SemanticWindow
+from ghimera.semantic_types import (
+    FactorizedSemanticReview,
+    GroundedSemanticReview,
+    SemanticReview,
+    SemanticWindow,
+)
 from ghimera.source_session_types import SourceSessionUse
 from ghimera.transport_types import TransportEvidence
 
@@ -431,8 +436,8 @@ class LedgerRow(Record):
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     semantic_window: SemanticWindow | None = Field(default=None, exclude_if=lambda v: v is None)
-    semantic_review: FactorizedSemanticReview | SemanticReview | None = Field(
-        default=None, exclude_if=lambda v: v is None
+    semantic_review: GroundedSemanticReview | FactorizedSemanticReview | SemanticReview | None = (
+        Field(default=None, exclude_if=lambda v: v is None)
     )
     planning_graph: PlanningGraph | None = Field(default=None, exclude_if=lambda v: v is None)
 

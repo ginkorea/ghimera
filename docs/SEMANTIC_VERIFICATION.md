@@ -76,6 +76,11 @@ source-bound acceptance, not merely a passing schema or fixture.
 
 ## What is checked
 
+An explicit verification/3 extension now models unasserted dates separately
+and requires exact native witnesses for coverage omissions. See
+[SEMANTIC_GROUNDING.md](SEMANTIC_GROUNDING.md). Profiles /1 and /2 and their
+retained diagnostics remain unchanged; the new contract is not accuracy proof.
+
 Each original extraction proposal remains unchanged in the retained window.
 Its model/service/context, bounds and list limits are checked before spending
 a review call. The reviewer receives that proposal, its content digest, the
