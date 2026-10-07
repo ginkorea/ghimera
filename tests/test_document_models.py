@@ -168,6 +168,24 @@ def test_shipped_standard_recipe_parses_without_using_local_models():
     assert len(policy.artifacts) == 8
 
 
+def test_explicit_chinese_recipe_preserves_the_published_english_profile():
+    def read(name):
+        with (Path("examples") / name).open("rb") as stream:
+            return DocumentExtractionConfig.model_validate(tomllib.load(stream))
+
+    english = read("documents-standard.toml")
+    chinese = read("documents-chinese-rapidocr.toml")
+    assert english.pdf_models.ocr.language == "en"
+    assert chinese.pdf_models.ocr.language == "ch"
+    assert chinese.artifacts == english.artifacts
+    assert chinese.pdf_models.runtime_packages == english.pdf_models.runtime_packages
+    assert chinese.pdf_models.layout_revision == english.pdf_models.layout_revision
+    assert chinese.content_digest() != english.content_digest()
+    assert chinese.worker_python.as_posix().startswith("/path/to/")
+    assert chinese.artifacts_directory.as_posix().startswith("/path/to/")
+    assert chinese.work_directory.as_posix().startswith("/path/to/")
+
+
 def test_published_native_recipe_keeps_its_pre_extension_digest():
     with Path("examples/documents-native.toml").open("rb") as stream:
         policy = DocumentExtractionConfig.model_validate(tomllib.load(stream))

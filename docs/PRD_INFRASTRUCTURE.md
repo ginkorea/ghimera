@@ -80,6 +80,15 @@ recipe. It shares the existing owned Docling worker and source/parse receipts.
 This is not admission of semantic models, cross-language search or representative
 chart understanding; those each need language-qualified evidence.
 
+The explicit existing RapidOCR `/1` alternative now passes the unchanged
+Simplified/Traditional Chinese required-term controls, with retained real parser
+receipts; full transcription quality remains unaccepted (one Simplified word
+still misreads). The non-active Chinese example is development source and does
+not silently replace English or Pacific profiles. Qwen-VL model-assisted OCR
+remains a candidate requiring its own service/page/provenance/review boundary
+and unchanged-source quality acceptance; see PACIFIC_PDF_CANDIDATE.md. No
+language-level capability is inferred from a model's vocabulary or marketing.
+
 1. Discover image candidates from retained HTML/DOM: actual source URL, parent
    document hash, native caption/alt/surrounding text, element locator and declared
    dimensions. Include lazy-image/srcset/picture candidates through an explicit

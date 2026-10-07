@@ -1,6 +1,9 @@
 # Pacific scanned-PDF candidate — 7 October 2026
 
-Status: **source published in 0.4.1; quality acceptance remains failed**.
+Status: **native-binding source published in 0.4.1; that profile's Simplified
+Chinese quality check remains failed**. A subsequent explicit RapidOCR profile
+passes the unchanged Chinese required-term controls below, not a full
+transcription or representative language benchmark.
 Public Ghimera 0.4.0 is immutable. The [combined release](RELEASE_041.md)
 does not close the infrastructure PRD or the Simplified Chinese failure below.
 
@@ -119,3 +122,70 @@ No source/test edits were made during either reported passing run.
    identification and semantic-model admission distinct.
 4. Run the full package gate before merge/publication. No tag has moved and no
    shared model runtime or platform service was changed for this candidate.
+
+## Explicit existing-recognizer comparison after 0.4.3 publication
+
+On 7 October, the unchanged controlled Simplified and Traditional PDF bytes
+above were reprocessed through the shipped `DocumentExtractor`, not an OCR
+string repair or a mocked recognizer. An explicit `chimera.pdf-models/1` recipe
+selected RapidOCR 3.9.1, PP-OCRv6 small, `language = "ch"`, full-page mode and
+scale 3.0. The eight-artifact manifest was checked before work:
+`b5870ec8ca436990007331073af336da957fc1ddde966f0e4dbb826349580fef`.
+The recognition artifact's embedded character metadata contained both scripts;
+that observation alone is not quality evidence. No model was downloaded.
+
+Both real runs used Python 3.11.16 at the private document-worker interpreter
+already named above, importing
+`/tmp/ghimera-delivery-outbox-20261007/src/ghimera` on the published source line.
+The standalone interpreter resolves no platform SDK; doctor/floor do not apply.
+Two CPU threads and one parser slot were declared in the effective policy;
+source bytes and expected terms were unchanged. Parser/source/config/artifact
+receipt bindings were checked and exact extracted text/layout retained.
+
+| Control | Original terms | Result | Seconds including worker startup |
+|---|---|---|---:|
+| Simplified Chinese | `台湾`, `码头` | Both recovered; language `zh` | 39.027 |
+| Traditional Chinese | `臺灣`, `碼頭` | Both recovered; language `zh` | 33.218 |
+
+The Simplified output still misreads `部门` as `部内`. Thus the previous title
+failure has an explicitly configured alternative, but **full transcription
+quality is not accepted**. Neither this pair nor the earlier term checks proves
+general multilingual, vertical-layout, chart or semantic extraction quality.
+The native-binding `/2` profile remains unchanged, including its recorded
+failure. No automatic fallback or model substitution was added. Selecting a
+different recognizer is an operator recipe choice with a distinct digest.
+
+The new non-active `examples/documents-chinese-rapidocr.toml` candidate carries
+the tested model/recognizer pins and explicit bounds, with placeholder private
+paths. It is a document-policy fragment: validate it with
+`DocumentExtractionConfig`, then supply it as `document_extraction` in the full
+collector configuration. It is not an independent full collector config. The
+existing English and Pacific examples retain their published identities. The
+new example and its regression are development source, not part of the immutable
+0.4.3 archives; their full package gate and next publication remain separate.
+
+Reproduction records are retained under the owned
+`ghimera-043-release-R1PMMC/rapidocr-zh-Hans` and `rapidocr-zh-Hant` operator
+directories: original-source path/hash, expectations, exact effective config,
+extracted document, report and the `compare_ocr.py` harness. The URLs in these
+controlled runs were caller claims, not fetched publishers. No pool GPU,
+model service or shared runtime changed.
+
+## Qwen-VL follow-up boundary
+
+[Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct)
+has open Apache-2.0 weights and an
+[official OCR cookbook](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/ocr.ipynb).
+It remains a candidate for difficult native-script text and document structure,
+not a tested replacement in this package. Text-only Qwen cannot read page pixels.
+
+A model-assisted OCR profile must explicitly pin its private vision service,
+model revision, page render recipe, image/input/output bounds and review policy.
+Retain original PDF/page hashes and separately identify generated transcription;
+do not mislabel model-generated boxes or confidence as native OCR observations.
+Rendering stays in the owned bounded worker. Private model calls belong to the
+existing model-control boundary, not the currently offline parser's network
+environment or the crawl/Tor route. Keep source/native text intact; no summary,
+translation, guessed repair or silent hosted fallback. Reuse the unchanged
+Chinese controls, test complete source-line transcription, and extend vertical,
+mixed-script and representative source acceptance before claiming support.

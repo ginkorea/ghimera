@@ -1,0 +1,113 @@
+# Explicit offline Chinese scan recipe, not a silent fallback or active service.
+# Tested on unchanged controlled Simplified/Traditional scans; not full accuracy.
+# Required-term checks pass, but the Simplified control still has a word error.
+# Supply private paths and provision this exact manifest before running.
+# Keep documents-standard.toml and documents-pacific.toml unchanged.
+schema = "chimera.document-extraction/1"
+worker_python = "/path/to/private/ghimera-documents/bin/python"
+work_directory = "/path/to/private/ghimera/chinese-documents"
+artifacts_directory = "/path/to/private/ghimera/pdf-models"
+max_input_bytes = 16777216
+max_output_bytes = 8388608
+max_diagnostic_bytes = 65536
+max_text_chars = 500000
+max_links = 200
+max_workers = 1
+timeout_seconds = 240.0
+cleanup_timeout_seconds = 5.0
+max_pages = 200
+max_archive_entries = 2000
+max_expanded_bytes = 67108864
+max_compression_ratio = 1000.0
+cpu_threads = 2
+pdf_pipeline = "standard"
+do_ocr = true
+do_table_structure = true
+# Language-ID candidates are distinct from recognizer training/quality coverage.
+languages = ["en", "zh", "ja", "ko", "tl", "id", "ms", "vi", "th", "mi", "ru"]
+language_max_chars = 8000
+language_min_chars = 30
+language_min_confidence = 0.5
+language_min_margin = 0.1
+
+[[artifacts]]
+path = "docling-project--docling-layout-heron-onnx/config.json"
+sha256 = "c6e67b6cdf64fa245779d0409bb994aa96e8c1790e15ec07a65843628e232180"
+size_bytes = 878
+[[artifacts]]
+path = "docling-project--docling-layout-heron-onnx/model.onnx"
+sha256 = "59c81a3a2923042d85034ffc487f8f47e4854117e879aef89b2b9f728fb4922a"
+size_bytes = 171220471
+[[artifacts]]
+path = "docling-project--docling-layout-heron-onnx/preprocessor_config.json"
+sha256 = "54d086cf0d7d371f7fac36e5d3a0dae31e211298affc816106cc376506799d58"
+size_bytes = 445
+[[artifacts]]
+path = "docling-project--docling-models/model_artifacts/tableformer/accurate/tableformer_accurate.safetensors"
+sha256 = "2a7d6c924b3cd12fb99a09280ca9c33a89c5d60b93253617d2e088c1a40374d9"
+size_bytes = 212758388
+[[artifacts]]
+path = "docling-project--docling-models/model_artifacts/tableformer/accurate/tm_config.json"
+sha256 = "984e122ceb8ccf84d84c9d2882f6f2302a44b4f1e577babd6289892c36f3cffd"
+size_bytes = 7060
+[[artifacts]]
+path = "rapidocr/PP-OCRv6_det_small.onnx"
+sha256 = "090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f"
+size_bytes = 9929594
+[[artifacts]]
+path = "rapidocr/PP-OCRv6_rec_small.onnx"
+sha256 = "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884"
+size_bytes = 21234383
+[[artifacts]]
+path = "rapidocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+sha256 = "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c"
+size_bytes = 585532
+
+[pdf_models]
+schema = "chimera.pdf-models/1"
+layout_repository = "docling-project/docling-layout-heron-onnx"
+layout_revision = "40bde044036bb181c130ddf6c51792187268748f"
+layout_engine = "onnxruntime"
+layout_model_filename = "model.onnx"
+layout_score_threshold = 0.3
+table_mode = "accurate"
+table_cell_matching = true
+images_scale = 2.0
+
+[[pdf_models.runtime_packages]]
+name = "docling-ibm-models"
+version = "4.0.3"
+[[pdf_models.runtime_packages]]
+name = "torch"
+version = "2.9.1+cpu"
+[[pdf_models.runtime_packages]]
+name = "torchvision"
+version = "0.24.1+cpu"
+[[pdf_models.runtime_packages]]
+name = "transformers"
+version = "4.57.6"
+[[pdf_models.runtime_packages]]
+name = "onnxruntime"
+version = "1.23.2"
+[[pdf_models.runtime_packages]]
+name = "rapidocr"
+version = "3.9.1"
+
+[pdf_models.ocr]
+language = "ch"
+model_size = "small"
+detection_path = "rapidocr/PP-OCRv6_det_small.onnx"
+classification_path = "rapidocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+recognition_path = "rapidocr/PP-OCRv6_rec_small.onnx"
+# Character vocabulary is embedded in this exact ONNX artifact.
+mode = "full_page"
+scale = 3.0
+text_score = 0.5
+
+[pdf_models.reading_order]
+schema = "chimera.reading-order/1"
+method = "xy_cut"
+column_direction = "left_to_right"
+min_column_gap_ratio = 0.015
+min_row_gap_ratio = 0.015
+max_recursion_depth = 32
