@@ -94,8 +94,9 @@ without permission; no public-site scraping adapter is implemented here.
 An own index still needs seed acquisition and maintenance: installing the code
 does not provide Ahmia's existing corpus.
 
-Provider federation, deterministic stagnation switching and an onion-index MCP
-server remain follow-on work, not features implied by this client adapter.
+Initial provider federation and deterministic stagnation switching now compose
+through [the configured routing boundary](DISCOVERY_ROUTING.md). An onion-index MCP
+server remains follow-on work, not a feature implied by this client adapter.
 See [discovery design](GROUNDED_DISCOVERY.md). Provider-specific result-use terms
 still apply through MCP; Google-grounded results do not become unrestricted
 crawl seeds by changing transport.

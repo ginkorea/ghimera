@@ -22,6 +22,12 @@ self-hosted model services, extraction policies and graph profile.
   session to obtain source leads; default mappings support the `web_search`
   envelope. Other tools and result paths are configurable. See
   [MCP leads](docs/MCP_LEADS.md).
+- **Configurable discovery routing (development source).** Combine explicit
+  open-web and onion lead providers, with per-provider budgets, concurrent
+  fan-out or ordered fallback, and bounded switching when research stalls.
+  Continuation retains spent budgets and each provider's original response.
+  See [discovery routing](docs/DISCOVERY_ROUTING.md). An onion-index service
+  is not bundled.
 - **Human-proxy browser interaction (development source).** An explicitly
   configured CLI can pause while you act in the selected browser, then resume
   native capture with request-bound terminal input. See

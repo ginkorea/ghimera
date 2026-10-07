@@ -1,0 +1,48 @@
+# Non-active fragment. Replace endpoints and supply initialized MCP clients.
+# Remove the single [search] binding; this section is its explicit alternative.
+# Only configure services whose terms permit automated collection and retention.
+[discovery]
+schema = "ghimera.discovery/1"
+target_domains = ["open_web", "onion"]
+allow_cross_domain_expansion = true
+mode = "ordered_fallback"
+cold_start_fanout = true
+provider_concurrency = 2
+stagnation_window = 2
+min_new_documents = 1
+min_new_answers = 1
+max_strategy_changes = 3
+
+[[discovery.providers]]
+id = "web"
+domains = ["open_web"]
+query_disclosure = "planned_query"
+use_contract = "crawl_and_retain"
+max_calls = 12
+byte_budget = 1048576
+call_seconds_budget = 180.0
+max_response_bytes = 65536
+max_results = 8
+timeout_seconds = 15.0
+consecutive_failure_limit = 3
+[discovery.providers.binding]
+schema = "ghimera.mcp-leads/1"
+endpoint = "https://discovery.example/mcp"
+tool_name = "web_search"
+
+[[discovery.providers]]
+id = "onions"
+domains = ["onion"]
+query_disclosure = "planned_query"
+use_contract = "crawl_and_retain"
+max_calls = 12
+byte_budget = 1048576
+call_seconds_budget = 240.0
+max_response_bytes = 65536
+max_results = 8
+timeout_seconds = 20.0
+consecutive_failure_limit = 3
+[discovery.providers.binding]
+schema = "ghimera.mcp-leads/1"
+endpoint = "https://onion-index.example/mcp"
+tool_name = "onion_search"

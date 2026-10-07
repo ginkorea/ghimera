@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 
+from ghimera.discovery_config import DiscoveryProgress
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.local_input_types import LocalDocumentSeed
 from ghimera.model_types import ModelCallEvidence
@@ -198,6 +199,9 @@ class ResearchRound(ResearchRecord):
     discovered_urls: tuple[str, ...]
     assessment: Assessment | None
     collection_stop: str
+    discovery_progress: DiscoveryProgress | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
 
 class ResearchResult(ResearchRecord):
@@ -225,6 +229,8 @@ class ResearchResult(ResearchRecord):
     @model_validator(mode="after")
     def retained_discovery(self) -> "ResearchResult":
         if self.schema_version == "chimera.research-result/1":
+            if self.harvest.receipt.effective_config.discovery is not None:
+                raise ValueError("multi-provider results require retained discovery responses")
             if self.search_observations:
                 raise ValueError("legacy results do not claim retained search responses")
             return self
@@ -242,12 +248,27 @@ class ResearchResult(ResearchRecord):
         if policy is None or len(attempts) > self.search_calls:
             raise ValueError("retained discovery requires its research policy and spent calls")
         ids = {question.id for question in self.questions}
+        discovery = self.harvest.receipt.effective_config.discovery
+        identities = (
+            {provider.identity for provider in discovery.providers}
+            if discovery
+            else {(self.search_provider, self.search_revision)}
+        )
+        if (
+            discovery is not None
+            and (self.search_provider, self.search_revision) != discovery.identity
+        ):
+            raise ValueError("discovery result requires its original strategy identity")
+        if discovery is not None and any(
+            row.route not in {f"search:{name}@{revision}" for name, revision in identities}
+            for row in attempts
+        ):
+            raise ValueError("every discovery attempt must bind a configured provider")
         for observation in self.search_observations:
             row = rows[observation.sequence]
             response = observation.response
             if (
-                observation.provider != self.search_provider
-                or observation.provider_revision != self.search_revision
+                (observation.provider, observation.provider_revision) not in identities
                 or row.route != f"search:{observation.provider}@{observation.provider_revision}"
                 or row.query != observation.query.text
                 or not set(observation.query.question_ids) <= ids
@@ -260,6 +281,24 @@ class ResearchResult(ResearchRecord):
                 or row.transport != response.transport
             ):
                 raise ValueError("retained search response must bind its recorded fetch")
+        if discovery is not None:
+            for provider in discovery.providers:
+                provider_rows = tuple(
+                    row
+                    for row in attempts
+                    if row.route == f"search:{provider.identity[0]}@{provider.identity[1]}"
+                )
+                if (
+                    len(provider_rows) > provider.max_calls
+                    or sum(row.bytes_read for row in provider_rows) > provider.byte_budget
+                    or any(row.bytes_read > provider.max_response_bytes for row in provider_rows)
+                    or any(
+                        len(obs.response.hits) > provider.max_results
+                        for obs in self.search_observations
+                        if (obs.provider, obs.provider_revision) == provider.identity
+                    )
+                ):
+                    raise ValueError("discovery evidence exceeds its provider limits")
         for row in self.harvest.ledger:
             reference = row.reference.reference if row.reference is not None else None
             if not isinstance(reference, SearchReference):

@@ -292,7 +292,11 @@ def test_tor_request_closes_private_tunnel_and_accounts_partial_bytes(site):
             from ghimera.models import FetchRequest
             from ghimera.refusals import FetchFailure
 
-            with tempfile.TemporaryDirectory(prefix="ct-") as root:
+            # Socket scratch follows the explicit short Tor fixture policy, not
+            # TMPDIR, which may be a long path on the gate's large data volume.
+            with tempfile.TemporaryDirectory(
+                prefix="ct-", dir=tp["tor"]["bridge_directory"]
+            ) as root:
                 raw["transport"]["tor"]["bridge_directory"] = root
                 cfg = GhimeraConfig.model_validate(raw)
                 route = CurlRoute(cfg, resolver=NoLocalDNS())

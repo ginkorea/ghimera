@@ -194,6 +194,8 @@ def _parent_hops(source_url: str, origin_url: str | None, queued: dict[str, int]
 
 def validate_reference_ledger(harvest: Harvest) -> None:
     policy = harvest.receipt.effective_config.references
+    discovery = harvest.receipt.effective_config.discovery
+    provider_ids = {provider.identity for provider in discovery.providers} if discovery else set()
     sources = {(doc.url, doc.sha256): doc for doc in harvest.source_documents}
     queued: dict[str, int] = {}
     parents: set[tuple[str, str]] = set()
@@ -216,7 +218,19 @@ def validate_reference_ledger(harvest: Harvest) -> None:
                     != policy.cited_by_query_template.format(
                         title=source.extracted.title[: policy.max_query_title_chars], url=source.url
                     )
-                    or any(item.source == request.source for item in queries.values())
+                    or (
+                        discovery is not None
+                        and (request.provider, request.provider_revision) not in provider_ids
+                    )
+                    or any(
+                        item.source == request.source
+                        and (
+                            discovery is None
+                            or (item.provider, item.provider_revision)
+                            == (request.provider, request.provider_revision)
+                        )
+                        for item in queries.values()
+                    )
                 )
             ):
                 raise ValueError(

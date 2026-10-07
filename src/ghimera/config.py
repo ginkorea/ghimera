@@ -12,6 +12,7 @@ from ghimera.browser_config import BrowserConfig
 from ghimera.challenge_config import ChallengeConfig
 from ghimera.continuation_config import ContinuationConfig
 from ghimera.dedup_config import DedupConfig
+from ghimera.discovery_config import DiscoveryConfig
 from ghimera.document_config import DocumentExtractionConfig
 from ghimera.extraction_config import ExtractionConfig
 from ghimera.graph_types import GraphConfig
@@ -140,6 +141,7 @@ class GhimeraConfig(BaseModel):
     search: SearxConfig | McpLeadConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    discovery: DiscoveryConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     references: ReferenceConfig | None = None
     source_sessions: tuple[SourceSessionPolicy, ...] = ()
     challenges: ChallengeConfig | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -151,6 +153,8 @@ class GhimeraConfig(BaseModel):
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
+        if self.discovery is not None and (self.search is not None or self.research is None):
+            raise ValueError("discovery requires research and replaces the single search binding")
         if self.human_browser is not None and self.transport is not None:
             if any(
                 self.transport.mode_for(urlsplit(item.origin).hostname or "")

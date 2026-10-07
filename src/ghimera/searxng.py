@@ -46,6 +46,10 @@ class SearxTransport:
     ) -> None:
         if config.search is not None and config.search != provider:
             raise ValueError("search provider must match the run's effective search recipe")
+        if config.discovery is not None and not any(
+            binding.binding == provider for binding in config.discovery.providers
+        ):
+            raise ValueError("search provider must match a configured discovery binding")
         # Discovery is not a collected source. Source cookies must neither be
         # required here nor borrowed for its separate service endpoint.
         search_config = GhimeraConfig.model_validate(

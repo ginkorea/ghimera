@@ -7,6 +7,7 @@ from pydantic import SecretStr
 
 from ghimera.browser import IsolatedBrowserRenderer
 from ghimera.config import GhimeraConfig
+from ghimera.discovery import DiscoveryProviders
 from ghimera.documents import DocumentExtractionSuite, DocumentExtractor
 from ghimera.embedding import SelfHostedEncoder
 from ghimera.embedding_types import EmbeddingReferences
@@ -52,6 +53,7 @@ class Collector:
         source_resolver: Resolver | None = None,
         human_assistant: HumanAssistant | None = None,
         mcp_client: McpLeadClient | None = None,
+        discovery_clients: Mapping[str, McpLeadClient] | None = None,
     ) -> None:
         # Revalidate injected models: model_copy(update=...) can bypass guards.
         config = GhimeraConfig.model_validate(config.model_dump())
@@ -65,7 +67,7 @@ class Collector:
         if (
             config.http is None
             or config.research is None
-            or config.search is None
+            or (config.search is None and config.discovery is None)
             or config.models is None
             or config.scoring is None
             or config.extraction is None
@@ -82,12 +84,36 @@ class Collector:
             raise ValueError(
                 "research content types require matching configured extraction adapters"
             )
-        search: GroundedSearch
-        if isinstance(config.search, McpLeadConfig):
+        search: GroundedSearch | DiscoveryProviders
+        if config.discovery is not None:
+            if mcp_client is not None:
+                raise ValueError("discovery uses explicit provider-keyed MCP clients")
+            clients = dict(discovery_clients or {})
+            expected = {
+                p.id for p in config.discovery.providers if isinstance(p.binding, McpLeadConfig)
+            }
+            if set(clients) != expected:
+                raise ValueError("every discovery MCP binding requires exactly its provider client")
+            adapters: dict[str, GroundedSearch] = {}
+            for provider in config.discovery.providers:
+                binding = provider.binding
+                if isinstance(binding, McpLeadConfig):
+                    adapters[provider.id] = McpLeadSearch(binding, clients[provider.id])
+                else:
+                    provider_type = (
+                        SearxHtmlSearch if binding.response_format == "html" else SearxSearch
+                    )
+                    adapters[provider.id] = provider_type(config, binding, resolver=source_resolver)
+            search = DiscoveryProviders(config.discovery, adapters)
+        elif discovery_clients is not None:
+            raise ValueError("discovery clients require a discovery recipe")
+        elif isinstance(config.search, McpLeadConfig):
             if mcp_client is None:
                 raise ValueError("MCP discovery requires an explicitly bound MCP client")
             search = McpLeadSearch(config.search, mcp_client)
         else:
+            if config.search is None:
+                raise ValueError("Collector requires a discovery binding")
             if mcp_client is not None:
                 raise ValueError("MCP client requires an MCP discovery recipe")
             search_type = (
@@ -141,6 +167,7 @@ class Collector:
         source_resolver: Resolver | None = None,
         human_assistant: HumanAssistant | None = None,
         mcp_client: McpLeadClient | None = None,
+        discovery_clients: Mapping[str, McpLeadClient] | None = None,
     ) -> "Collector":
         return cls(
             GhimeraConfig.from_toml(path, max_bytes=max_config_bytes),
@@ -151,6 +178,7 @@ class Collector:
             source_resolver=source_resolver,
             human_assistant=human_assistant,
             mcp_client=mcp_client,
+            discovery_clients=discovery_clients,
         )
 
     @property

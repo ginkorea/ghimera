@@ -16,6 +16,8 @@ from pydantic import ValidationError
 
 from ghimera.config import GhimeraConfig
 from ghimera.continuation import CheckpointStore, ResearchCheckpoint, ResearchSuspended
+from ghimera.discovery import DiscoveryProviders
+from ghimera.discovery_config import DiscoveryProgress
 from ghimera.graph_planning import build_context
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.loop import CollectionSession, GoalLoop
@@ -48,8 +50,8 @@ from ghimera.research_types import (
     ResearchResult,
     ResearchRound,
     ReviewRequest,
+    SearchObservation,
     SearchQuery,
-    SearchResponse,
 )
 from ghimera.search import GroundedSearch
 from ghimera.search_history import SearchHistory
@@ -264,7 +266,7 @@ class ResearchLoop:
         *,
         config: GhimeraConfig,
         collector: GoalLoop,
-        search: GroundedSearch,
+        search: GroundedSearch | DiscoveryProviders,
         planner: IntentPlanner,
         analyst: ResearchAnalyst,
         reviewer: AnswerReviewer,
@@ -272,6 +274,11 @@ class ResearchLoop:
         policy = config.research
         if policy is None or collector.config != config:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+        if isinstance(search, DiscoveryProviders):
+            if config.discovery != search.policy:
+                raise ValueError("discovery ports require the exact effective strategy recipe")
+        elif config.discovery is not None:
+            raise ValueError("a discovery recipe requires its bound provider set")
         if any(
             model.location == "external"
             for model in (planner.model, analyst.model, reviewer.model, collector.judge_model)
@@ -427,13 +434,24 @@ class ResearchLoop:
         async def search(query: SearchQuery) -> tuple[str, ...]:
             async with semaphore:
                 try:
-                    response = await history.discover(query)
-                    return tuple(hit.url for hit in response.hits)
+                    observations = await history.discover_many(query)
+                    return tuple(
+                        hit.url for observation in observations for hit in observation.response.hits
+                    )
                 except GhimeraRefused as exc:
+                    if exc.code == RefusalCode.BUDGET_EXHAUSTED:
+                        raise
                     self._refuse(session, exc.code)
                     return ()
 
-        batches = await asyncio.gather(*(search(query) for query in queries))
+        completed = await asyncio.gather(
+            *(search(query) for query in queries), return_exceptions=True
+        )
+        batches: list[tuple[str, ...]] = []
+        for outcome in completed:
+            if isinstance(outcome, BaseException):
+                raise outcome
+            batches.append(outcome)
         accepted: dict[str, None] = {}
         for query, batch in zip(queries, batches, strict=True):
             for url in batch:
@@ -444,7 +462,7 @@ class ResearchLoop:
                             sequence=session.ledger.next_sequence,
                             event="discovery",
                             url=url,
-                            reason=f"grounded:{self._search.name}@{self._search.revision}",
+                            reason=f"grounded:{self._search.identity[0]}@{self._search.identity[1]}",
                         )
                     )
                     if session.graph is not None:
@@ -502,8 +520,8 @@ class ResearchLoop:
             self._planner.model,
             self._analyst.model,
             self._reviewer.model,
-            self._search.name,
-            self._search.revision,
+            self._search.identity[0],
+            self._search.identity[1],
         ):
             raise ValueError("continuation requires the original bound model and search identities")
         downtime = time.time() - checkpoint.saved_at
@@ -598,8 +616,8 @@ class ResearchLoop:
             planner=self._planner.model,
             analyst=self._analyst.model,
             reviewer=self._reviewer.model,
-            search_provider=self._search.name,
-            search_revision=self._search.revision,
+            search_provider=self._search.identity[0],
+            search_revision=self._search.identity[1],
             search_calls=session.budget.search_calls,
             search_observations=history.observations,
         )
@@ -691,6 +709,18 @@ class ResearchLoop:
                 questions = plan.questions
                 trace = await self._trace_plan(session, plan)
                 compiler.include_reference_hosts(session.reference_hosts)
+                history.set_rounds(tuple(rounds))
+                before_documents = {doc.sha256 for doc in session.evidence_documents}
+                prior_assessment = rounds[-1].assessment if rounds else assessment
+                before_answers = (
+                    {
+                        item.question_id
+                        for item in prior_assessment.coverage
+                        if item.status == "answered"
+                    }
+                    if prior_assessment
+                    else set()
+                )
                 urls = await self._discover(session, plan.queries, compiler, trace, history)
                 if number == 1:
                     allowed_seeds: list[str] = []
@@ -755,6 +785,22 @@ class ResearchLoop:
                         discovered_urls=urls,
                         assessment=assessment,
                         collection_stop=collection_stop,
+                        discovery_progress=DiscoveryProgress(
+                            new_documents=len(
+                                {doc.sha256 for doc in session.evidence_documents}
+                                - before_documents
+                            ),
+                            new_answers=len(
+                                {
+                                    item.question_id
+                                    for item in assessment.coverage
+                                    if item.status == "answered"
+                                }
+                                - before_answers
+                            ),
+                        )
+                        if self._config.discovery is not None
+                        else None,
                     )
                 )
                 self._save(
@@ -814,8 +860,8 @@ class ResearchLoop:
             planner=self._planner.model,
             analyst=self._analyst.model,
             reviewer=self._reviewer.model,
-            search_provider=self._search.name,
-            search_revision=self._search.revision,
+            search_provider=self._search.identity[0],
+            search_revision=self._search.identity[1],
             search_calls=session.budget.search_calls,
             search_observations=history.observations,
         )
@@ -835,7 +881,7 @@ class ResearchLoop:
         policy = self._config.references
         if policy is None or not policy.discover_cited_by:
             return ()
-        parents: list[tuple[Document, SearchQuery, int]] = []
+        parents: list[tuple[Document, SearchQuery]] = []
         for source in session.evidence_documents:
             text = policy.cited_by_query_template.format(
                 title=source.extracted.title[: policy.max_query_title_chars],
@@ -849,63 +895,97 @@ class ResearchLoop:
             query = SearchQuery(
                 text=text, question_ids=tuple(question.id for question in questions)
             )
-            sequence = session.ledger.next_sequence
-            session.ledger.append(
-                LedgerRow(
-                    sequence=sequence,
-                    event="reference_query",
-                    url=source.url,
-                    query=text,
-                    reason="candidate_citing_sources",
-                    reference_query=ReferenceQuery(
-                        schema="chimera.reference-query/1",
-                        source=ReferenceSource(
-                            url=source.url,
-                            sha256=source.sha256,
-                            text_sha256=hashlib.sha256(source.extracted.text.encode()).hexdigest(),
-                        ),
-                        parent_hops=session.reference_hops(source.url),
-                        origin_url=session.reference_origin(source.url),
-                        query=text,
-                        provider=self._search.name,
-                        provider_revision=self._search.revision,
-                    ),
-                )
-            )
-            parents.append((source, query, sequence))
+            parents.append((source, query))
         semaphore = asyncio.Semaphore(self._policy.search_concurrency)
 
-        async def search(query: SearchQuery) -> SearchResponse | None:
+        async def search(
+            source: Document, query: SearchQuery
+        ) -> tuple[tuple[SearchObservation, int], ...]:
+            sequences: dict[tuple[str, str], int] = {}
+
+            def before_call(provider: GroundedSearch) -> None:
+                if (
+                    sum(row.event == "reference_query" for row in session.ledger.snapshot())
+                    >= policy.cited_by_query_budget
+                ):
+                    session.ledger.append(
+                        LedgerRow(
+                            sequence=session.ledger.next_sequence,
+                            event="policy",
+                            query=query.text,
+                            reason="cited_by_query_budget_exhausted",
+                        )
+                    )
+                    raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
+                sequence = session.ledger.next_sequence
+                sequences[provider.identity] = sequence
+                session.ledger.append(
+                    LedgerRow(
+                        sequence=sequence,
+                        event="reference_query",
+                        url=source.url,
+                        query=query.text,
+                        reason="candidate_citing_sources",
+                        reference_query=ReferenceQuery(
+                            schema="chimera.reference-query/1",
+                            source=ReferenceSource(
+                                url=source.url,
+                                sha256=source.sha256,
+                                text_sha256=hashlib.sha256(
+                                    source.extracted.text.encode()
+                                ).hexdigest(),
+                            ),
+                            parent_hops=session.reference_hops(source.url),
+                            origin_url=session.reference_origin(source.url),
+                            query=query.text,
+                            provider=provider.identity[0],
+                            provider_revision=provider.identity[1],
+                        ),
+                    )
+                )
+
             async with semaphore:
                 try:
-                    return await history.discover(query)
-                except GhimeraRefused as exc:
-                    self._refuse(session, exc.code)
-                    return None
-
-        batches = await asyncio.gather(*(search(query) for _, query, _ in parents))
-        accepted: list[str] = []
-        for (source, query, sequence), response in zip(parents, batches, strict=True):
-            if response is None:
-                continue
-            proofs: dict[tuple[str, str], SearchReference] = {}
-            for hit in response.hits:
-                try:
-                    proof = SearchReference(
-                        schema="chimera.search-reference/1",
-                        target_url=hit.url,
-                        anchor=hit.title,
-                        snippet=hit.snippet,
-                        provider=self._search.name,
-                        provider_revision=self._search.revision,
-                        query=query.text,
-                        response_sha256=hashlib.sha256(response.raw).hexdigest(),
-                        query_sequence=sequence,
+                    observations = await history.discover_many(query, before_call=before_call)
+                    return tuple(
+                        (obs, sequences[(obs.provider, obs.provider_revision)])
+                        for obs in observations
                     )
-                except ValidationError:
-                    self._refuse(session, RefusalCode.OUT_OF_SCOPE, url=hit.url)
-                    continue
-                proofs[(proof.target_url, proof.anchor)] = proof
+                except GhimeraRefused as exc:
+                    if exc.code == RefusalCode.BUDGET_EXHAUSTED:
+                        raise
+                    self._refuse(session, exc.code)
+                    return ()
+
+        completed = await asyncio.gather(
+            *(search(source, query) for source, query in parents), return_exceptions=True
+        )
+        batches: list[tuple[tuple[SearchObservation, int], ...]] = []
+        for outcome in completed:
+            if isinstance(outcome, BaseException):
+                raise outcome
+            batches.append(outcome)
+        accepted: list[str] = []
+        for (source, query), observations in zip(parents, batches, strict=True):
+            proofs: dict[tuple[str, str], SearchReference] = {}
+            for observation, sequence in observations:
+                for hit in observation.response.hits:
+                    try:
+                        proof = SearchReference(
+                            schema="chimera.search-reference/1",
+                            target_url=hit.url,
+                            anchor=hit.title,
+                            snippet=hit.snippet,
+                            provider=observation.provider,
+                            provider_revision=observation.provider_revision,
+                            query=query.text,
+                            response_sha256=hashlib.sha256(observation.response.raw).hexdigest(),
+                            query_sequence=sequence,
+                        )
+                    except ValidationError:
+                        self._refuse(session, RefusalCode.OUT_OF_SCOPE, url=hit.url)
+                        continue
+                    proofs.setdefault((proof.target_url, proof.anchor), proof)
             ranked = await self._collector.score_discovery(
                 session,
                 source,

@@ -1,14 +1,14 @@
 # Grounded discovery: cold starts and escaping dead ends
 
-Status: **MCP lead consumption implemented in development source; multi-provider
-routing and stagnation switching remain design requirements**.
+Status: **MCP lead consumption and initial configured multi-provider routing /
+stagnation switching implemented in development source**. Real-provider acceptance
+and the richer design requirements below remain open; see [routing](DISCOVERY_ROUTING.md).
 The current `ResearchLoop` accepts an intent without seeds, plans
 queries and follows evidence gaps. `GroundedSearch`, `SearchHistory`, scope
 compilation and retained discovery bytes already exist. The concrete Collector
-selects one SearXNG or explicitly bound MCP provider. See [MCP leads](MCP_LEADS.md).
-Dedicated corpus adapters, multi-provider routing
-and deterministic stagnation recovery must be built and accepted before they
-are described as available.
+selects one SearXNG/MCP provider or an explicit provider set, retaining separate
+per-call identities and budgets. See [MCP leads](MCP_LEADS.md).
+Dedicated corpus adapters and broader provider/strategy acceptance remain open.
 
 ## Required behavior
 

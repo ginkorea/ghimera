@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import ClassVar, final
 
 from ghimera.budget import RunBudget
+from ghimera.discovery_config import SearchCallLimits
 from ghimera.ledger import Ledger
 from ghimera.models import LedgerRow
 from ghimera.refusals import FetchCancelled, FetchFailure, GhimeraRefused, RefusalCode
@@ -23,6 +24,10 @@ class GroundedSearch(ABC):
     def transport_selection(self) -> TransportEvidence | None:
         return None
 
+    @property
+    def identity(self) -> tuple[str, str]:
+        return self.name, self.revision
+
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
         if "discover" in cls.__dict__:
@@ -35,17 +40,26 @@ class GroundedSearch(ABC):
 
     @final
     async def discover(
-        self, query: SearchQuery, budget: RunBudget, ledger: Ledger
+        self,
+        query: SearchQuery,
+        budget: RunBudget,
+        ledger: Ledger,
+        *,
+        limits: SearchCallLimits | None = None,
     ) -> SearchResponse:
         policy = budget.config.research
         if policy is None or len(query.text) > policy.max_query_chars or not query.text.strip():
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+        if limits is not None:
+            limits = SearchCallLimits.model_validate(limits.model_dump())
         budget.reserve_search()
         maximum = (
             budget.config.http.max_response_bytes
             if budget.config.http is not None
             else budget.config.byte_budget
         )
+        if limits is not None:
+            maximum = min(maximum, limits.max_bytes)
         allowance = budget.reserve_bytes(maximum)
         try:
             budget.reserve_fetch()
@@ -59,9 +73,15 @@ class GroundedSearch(ABC):
         cancelled = False
         request = SearchRequest(
             query=query,
-            limit=policy.results_per_query,
+            limit=min(policy.results_per_query, limits.limit)
+            if limits
+            else policy.results_per_query,
             max_bytes=allowance,
-            timeout_seconds=min(budget.config.request_timeout_seconds, budget.remaining_seconds),
+            timeout_seconds=min(
+                budget.config.request_timeout_seconds,
+                budget.remaining_seconds,
+                limits.timeout_seconds if limits else budget.remaining_seconds,
+            ),
         )
         try:
             try:
@@ -82,7 +102,7 @@ class GroundedSearch(ABC):
                 LedgerRow(
                     sequence=ledger.next_sequence,
                     event="fetch",
-                    route=f"search:{self.name}@{self.revision}",
+                    route=f"search:{self.identity[0]}@{self.identity[1]}",
                     query=query.text,
                     search_response_sha256=response.content_digest()
                     if response is not None and code is None
