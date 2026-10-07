@@ -63,6 +63,12 @@ Record admission and actual quality separately for each language/script and
 layout, including mixed-script and vertical material. Missing models fail
 preflight; unvalidated quality remains an explicit acceptance gap.
 
+The scanned-PDF candidate adds an explicit `ghimera.pdf-models/2` native OCR
+engine and Pacific traineddata manifest beside the unchanged English `/1`
+recipe. It shares the existing owned Docling worker and source/parse receipts.
+This is not admission of semantic models, cross-language search or representative
+chart understanding; those each need language-qualified evidence.
+
 1. Discover image candidates from retained HTML/DOM: actual source URL, parent
    document hash, native caption/alt/surrounding text, element locator and declared
    dimensions. Include lazy-image/srcset/picture candidates through an explicit

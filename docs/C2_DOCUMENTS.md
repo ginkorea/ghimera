@@ -56,6 +56,43 @@ is **English OCR**, not universal OCR because language detection accepts several
 languages. Other scripts require a supported recognizer and matching manifest;
 there is no automatic language/model substitution.
 
+### Pacific scanned-PDF candidate (not yet published)
+
+`examples/documents-pacific.toml` selects `ghimera.pdf-models/2` and Docling's
+in-process `tesserocr` adapter. It declares Simplified Chinese (`chi_sim`),
+Traditional Chinese (`chi_tra`), Japanese (`jpn` and `jpn_vert`), Korean (`kor`),
+Tagalog/Filipino (`fil`), English, Indonesian, Malay, Vietnamese and Thai packs.
+These are native OCR inputs, not translations. Select a source-specific subset
+through configuration; loading every pack is not an accuracy or speed policy.
+Keep the artifact manifest complete even when a run selects a subset.
+
+The new contract requires the Python binding's exact package version and native
+engine version, an artifact-relative data directory, nonempty ordered language
+packs, page segmentation, OCR mode and scale. All selected `.traineddata` files
+and the pinned vendor's auxiliary `osd.traineddata` must be admitted by size and
+SHA-256. There is no system tessdata or guessed-language fallback. Native OCR
+executes inside the existing bounded parser worker, not an unmanaged CLI child.
+Legacy `/1` and native-text recipe digests remain unchanged.
+
+The separate `pdf-ocr` extra adds `tesserocr==2.11.0`; the standard worker still needs
+the explicit CPU layout/table dependencies above. Install that binding in the
+private worker (`ghimera[documents,pdf-ocr]`) when choosing the new recipe.
+Existing native-text/English installations do not acquire this new dependency.
+Its native engine can vary by
+wheel/build: measure it with `tesserocr.tesseract_version()` and admit the exact
+version in configuration, rather than assume the system CLI is the same engine.
+The sample was provisioned with `tesseract 5.5.1`. Language detection is a
+separate policy: Lingua's `zh` does not distinguish Chinese scripts, and its
+candidate set must not be confused with OCR pack availability. Khmer, Lao and
+Burmese image packs do not imply this document detector can identify them.
+
+Representative publisher scans, vertical/mixed-script layouts, semantic entity
+extraction and retrieval quality remain separate acceptance requirements.
+The first actual Chinese raster-PDF check **failed**: whole-image native OCR
+read substantially more source text than the vendor's tight per-line
+re-recognition. See `PACIFIC_PDF_CANDIDATE.md`; pack admission and passing
+configuration tests must not be reported as accepted document quality.
+
 The worker needs the package's lightweight core (`pydantic`, `curl-cffi`,
 `protego`) as well as the declared document dependencies. Install into a private
 worker, never into a shared runtime. The verified CPU recipe used:

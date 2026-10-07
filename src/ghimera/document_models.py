@@ -54,9 +54,45 @@ class OfflineOcr(BaseModel):
         return self
 
 
+class OfflineTesseract(BaseModel):
+    """Explicit offline packs for Docling's in-process native OCR binding.
+
+    Native work stays inside the owned parser process and its deadline. Unlike
+    the CLI adapter, it cannot leave an OCR subprocess behind on cancellation.
+    Pack order is preference order; no script guessing or system data fallback.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    engine: Literal["tesserocr"]
+    languages: Annotated[
+        tuple[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$")], ...],
+        Field(min_length=1),
+    ]
+    data_directory: str
+    native_version: Annotated[str, Field(pattern=r"^tesseract [0-9]+\.[0-9]+\.[0-9]+$")]
+    page_segmentation: Literal[1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    mode: Literal["full_page", "default", "layout_regions", "pdf_aware_layout_regions"]
+    scale: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+
+    @model_validator(mode="after")
+    def explicit_packs(self) -> "OfflineTesseract":
+        if not relative_artifact(self.data_directory):
+            raise ValueError("tessdata must be an explicit relative artifact directory")
+        if len(set(self.languages)) != len(self.languages) or "osd" in self.languages:
+            raise ValueError("OCR languages must be unique text packs, not orientation data")
+        return self
+
+    def artifact_paths(self) -> tuple[str, ...]:
+        # Pinned Docling 2.134.0 initializes the OSD reader even for explicit
+        # languages. Admit that auxiliary file too, rather than use system data.
+        return tuple(
+            f"{self.data_directory}/{language}.traineddata" for language in (*self.languages, "osd")
+        )
+
+
 class PdfModels(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["chimera.pdf-models/1"] = Field(alias="schema")
+    schema_version: Literal["chimera.pdf-models/1", "ghimera.pdf-models/2"] = Field(alias="schema")
     layout_repository: Annotated[
         str, Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$")
     ]
@@ -69,18 +105,24 @@ class PdfModels(BaseModel):
     reading_order: ReadingOrderPolicy
     images_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)]
     runtime_packages: Annotated[tuple[RuntimePackage, ...], Field(min_length=1)]
-    ocr: OfflineOcr | None
+    ocr: OfflineOcr | OfflineTesseract | None
 
     @model_validator(mode="after")
     def coherent(self) -> "PdfModels":
         if not relative_artifact(self.layout_model_filename):
             raise ValueError("layout model file must be relative to its admitted repository")
+        if isinstance(self.ocr, OfflineTesseract) != (
+            self.schema_version == "ghimera.pdf-models/2"
+        ):
+            raise ValueError("the tesserocr engine requires the explicit PDF models/2 contract")
         names = {package.name for package in self.runtime_packages}
         required = {"docling-ibm-models", "torch", "torchvision", "transformers"}
-        if self.layout_engine == "onnxruntime" or self.ocr is not None:
+        if self.layout_engine == "onnxruntime" or isinstance(self.ocr, OfflineOcr):
             required.add("onnxruntime")
-        if self.ocr is not None:
+        if isinstance(self.ocr, OfflineOcr):
             required.add("rapidocr")
+        if isinstance(self.ocr, OfflineTesseract):
+            required.add("tesserocr")
         if len(names) != len(self.runtime_packages) or not required <= names:
             raise ValueError("PDF runtime must pin each required dependency exactly once")
         return self

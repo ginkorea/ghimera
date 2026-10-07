@@ -1,0 +1,3 @@
+"""Narrow worker-only binding surface; native OCR remains owned by Docling."""
+
+def tesseract_version() -> str: ...

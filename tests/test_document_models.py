@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from ghimera.document_config import DocumentExtractionConfig
-from ghimera.document_models import PdfModels
+from ghimera.document_models import OfflineTesseract, PdfModels
 from ghimera.documents import check_artifacts
 from ghimera.refusals import GhimeraRefused
 from tests.test_document_extraction import config
@@ -176,3 +176,85 @@ def test_published_native_recipe_keeps_its_pre_extension_digest():
         policy.content_digest()
         == "1909013fa9610d348f93efbfbd3ef8c3fd2cbc752f396b8f7317117f7a9b1a8a"
     )
+
+
+def tesseract_policy(**updates):
+    raw = model_policy().model_dump(by_alias=True)
+    raw["schema"] = "ghimera.pdf-models/2"
+    raw["runtime_packages"] = [
+        pin for pin in raw["runtime_packages"] if pin["name"] != "rapidocr"
+    ] + [dict(name="tesserocr", version="2.11.0")]
+    raw["ocr"] = dict(
+        engine="tesserocr",
+        languages=["chi_sim", "chi_tra", "jpn", "jpn_vert", "kor", "fil", "eng"],
+        data_directory="tessdata",
+        native_version="tesseract 5.5.1",
+        page_segmentation=6,
+        mode="full_page",
+        scale=3.0,
+    )
+    raw.update(updates)
+    return PdfModels.model_validate(raw)
+
+
+def test_pacific_pdf_requires_explicit_packs_and_orientation_data(tmp_path):
+    policy = tesseract_policy()
+    assert isinstance(policy.ocr, OfflineTesseract)
+    paths = policy.required_artifact_paths()
+    assert "tessdata/chi_sim.traineddata" in paths
+    assert "tessdata/chi_tra.traineddata" in paths
+    assert "tessdata/jpn_vert.traineddata" in paths
+    assert "tessdata/fil.traineddata" in paths
+    assert "tessdata/osd.traineddata" in paths
+    root, entries = artifacts(tmp_path, policy)
+    cfg = config(
+        tmp_path,
+        pdf_pipeline="standard",
+        do_ocr=True,
+        pdf_models=policy.model_dump(by_alias=True),
+        artifacts_directory=str(root),
+        artifacts=entries,
+    )
+    check_artifacts(cfg.document_extraction)
+    for absent in ("tessdata/osd.traineddata", "tessdata/chi_tra.traineddata"):
+        with pytest.raises(ValidationError):
+            config(
+                tmp_path,
+                pdf_pipeline="standard",
+                do_ocr=True,
+                pdf_models=policy.model_dump(by_alias=True),
+                artifacts_directory=str(root),
+                artifacts=[entry for entry in entries if entry["path"] != absent],
+            )
+
+
+def test_new_pdf_engine_cannot_change_legacy_schema_or_borrow_defaults():
+    baseline = tesseract_policy().model_dump(by_alias=True)
+    with pytest.raises(ValidationError):
+        PdfModels.model_validate(dict(baseline, schema="chimera.pdf-models/1"))
+    for update in (
+        dict(languages=[]),
+        dict(languages=["eng", "eng"]),
+        dict(languages=["../chi_sim"]),
+        dict(languages=["iso:zh"]),
+        dict(data_directory="/usr/share/tessdata"),
+        dict(page_segmentation=0),
+        dict(page_segmentation=2),
+        dict(page_segmentation=14),
+        dict(native_version="auto"),
+        dict(scale=0),
+    ):
+        with pytest.raises(ValidationError):
+            tesseract_policy(ocr=dict(baseline["ocr"], **update))
+    with pytest.raises(ValidationError):
+        tesseract_policy(runtime_packages=model_policy().model_dump()["runtime_packages"])
+
+
+def test_shipped_pacific_recipe_declares_distinct_scripts_and_native_tagalog_pack():
+    with Path("examples/documents-pacific.toml").open("rb") as stream:
+        cfg = DocumentExtractionConfig.model_validate(tomllib.load(stream))
+    assert isinstance(cfg.pdf_models.ocr, OfflineTesseract)
+    packs = set(cfg.pdf_models.ocr.languages)
+    assert {"chi_sim", "chi_tra", "jpn", "jpn_vert", "kor", "fil"} <= packs
+    assert {"tl", "ja", "ko", "zh", "id", "ms", "vi", "th"} <= set(cfg.languages)
+    assert len(cfg.artifacts) == 17

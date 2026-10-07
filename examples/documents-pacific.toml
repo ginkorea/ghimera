@@ -1,0 +1,149 @@
+# Offline scanned-PDF OCR with explicit native language packs.
+# Supply your own private worker, scratch and artifact root. Nothing downloads
+# during collection. Install documents + pdf-ocr and the pinned PDF packages.
+# Prefer a source-specific subset in pdf_models.ocr.languages for each run;
+# changing languages produces a new configuration digest. All admitted files
+# below must remain in the artifact manifest, including auxiliary osd data.
+# Japanese packs: tessdata_best e12c65a915945e4c28e237a9b52bc4a8f39a0cec.
+# Other packs: tessdata_fast 87416418657359cb625c412a48b6e1d6d41c29bd.
+schema = "chimera.document-extraction/1"
+worker_python = "/path/to/private/ghimera-documents/bin/python"
+work_directory = "/path/to/private/ghimera/documents"
+artifacts_directory = "/path/to/private/ghimera/pdf-models"
+max_input_bytes = 16777216
+max_output_bytes = 8388608
+max_diagnostic_bytes = 65536
+max_text_chars = 500000
+max_links = 200
+max_workers = 2
+timeout_seconds = 240.0
+cleanup_timeout_seconds = 5.0
+max_pages = 200
+max_archive_entries = 2000
+max_expanded_bytes = 67108864
+max_compression_ratio = 1000.0
+cpu_threads = 4
+pdf_pipeline = "standard"
+do_ocr = true
+do_table_structure = true
+languages = ["en", "zh", "ja", "ko", "tl", "id", "ms", "vi", "th", "mi", "ru"]
+language_max_chars = 8000
+language_min_chars = 30
+language_min_confidence = 0.5
+language_min_margin = 0.1
+
+[[artifacts]]
+path = "docling-project--docling-layout-heron-onnx/config.json"
+sha256 = "c6e67b6cdf64fa245779d0409bb994aa96e8c1790e15ec07a65843628e232180"
+size_bytes = 878
+[[artifacts]]
+path = "docling-project--docling-layout-heron-onnx/model.onnx"
+sha256 = "59c81a3a2923042d85034ffc487f8f47e4854117e879aef89b2b9f728fb4922a"
+size_bytes = 171220471
+[[artifacts]]
+path = "docling-project--docling-layout-heron-onnx/preprocessor_config.json"
+sha256 = "54d086cf0d7d371f7fac36e5d3a0dae31e211298affc816106cc376506799d58"
+size_bytes = 445
+[[artifacts]]
+path = "docling-project--docling-models/model_artifacts/tableformer/accurate/tableformer_accurate.safetensors"
+sha256 = "2a7d6c924b3cd12fb99a09280ca9c33a89c5d60b93253617d2e088c1a40374d9"
+size_bytes = 212758388
+[[artifacts]]
+path = "docling-project--docling-models/model_artifacts/tableformer/accurate/tm_config.json"
+sha256 = "984e122ceb8ccf84d84c9d2882f6f2302a44b4f1e577babd6289892c36f3cffd"
+size_bytes = 7060
+[[artifacts]]
+path = "tessdata/eng.traineddata"
+sha256 = "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+size_bytes = 4113088
+[[artifacts]]
+path = "tessdata/chi_sim.traineddata"
+sha256 = "a5fcb6f0db1e1d6d8522f39db4e848f05984669172e584e8d76b6b3141e1f730"
+size_bytes = 2469156
+[[artifacts]]
+path = "tessdata/chi_tra.traineddata"
+sha256 = "529c5b5797d64b126065cd55f2bb4c7fd7b15790798091b1ff259941a829330b"
+size_bytes = 2366642
+[[artifacts]]
+path = "tessdata/jpn.traineddata"
+sha256 = "36bdf9ac823f5911e624c30d0553e890b8abc7c31a65b3ef14da943658c40b79"
+size_bytes = 14330109
+[[artifacts]]
+path = "tessdata/jpn_vert.traineddata"
+sha256 = "1258be6eb2a9851f18043234ad18cca13ed32690bfff62b335c898bbea371548"
+size_bytes = 14330809
+[[artifacts]]
+path = "tessdata/kor.traineddata"
+sha256 = "6b85e11d9bbf07863b97b3523b1b112844c43e713df8b66418a081fd1060b3b2"
+size_bytes = 1677415
+[[artifacts]]
+path = "tessdata/fil.traineddata"
+sha256 = "2b17f68014ab44b88b5e2334ebcd0ce0090d9af7c6fbef6fab22e0bbd9a934dd"
+size_bytes = 1841715
+[[artifacts]]
+path = "tessdata/ind.traineddata"
+sha256 = "69786901da87ab8766c1ea7fbb10b28f2110c14da3f6c8f2735df131fba95d88"
+size_bytes = 1122661
+[[artifacts]]
+path = "tessdata/msa.traineddata"
+sha256 = "e41a3e5febfec50c90371eb1cbb17a48b10cad387900e3420b1f134c1b766cba"
+size_bytes = 1747801
+[[artifacts]]
+path = "tessdata/vie.traineddata"
+sha256 = "79df64caf7bcfb2a27df5042ecb6121e196eada34da774956995747636d5bfa1"
+size_bytes = 531275
+[[artifacts]]
+path = "tessdata/tha.traineddata"
+sha256 = "294227cc2d1292b0acb28d61d4115c88252b96d466ca90b417cf4cf0c67bf07c"
+size_bytes = 1072600
+[[artifacts]]
+path = "tessdata/osd.traineddata"
+sha256 = "9cf5d576fcc47564f11265841e5ca839001e7e6f38ff7f7aacf46d15a96b00ff"
+size_bytes = 10562727
+
+[pdf_models]
+schema = "ghimera.pdf-models/2"
+layout_repository = "docling-project/docling-layout-heron-onnx"
+layout_revision = "40bde044036bb181c130ddf6c51792187268748f"
+layout_engine = "onnxruntime"
+layout_model_filename = "model.onnx"
+layout_score_threshold = 0.3
+table_mode = "accurate"
+table_cell_matching = true
+images_scale = 2.0
+
+[[pdf_models.runtime_packages]]
+name = "docling-ibm-models"
+version = "4.0.3"
+[[pdf_models.runtime_packages]]
+name = "torch"
+version = "2.9.1+cpu"
+[[pdf_models.runtime_packages]]
+name = "torchvision"
+version = "0.24.1+cpu"
+[[pdf_models.runtime_packages]]
+name = "transformers"
+version = "4.57.6"
+[[pdf_models.runtime_packages]]
+name = "onnxruntime"
+version = "1.23.2"
+[[pdf_models.runtime_packages]]
+name = "tesserocr"
+version = "2.11.0"
+
+[pdf_models.ocr]
+engine = "tesserocr"
+languages = ["chi_sim", "chi_tra", "jpn", "jpn_vert", "kor", "fil", "eng", "ind", "msa", "vie", "tha"]
+data_directory = "tessdata"
+native_version = "tesseract 5.5.1"
+page_segmentation = 6
+mode = "full_page"
+scale = 3.0
+
+[pdf_models.reading_order]
+schema = "chimera.reading-order/1"
+method = "xy_cut"
+column_direction = "left_to_right"
+min_column_gap_ratio = 0.015
+min_row_gap_ratio = 0.015
+max_recursion_depth = 32

@@ -14,6 +14,7 @@ from docling.datamodel.pipeline_options import (
     RapidOcrOptions,
     TableFormerMode,
     TableStructureOptions,
+    TesseractOcrOptions,
     ThreadedPdfPipelineOptions,
 )
 from docling.datamodel.stage_model_specs import ObjectDetectionModelSpec
@@ -26,6 +27,7 @@ from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
 from docling_core.types.doc.labels import DocItemLabel
 
 from ghimera.document_config import DocumentExtractionConfig
+from ghimera.document_models import OfflineOcr, OfflineTesseract
 from ghimera.document_order import LayoutBlock, ReadingOrderPolicy, column_order
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
@@ -156,7 +158,7 @@ def pdf_options(config: DocumentExtractionConfig) -> PdfPipelineOptions:
             do_cell_matching=models.table_cell_matching,
         ),
     )
-    if models.ocr is not None:
+    if isinstance(models.ocr, OfflineOcr):
         ocr = models.ocr
         options.ocr_options = RapidOcrOptions(
             backend="onnxruntime",
@@ -175,5 +177,18 @@ def pdf_options(config: DocumentExtractionConfig) -> PdfPipelineOptions:
             use_cls=True,
             use_rec=True,
             print_verbose=False,
+        )
+    elif isinstance(models.ocr, OfflineTesseract):
+        from tesserocr import tesseract_version
+
+        ocr_native = models.ocr
+        if tesseract_version().splitlines()[0] != ocr_native.native_version:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        options.ocr_options = TesseractOcrOptions(
+            lang=list(ocr_native.languages),
+            path=str(root / ocr_native.data_directory),
+            psm=ocr_native.page_segmentation,
+            mode=OcrMode(ocr_native.mode),
+            scale=ocr_native.scale,
         )
     return options
