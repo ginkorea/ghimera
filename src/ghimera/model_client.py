@@ -719,6 +719,18 @@ class SelfHostedModel:
                     else ""
                 )
                 + (
+                    " Supplied semantic_refusal gaps are client-observed extraction/review "
+                    "failures, not model-assessed missing facts or successful coverage. "
+                    "Other supplied coverage gaps remain independent model assessments, "
+                    "not factual entities. "
+                    "Investigate their native source windows or independently discovered sources; "
+                    "cite the exact gap ID in graph_refs. No failed proposal is a graph fact."
+                    if prompt.task == "plan"
+                    and prompt.graph_context is not None
+                    and prompt.graph_context.schema_version == "ghimera.planning-graph/4"
+                    else ""
+                )
+                + (
                     " This is an item-selection call, not a coverage conclusion: "
                     "coverage must be uncertain and coverage_findings must be empty. "
                     "Assess only selected original keys/indices with concise "

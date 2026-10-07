@@ -86,6 +86,13 @@ added beside originals and extraction provenance, not substituted for them.
 
 ## Durable output and failure
 
+An explicit bounded failure-continuation policy is available for version-4
+recipes; see [semantic recovery](SEMANTIC_RECOVERY.md). Failed native windows
+remain source-bound planning gaps and never graph facts. Without that policy,
+existing recipes retain their refused-window behavior, including skipping that
+page's follow-ups for semantic validation failures and terminating on model
+unavailability.
+
 `semantic` ledger rows retain the proposal, exact window, resolved mention
 evidence, projected nodes/edges, held edges, omitted tail, effective policy
 digest and model-call telemetry. Graph writes use the existing immutable batch

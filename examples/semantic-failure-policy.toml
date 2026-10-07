@@ -1,0 +1,11 @@
+# Non-active policy fragment. Add this beneath a semantics/4 recipe.
+# No model is started, source is fetched, or permission is granted by this file.
+[semantics.failure]
+schema = "ghimera.semantic-failure-policy/1"
+action = "record_gap"
+allowed_refusals = ["semantic_extraction_failed", "model_unavailable"]
+max_failed_windows_per_run = 2
+
+# Intent research additionally requires an explicit graph-planning/4 context.
+# Existing roles, identity policy, evidence/context limits and gap ceiling
+# remain operator inputs; this example does not silently replace them.

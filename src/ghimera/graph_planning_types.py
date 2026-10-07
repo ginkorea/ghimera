@@ -17,16 +17,21 @@ from ghimera.graph_types import (
     Text,
 )
 from ghimera.identity_planning_types import IdentityPlanningConfig, IdentityPlanningView
+from ghimera.refusals import RefusalCode
 from ghimera.semantic_types import CoverageFinding
 
 GRAPH_PLANNING_REVISION = "ghimera-graph-planning/1"
 GRAPH_GAP_PLANNING_REVISION = "ghimera-graph-planning/2"
 GRAPH_IDENTITY_PLANNING_REVISION = "ghimera-graph-planning/3"
+GRAPH_REFUSAL_PLANNING_REVISION = "ghimera-graph-planning/4"
 
 
 class GraphPlanningConfig(GraphRecord):
     schema_version: Literal[
-        "ghimera.graph-planning/1", "ghimera.graph-planning/2", "ghimera.graph-planning/3"
+        "ghimera.graph-planning/1",
+        "ghimera.graph-planning/2",
+        "ghimera.graph-planning/3",
+        "ghimera.graph-planning/4",
     ] = Field(alias="schema")
     entity_roles: Annotated[tuple[Name, ...], Field(min_length=1)]
     relation_rules: tuple[Name, ...]
@@ -41,11 +46,13 @@ class GraphPlanningConfig(GraphRecord):
     @model_validator(mode="after")
     def unique(self) -> "GraphPlanningConfig":
         if (self.schema_version != "ghimera.graph-planning/1") != (self.max_gaps > 0):
-            raise ValueError("graph-planning/2 and /3 require an explicit positive gap limit")
-        if (self.schema_version == "ghimera.graph-planning/3") != (self.identity is not None):
+            raise ValueError("graph-planning/2, /3 and /4 require an explicit positive gap limit")
+        if self.schema_version != "ghimera.graph-planning/4" and (
+            (self.schema_version == "ghimera.graph-planning/3") != (self.identity is not None)
+        ):
             raise ValueError("graph-planning/3 requires its explicit identity policy")
         if self.selection == "identity_first" and self.identity is None:
-            raise ValueError("identity-first selection requires graph-planning/3")
+            raise ValueError("identity-first selection requires an explicit identity policy")
         if self.identity is not None and not set(
             self.identity.alias_rules + self.identity.exclusive_relations
         ) <= set(self.relation_rules):
@@ -60,8 +67,13 @@ class GraphPlanningConfig(GraphRecord):
     def view_schema(
         self,
     ) -> Literal[
-        "ghimera.planning-graph/1", "ghimera.planning-graph/2", "ghimera.planning-graph/3"
+        "ghimera.planning-graph/1",
+        "ghimera.planning-graph/2",
+        "ghimera.planning-graph/3",
+        "ghimera.planning-graph/4",
     ]:
+        if self.schema_version == "ghimera.graph-planning/4":
+            return "ghimera.planning-graph/4"
         if self.identity is not None:
             return "ghimera.planning-graph/3"
         return "ghimera.planning-graph/2" if self.max_gaps else "ghimera.planning-graph/1"
@@ -105,9 +117,48 @@ class PlanningGap(GraphRecord):
         return self
 
 
+class PlanningRefusalGap(GraphRecord):
+    """Client-observed failed work; deliberately no fabricated model verdict."""
+
+    kind: Literal["semantic_refusal"]
+    id: Annotated[str, Field(pattern=r"^gap:[0-9a-f]{64}$")]
+    source: PlanningSource
+    start: Count
+    end: Positive
+    omitted_chars: Count
+    refusal: RefusalCode
+    phase: Literal["extract", "review", "projection"]
+    observation_sequence: Count
+    refusal_digest: Digest
+    proposal_digest: Digest | None
+    review_sequences: tuple[Count, ...]
+    continued: bool
+
+    @model_validator(mode="after")
+    def bounded(self) -> "PlanningRefusalGap":
+        if (
+            self.end <= self.start
+            or tuple(sorted(set(self.review_sequences))) != self.review_sequences
+        ):
+            raise ValueError("planning refusal requires its native window")
+        if (self.phase == "extract") != (self.proposal_digest is None) or (
+            self.phase == "extract" and self.review_sequences
+        ):
+            raise ValueError("planning refusal cannot fabricate its proposal/review stage")
+        if self.phase == "projection" and self.continued:
+            raise ValueError("planning refusal cannot continue a failed projection")
+        return self
+
+
+ResearchGap = PlanningGap | PlanningRefusalGap
+
+
 class PlanningGraph(GraphRecord):
     schema_version: Literal[
-        "ghimera.planning-graph/1", "ghimera.planning-graph/2", "ghimera.planning-graph/3"
+        "ghimera.planning-graph/1",
+        "ghimera.planning-graph/2",
+        "ghimera.planning-graph/3",
+        "ghimera.planning-graph/4",
     ] = Field(alias="schema")
     policy_digest: Digest
     population_digest: Digest
@@ -117,7 +168,7 @@ class PlanningGraph(GraphRecord):
     omitted_entities: Count
     omitted_relations: Count
     omitted_evidence_chars: Count
-    gaps: tuple[PlanningGap, ...] = Field(default=(), exclude_if=lambda v: not v)
+    gaps: tuple[ResearchGap, ...] = Field(default=(), exclude_if=lambda v: not v)
     omitted_gaps: Count = Field(default=0, exclude_if=lambda v: v == 0)
     identity: IdentityPlanningView | None = Field(default=None, exclude_if=lambda v: v is None)
 
@@ -125,8 +176,14 @@ class PlanningGraph(GraphRecord):
     def closed(self) -> "PlanningGraph":
         if self.schema_version == "ghimera.planning-graph/1" and (self.gaps or self.omitted_gaps):
             raise ValueError("planning gaps require planning-graph/2")
-        if (self.schema_version == "ghimera.planning-graph/3") != (self.identity is not None):
+        if self.schema_version != "ghimera.planning-graph/4" and (
+            (self.schema_version == "ghimera.planning-graph/3") != (self.identity is not None)
+        ):
             raise ValueError("planning-graph/3 requires its retained identity/dispute view")
+        if self.schema_version != "ghimera.planning-graph/4" and any(
+            isinstance(gap, PlanningRefusalGap) for gap in self.gaps
+        ):
+            raise ValueError("failed-window gaps require planning-graph/4")
         entities = {item.node.id for item in self.entities}
         sources = {item.document_id: item for item in self.sources}
         if (
@@ -182,6 +239,8 @@ class PlanningGraph(GraphRecord):
 
     @property
     def prompt_revision(self) -> str:
+        if self.schema_version == "ghimera.planning-graph/4":
+            return GRAPH_REFUSAL_PLANNING_REVISION
         if self.identity is not None:
             return GRAPH_IDENTITY_PLANNING_REVISION
         return (

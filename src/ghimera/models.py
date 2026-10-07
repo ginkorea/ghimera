@@ -26,6 +26,7 @@ from ghimera.semantic_types import (
     FactorizedSemanticReview,
     GroundedSemanticReview,
     ReviewSelection,
+    SemanticRefusal,
     SemanticReview,
     SemanticWindow,
 )
@@ -437,6 +438,7 @@ class LedgerRow(Record):
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     semantic_window: SemanticWindow | None = Field(default=None, exclude_if=lambda v: v is None)
+    semantic_refusal: SemanticRefusal | None = Field(default=None, exclude_if=lambda v: v is None)
     semantic_review: GroundedSemanticReview | FactorizedSemanticReview | SemanticReview | None = (
         Field(default=None, exclude_if=lambda v: v is None)
     )
@@ -471,6 +473,17 @@ class LedgerRow(Record):
                 raise ValueError("semantic ledger metadata must match its window and call")
         elif self.semantic_window is not None:
             raise ValueError("semantic projections belong to their call observation")
+        if self.semantic_refusal is not None and (
+            self.event != "semantic"
+            or self.refusal is None
+            or self.semantic_window is not None
+            or self.url != self.semantic_refusal.source_url
+            or (
+                self.semantic_refusal.proposal is not None
+                and self.model_call != self.semantic_refusal.proposal.model_call
+            )
+        ):
+            raise ValueError("semantic refusal must bind its failed window and original extractor")
         if self.event == "local_input":
             if (self.local_input is None) == (self.refusal is None):
                 raise ValueError("local import needs snapshot evidence or a refusal")

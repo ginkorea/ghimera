@@ -117,6 +117,24 @@ class SemanticVerificationConfig(GraphRecord):
         )
 
 
+class SemanticFailurePolicy(GraphRecord):
+    """Explicit bounded continuation; never an acceptance or retry policy."""
+
+    schema_version: Literal["ghimera.semantic-failure-policy/1"] = Field(alias="schema")
+    action: Literal["record_gap"]
+    allowed_refusals: Annotated[
+        tuple[Literal["semantic_extraction_failed", "model_unavailable"], ...],
+        Field(min_length=1),
+    ]
+    max_failed_windows_per_run: Positive
+
+    @model_validator(mode="after")
+    def distinct(self) -> "SemanticFailurePolicy":
+        if len(set(self.allowed_refusals)) != len(self.allowed_refusals):
+            raise ValueError("semantic failure codes must be distinct")
+        return self
+
+
 class SemanticConfig(GraphRecord):
     schema_version: Literal[
         "ghimera.semantics/1", "ghimera.semantics/2", "ghimera.semantics/3", "ghimera.semantics/4"
@@ -140,6 +158,7 @@ class SemanticConfig(GraphRecord):
     verification: SemanticVerificationConfig | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    failure: SemanticFailurePolicy | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def distinct(self) -> "SemanticConfig":
@@ -167,6 +186,10 @@ class SemanticConfig(GraphRecord):
                 )
         elif self.role_definitions or self.relation_definitions or self.verification is not None:
             raise ValueError("definitions and verification require semantics/4")
+        if self.failure is not None and (
+            not defined or self.failure.max_failed_windows_per_run > self.max_calls_per_run
+        ):
+            raise ValueError("bounded failure continuation requires semantics/4 and its call limit")
         return self
 
     @property
@@ -223,6 +246,39 @@ class SemanticProposal(GraphRecord):
             item.source not in names or item.target not in names for item in self.relations
         ):
             raise ValueError("relations require unique, observed mention keys")
+        return self
+
+
+class SemanticRefusal(GraphRecord):
+    """An attempted native window, not an accepted projection or review verdict."""
+
+    schema_version: Literal["ghimera.semantic-refusal/1"] = Field(alias="schema")
+    policy_digest: Digest
+    graph_document_id: Text
+    source_url: Text
+    document_sha256: Digest
+    text_sha256: Digest
+    start: Count
+    end: Positive
+    omitted_chars: Count
+    phase: Literal["extract", "review", "projection"]
+    proposal: SemanticProposal | None = Field(default=None, exclude_if=lambda v: v is None)
+    review_sequences: tuple[Count, ...]
+    continued: bool
+
+    @model_validator(mode="after")
+    def bounded(self) -> "SemanticRefusal":
+        if (
+            self.end <= self.start
+            or tuple(sorted(set(self.review_sequences))) != self.review_sequences
+        ):
+            raise ValueError("semantic refusal requires a native window and ordered review records")
+        if self.phase != "extract" and self.proposal is None:
+            raise ValueError("review/projection refusal requires its unchanged validated proposal")
+        if self.phase == "extract" and (self.proposal is not None or self.review_sequences):
+            raise ValueError("extraction refusal cannot claim a validated proposal or review")
+        if self.phase == "projection" and self.continued:
+            raise ValueError("projection failures cannot be continued as model gaps")
         return self
 
 

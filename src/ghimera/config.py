@@ -166,6 +166,15 @@ class GhimeraConfig(BaseModel):
                 raise ValueError("graph planning relations require all endpoint roles")
         if self.semantics is not None:
             graph, models, semantic = self.graph, self.models, self.semantics
+            if (
+                semantic.failure is not None
+                and self.research is not None
+                and (
+                    self.research.graph_context is None
+                    or self.research.graph_context.schema_version != "ghimera.graph-planning/4"
+                )
+            ):
+                raise ValueError("failure continuation requires explicit graph-planning/4 gaps")
             if graph is None or not graph.enabled or not graph.capture_semantics or models is None:
                 raise ValueError(
                     "semantic extraction requires enabled semantic graph and bound models"

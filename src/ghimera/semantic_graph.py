@@ -6,8 +6,9 @@ merge, corroboration upgrade, model fallback or graph store lives here.
 """
 
 import asyncio
+import hashlib
 import re
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -22,6 +23,7 @@ from ghimera.model_types import ModelCallEvidence
 from ghimera.models import Document, Harvest, LedgerRow, ModelIdentity
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from ghimera.semantic_batching import assemble_review, review_selections
+from ghimera.semantic_recovery import SemanticRecoveryStopped, failed_window
 from ghimera.semantic_types import (
     BatchedSemanticReview,
     ExclusionReason,
@@ -33,6 +35,7 @@ from ghimera.semantic_types import (
     SemanticConfig,
     SemanticEntity,
     SemanticProposal,
+    SemanticRefusal,
     SemanticReview,
     SemanticWindow,
     restore_review,
@@ -327,18 +330,24 @@ class SemanticStage:
             last = number + 1 == policy.max_windows_per_document or end == len(text)
             budget.reserve_semantic()
             call: ModelCallEvidence | None = None
+            proposal: SemanticProposal | None = None
+            phase: Literal["extract", "review", "projection"] = "extract"
+            first_review_sequence = ledger.next_sequence
             committed = False
             try:
                 async with asyncio.timeout(budget.remaining_seconds):
-                    proposal = await self._extractor.semantic_extract(
+                    extracted = await self._extractor.semantic_extract(
                         intent, document, start, end, policy
                     )
-                call = proposal.model_call
-                proposal = SemanticProposal.model_validate(proposal.model_dump())
-                validate_proposal(self._config, proposal, document, start, end, intent)
+                call = extracted.model_call
+                validated = SemanticProposal.model_validate(extracted.model_dump())
+                validate_proposal(self._config, validated, document, start, end, intent)
+                proposal = validated
+                phase = "review"
                 review = await self._review(
                     intent, document, start, end, policy, proposal, budget, ledger
                 )
+                phase = "projection"
                 observation = project(
                     self._config,
                     graph,
@@ -395,7 +404,29 @@ class SemanticStage:
                 )
                 if isinstance(exc, ModelFailure):
                     call = exc.model_call
-                self._failure(ledger, document.url, code, call)
+                refusal = failed_window(
+                    self._config,
+                    document,
+                    document_id,
+                    start,
+                    end,
+                    len(text) - end if last else 0,
+                    phase,
+                    proposal,
+                    tuple(
+                        row.sequence
+                        for row in ledger.snapshot()
+                        if row.event == "semantic_review" and row.sequence >= first_review_sequence
+                    ),
+                    ledger.snapshot(),
+                    code,
+                    allow_continue=not committed,
+                )
+                self._failure(ledger, document.url, code, call, refusal)
+                if refusal is not None and refusal.continued:
+                    continue
+                if refusal is not None:
+                    raise SemanticRecoveryStopped(code) from None
                 raise GhimeraRefused(code) from None
 
     async def _review(
@@ -518,7 +549,12 @@ class SemanticStage:
             )
 
     def _failure(
-        self, ledger: Ledger, url: str, code: RefusalCode, call: ModelCallEvidence | None
+        self,
+        ledger: Ledger,
+        url: str,
+        code: RefusalCode,
+        call: ModelCallEvidence | None,
+        observation: SemanticRefusal | None = None,
     ) -> None:
         ledger.append(
             LedgerRow(
@@ -528,6 +564,7 @@ class SemanticStage:
                 refusal=code,
                 model=self._extractor.model,
                 model_call=call,
+                semantic_refusal=observation,
                 reason="semantic_window_refused",
             )
         )
@@ -580,7 +617,11 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
         model_id=service.model_id, revision=service.revision, location="self_hosted"
     )
     used_reviews: set[int] = set()
+    continued_failures = 0
+    terminal_refusal: int | None = None
     for row in rows:
+        if terminal_refusal is not None:
+            raise ValueError("semantic work cannot continue beyond a terminal recovery refusal")
         if row.model != identity:
             raise ValueError("semantic calls require the bound self-hosted model")
         if row.model_call is not None and (
@@ -595,6 +636,40 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
         ):
             raise ValueError("semantic window must bind its effective extraction policy")
         window = row.semantic_window
+        failed = row.semantic_refusal
+        if failed is not None:
+            failure_policy = policy.failure
+            if failure_policy is None or failed.policy_digest != policy.content_digest():
+                raise ValueError("semantic refusal requires its original failure policy")
+            if failed.proposal is not None and (
+                failed.proposal.model_call != row.model_call
+                or failed.proposal.model_call is None
+                or failed.proposal.model_call.outcome != "success"
+            ):
+                raise ValueError("failed review retains its unchanged successful extractor call")
+            expected_reviews = tuple(
+                item.sequence
+                for item in reviews
+                if item.sequence < row.sequence and item.sequence not in used_reviews
+            )
+            if failed.review_sequences != expected_reviews:
+                raise ValueError("failed review requires each exact earlier unused review record")
+            for sequence in failed.review_sequences:
+                observed_review = next(item for item in reviews if item.sequence == sequence)
+                if observed_review.url != row.url:
+                    raise ValueError("failed review cannot borrow a different source observation")
+                used_reviews.add(sequence)
+            if failed.continued:
+                continued_failures += 1
+                if (
+                    failed.phase not in {"extract", "review"}
+                    or row.refusal is None
+                    or row.refusal.value not in failure_policy.allowed_refusals
+                    or continued_failures > failure_policy.max_failed_windows_per_run
+                ):
+                    raise ValueError("semantic continuation exceeds its explicit failure allowance")
+            else:
+                terminal_refusal = row.sequence
         if window is not None:
             if (policy.verification is not None) != (window.review is not None):
                 raise ValueError("semantic window cannot omit its required independent check")
@@ -619,6 +694,8 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
                             "reviewed projection requires each exact earlier review observation"
                         )
                     used_reviews.add(matches[0].sequence)
+    if terminal_refusal is not None and any(item.sequence > terminal_refusal for item in reviews):
+        raise ValueError("semantic reviews cannot continue beyond a terminal recovery refusal")
     return rows
 
 
@@ -645,7 +722,7 @@ def validate_harvest(harvest: Harvest) -> None:
     projected: set[str] = set()
     counts: dict[tuple[str, str], int] = {}
     for row in rows:
-        observation = row.semantic_window
+        observation = row.semantic_window or row.semantic_refusal
         if observation is None:
             continue
         key = (observation.source_url, observation.document_sha256)
@@ -659,6 +736,8 @@ def validate_harvest(harvest: Harvest) -> None:
             or node.source_url != document.url
             or node.content_sha256 != document.sha256
             or node.text != document.extracted.text
+            or observation.text_sha256
+            != hashlib.sha256(document.extracted.text.encode()).hexdigest()
             or counts[key] > policy.max_windows_per_document
             or observation.start != (counts[key] - 1) * policy.window_chars
             or observation.end
@@ -673,6 +752,17 @@ def validate_harvest(harvest: Harvest) -> None:
             raise ValueError(
                 "semantic windows must bind their retained native source representation"
             )
+        if row.semantic_refusal is not None:
+            failed = row.semantic_refusal
+            if failed.proposal is not None:
+                validate_proposal(
+                    config, failed.proposal, document, failed.start, failed.end, harvest.goal.text
+                )
+            continue
+        # Narrow after handling refused windows; only accepted windows project.
+        observation = row.semantic_window
+        if observation is None:
+            raise ValueError("semantic attempt requires its accepted or refused native window")
         expected = project(
             config,
             graph,

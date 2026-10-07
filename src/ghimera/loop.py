@@ -39,6 +39,7 @@ from ghimera.references import ReferenceBook
 from ghimera.refusals import GhimeraRefused, ModelFailure, RefusalCode
 from ghimera.scoring import Scorer
 from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, SemanticStage
+from ghimera.semantic_recovery import SemanticRecoveryStopped
 from ghimera.session_state import SessionState
 
 CollectionStop = StopReason | Literal["round_limit"]
@@ -127,6 +128,11 @@ class CollectionSession:
             for row in harvest.ledger
             if row.semantic_window is not None
         }
+        observed.update(
+            row.semantic_refusal.graph_document_id
+            for row in harvest.ledger
+            if row.semantic_refusal is not None and row.semantic_refusal.continued
+        )
         if set(state.semantic_sources) != observed:
             raise ValueError("restored semantic work requires acknowledged observations")
         self._semantic_sources = set(state.semantic_sources)
@@ -406,7 +412,10 @@ class GoalLoop:
                 if code == RefusalCode.BUDGET_EXHAUSTED:
                     stop = "budget_exhausted"
                     break
-                if code in {RefusalCode.ADAPTER_CONTRACT, RefusalCode.MODEL_UNAVAILABLE}:
+                if isinstance(exc, SemanticRecoveryStopped) or code in {
+                    RefusalCode.ADAPTER_CONTRACT,
+                    RefusalCode.MODEL_UNAVAILABLE,
+                }:
                     stop = "failed"
                     break
             if budget.fetches - session._window_start >= self._config.saturation_window:

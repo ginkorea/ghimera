@@ -16,7 +16,9 @@ from ghimera.graph_planning_types import (
     PlanningEntity,
     PlanningGap,
     PlanningGraph,
+    PlanningRefusalGap,
     PlanningSource,
+    ResearchGap,
 )
 from ghimera.graph_types import GraphEdge, GraphRecord
 from ghimera.identity_planning import build_identity_view
@@ -32,7 +34,7 @@ class Population(GraphRecord):
     entities: tuple[PlanningEntity, ...]
     relations: tuple[GraphEdge, ...]
     sources: tuple[PlanningSource, ...]
-    gaps: tuple[PlanningGap, ...] = Field(default=(), exclude_if=lambda v: not v)
+    gaps: tuple[ResearchGap, ...] = Field(default=(), exclude_if=lambda v: not v)
 
 
 def policy_of(config: GhimeraConfig) -> GraphPlanningConfig | None:
@@ -42,7 +44,7 @@ def policy_of(config: GhimeraConfig) -> GraphPlanningConfig | None:
 def evidence_size(
     entities: tuple[PlanningEntity, ...],
     relations: tuple[GraphEdge, ...],
-    gaps: tuple[PlanningGap, ...] = (),
+    gaps: tuple[ResearchGap, ...] = (),
 ) -> int:
     return (
         sum(len(entity.evidence.quote) for entity in entities)
@@ -54,6 +56,7 @@ def evidence_size(
             + len(finding.target.surface)
             + len(finding.evidence.surface)
             for gap in gaps
+            if isinstance(gap, PlanningGap)
             for finding in gap.coverage_findings
         )
     )
@@ -66,8 +69,37 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
     entities: dict[str, PlanningEntity] = {}
     relations: dict[str, GraphEdge] = {}
     sources: dict[str, PlanningSource] = {}
-    gaps: dict[str, PlanningGap] = {}
+    gaps: dict[str, ResearchGap] = {}
     for row in rows:
+        failed = row.semantic_refusal
+        if failed is not None and policy.schema_version == "ghimera.graph-planning/4":
+            if row.refusal is None:
+                raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+            source = PlanningSource(
+                document_id=failed.graph_document_id,
+                source_url=failed.source_url,
+                document_sha256=failed.document_sha256,
+                text_sha256=failed.text_sha256,
+            )
+            sources[source.document_id] = source
+            identity = "gap:" + hashlib.sha256(row.model_dump_json().encode()).hexdigest()
+            gaps[identity] = PlanningRefusalGap(
+                kind="semantic_refusal",
+                id=identity,
+                source=source,
+                start=failed.start,
+                end=failed.end,
+                omitted_chars=failed.omitted_chars,
+                refusal=row.refusal,
+                phase=failed.phase,
+                observation_sequence=row.sequence,
+                refusal_digest=failed.content_digest(),
+                proposal_digest=failed.proposal.content_digest()
+                if failed.proposal is not None
+                else None,
+                review_sequences=failed.review_sequences,
+                continued=failed.continued,
+            )
         window = row.semantic_window
         if window is None:
             continue
@@ -141,12 +173,12 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
     )
     by_edge = {edge.id: edge for edge in population.relations}
 
-    selected_gaps: list[PlanningGap] = []
+    selected_gaps: list[ResearchGap] = []
 
     def view(
         selected: tuple[PlanningEntity, ...],
         edges: tuple[GraphEdge, ...],
-        pending_gaps: tuple[PlanningGap, ...] | None = None,
+        pending_gaps: tuple[ResearchGap, ...] | None = None,
     ) -> PlanningGraph:
         visible_gaps = tuple(selected_gaps) if pending_gaps is None else pending_gaps
         used = {entity.evidence.document_id for entity in selected} | {
@@ -284,7 +316,15 @@ def validate_context(
             len(text) - gap.end,
         }:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
-        if gap.coverage_findings:
+        if isinstance(gap, PlanningRefusalGap):
+            semantics = config.semantics
+            if (
+                semantics is None
+                or semantics.failure is None
+                or (gap.continued and gap.refusal.value not in semantics.failure.allowed_refusals)
+            ):
+                raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+        if isinstance(gap, PlanningGap) and gap.coverage_findings:
             if config.semantics is None or gap.coverage != "incomplete":
                 raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
             citation = native_citation(document, gap.start, gap.end)

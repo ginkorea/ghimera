@@ -6,6 +6,11 @@ from local document seeds are available to the first plan; web findings enter
 the next plan. This is within-run graph-aware discovery, not persistent network
 expansion or resolved global entity identity.
 
+Version 4 additionally reports source-bound refused windows under an explicit
+bounded continuation policy; see [semantic recovery](SEMANTIC_RECOVERY.md).
+It distinguishes failed work from model-assessed incomplete coverage and keeps
+both out of asserted graph facts.
+
 ## Configuration and shared owners
 
 Merge [the non-active example](../examples/graph-planning.toml) into a research
