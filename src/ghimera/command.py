@@ -51,6 +51,7 @@ class CommandExecution(BaseModel):
         "ghimera.command-execution/3",
         "ghimera.command-execution/4",
         "ghimera.command-execution/5",
+        "ghimera.command-execution/6",
     ] = Field(alias="schema")
     operation: Literal["run", "resume", "recover", "observe_model_unknown", "reconcile_model"]
     checkpoint_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
@@ -62,8 +63,8 @@ class CommandExecution(BaseModel):
     snapshot_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
-    recovery_boundary: Literal["source_completion", "query_return"] | None = Field(
-        default=None, exclude_if=lambda v: v is None
+    recovery_boundary: Literal["source_completion", "query_return", "source_acquisition"] | None = (
+        Field(default=None, exclude_if=lambda v: v is None)
     )
     model_decision: ModelReconciliationDecision | None = Field(
         default=None, exclude_if=lambda v: v is None
@@ -74,6 +75,21 @@ class CommandExecution(BaseModel):
 
     @model_validator(mode="after")
     def checkpoint_binding(self) -> "CommandExecution":
+        if (
+            self.recovery_boundary == "source_acquisition"
+            and self.schema_version != "ghimera.command-execution/6"
+        ):
+            raise ValueError("acquisition requires explicit execution /6")
+        if self.schema_version == "ghimera.command-execution/6":
+            if (
+                self.operation != "recover"
+                or self.recovery_boundary != "source_acquisition"
+                or self.snapshot_sha256 is None
+                or self.model_fields_set
+                & {"checkpoint_sha256", "suspend_after_rounds", "model_decision", "model_attempt"}
+            ):
+                raise ValueError("acquisition requires execution /6 and its exact native snapshot")
+            return self
         if (
             self.recovery_boundary == "query_return"
             and self.schema_version != "ghimera.command-execution/5"
@@ -144,6 +160,7 @@ class CommandOptions(BaseModel):
         "ghimera.collector-command/4",
         "ghimera.collector-command/5",
         "ghimera.collector-command/6",
+        "ghimera.collector-command/8",
     ] = Field(alias="schema")
     config_path: Path
     request_path: Path | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -160,6 +177,10 @@ class CommandOptions(BaseModel):
 
     @model_validator(mode="after")
     def paths(self) -> "CommandOptions":
+        acquisition_route = (
+            self.execution is not None
+            and self.execution.schema_version == "ghimera.command-execution/6"
+        )
         query_route = (
             self.execution is not None
             and self.execution.schema_version == "ghimera.command-execution/5"
@@ -173,7 +194,12 @@ class CommandOptions(BaseModel):
             "observe_model_unknown",
             "reconcile_model",
         }
-        if self.schema_version == "ghimera.collector-command/6":
+        if self.schema_version == "ghimera.collector-command/8":
+            if not acquisition_route:
+                raise ValueError("command /8 requires explicit acquisition recovery")
+        elif acquisition_route:
+            raise ValueError("acquisition recovery requires command /8")
+        elif self.schema_version == "ghimera.collector-command/6":
             if not query_route:
                 raise ValueError("command /6 requires explicit query recovery")
         elif query_route:
@@ -377,12 +403,16 @@ async def execute(
     }:
         if config.research_recovery is None or execution.snapshot_sha256 is None:
             raise ValueError("recovery requires the recipe's explicit policy and snapshot digest")
-        request = (
-            SourceWorkStore.completion(
+        if execution.recovery_boundary == "source_acquisition":
+            request = SourceWorkStore.acquisition(
                 config, options.run_id, execution.snapshot_sha256
             ).snapshot.request
-            if execution.recovery_boundary == "source_completion"
-            else (
+        elif execution.recovery_boundary == "source_completion":
+            request = SourceWorkStore.completion(
+                config, options.run_id, execution.snapshot_sha256
+            ).snapshot.request
+        else:
+            request = (
                 ResearchRecoveryStore(config, options.run_id, config.research_recovery)
                 .read(
                     execution.snapshot_sha256,
@@ -392,7 +422,6 @@ async def execute(
                 )
                 .snapshot.request
             )
-        )
     elif execution is not None and execution.operation == "resume":
         if execution.checkpoint_sha256 is None:
             raise ValueError("resume requires its checkpoint digest")

@@ -1,0 +1,18 @@
+# Inert example: original recipe/run/output, not a new request or collection.
+# The recipe explicitly selects research-recovery /5 and serial acquisition.
+schema = "ghimera.collector-command/8"
+config_path = "/replace/private/collector.toml"
+output_directory = "/replace/private/results/original-run"
+run_id = "original-run"
+max_input_bytes = 1000000
+max_result_bytes = 50000000
+# Use the SAME original private bindings/references when the recipe needs them.
+# bindings_path = "/replace/private/credential-bindings.json"
+# references_path = "/replace/private/pinned-reference-vectors.json"
+
+[execution]
+schema = "ghimera.command-execution/6"
+operation = "recover"
+recovery_boundary = "source_acquisition"
+# Replace with the exact SourceWorkStore.acquisition(...).sha256.
+snapshot_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"

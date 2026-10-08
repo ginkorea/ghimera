@@ -56,9 +56,40 @@ Ordinary checkpoints still require full quiescence.
 This slice does **not** recover an unknown fetch/read, journal return without
 the atomic acquired control, interrupted parsing/judging/graph application,
 arbitrary retained-reader or concurrent-source stages. Those original I03
-requirements remain open and must never be silently retried. Existing
-command/service schemas in this core candidate do not yet select
-`source_acquisition`; their fixed single-boundary facade bindings are separate
-integration work, not another recovery mechanism or automatic multi-boundary
-restart policy. Recovery stores are private operational evidence, not accepted
+requirements remain open and must never be silently retried. The native facade
+bindings use explicit command /8 with execution /6 and service-recovery /5 with
+jobs /6, not another recovery mechanism. Recovery stores are private operational evidence, not accepted
 corpus content or a claim of source/model quality.
+
+Use [collector-acquisition-recover.toml](../examples/collector-acquisition-recover.toml)
+with the exact original run, recipe, output reservation and acquired cut hash;
+omit the request file. Both fetched and initial owned-file Pages use the native
+owner, even if the original owned file has since been removed. The service's
+[fixed acquisition policy](../examples/collection-service-acquisition-recovery.toml)
+still accepts network submissions only and cannot select a query cut.
+
+For one original run needing both query and acquired recovery, the original
+recipe must select research-recovery /6 before work starts. Command /6 with
+execution /5 selects a query cut; command /8 with execution /6 selects an
+acquired cut. Both retain the same original recipe/output bytes. Corpus command
+/7 remains the existing wrapper around either explicit nested command.
+
+The [combined service policy](../examples/collection-service-query-acquisition-recovery.toml)
+uses service-recovery /6, exactly two unique permitted boundaries and
+`on_restart="hold"`. Its jobs /7 retain original lifetime adoption attempts.
+The operator manually calls `service.recover(run_id, boundary="query_return")`
+or `boundary="source_acquisition"`; the exact selection and native cut digest
+are persisted before launch. The existing HTTP recover route accepts a strict
+`ghimera.service-recovery-request/1` body containing only `schema` and `boundary`.
+Duplicate/unknown fields, foreign fixed-profile selections, UNKNOWN outcomes and
+missing native proof refuse without a fresh contact or budget reset. Empty
+recover bodies cannot select a combined boundary. Fixed service /4 (query) and
+/5 (acquisition) retain their original fixed-boundary semantics.
+
+The service does not infer a boundary from filenames, automatically select the
+latest cut, or migrate a retained job to broader permissions. Unrelated legacy
+controls, including explicit nulls, are invalid in native recovery /4–6 and new
+service profiles. Disabled keys must be absent before a new recipe is persisted;
+never rewrite an original retained recipe to make recovery pass. These connected
+facade cuts still do not close arbitrary processing/graph/retained-reader or
+concurrent interruption recovery, I03/I12 as a whole, or model quality.

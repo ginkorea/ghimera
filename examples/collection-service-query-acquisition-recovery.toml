@@ -1,0 +1,15 @@
+# Merge into service-command /1 with collection-service /2.
+# The SAME original Collector recipe selects research-recovery /6,
+# query_control="serial_acknowledged" and serial source_acquisition.
+[service.recovery]
+schema = "ghimera.service-recovery/6"
+on_restart = "hold"
+max_adoption_attempts = 2
+permitted_boundaries = ["query_return", "source_acquisition"]
+
+# Manually POST to the existing /runs/{run_id}/recover route, with the owner's
+# existing service bearer. Do not embed the bearer in a recipe or source file.
+# {"schema":"ghimera.service-recovery-request/1","boundary":"query_return"}
+# OR after the acquired transaction has committed and its writer has ended:
+# {"schema":"ghimera.service-recovery-request/1","boundary":"source_acquisition"}
+# The service chooses no boundary on restart and never extends original budgets.

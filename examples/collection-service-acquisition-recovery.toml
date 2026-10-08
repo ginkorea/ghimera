@@ -1,0 +1,9 @@
+# Merge into service-command /1 with [service] collection-service /2.
+# Its original Collector recipe must select research-recovery /5 acquisition.
+# This does not grant access to local files or change existing service limits.
+[service.recovery]
+schema = "ghimera.service-recovery/5"
+boundary = "source_acquisition"
+on_restart = "hold"
+max_adoption_attempts = 1
+# Explicit opt-in alternative: on_restart = "adopt_acknowledged".

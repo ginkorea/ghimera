@@ -14,7 +14,7 @@ from typing import Annotated, Literal, NoReturn
 
 from pydantic import Field, SecretStr, model_validator
 
-from ghimera.collection_service import CollectionService, CollectionServiceConfig
+from ghimera.collection_service import CollectionService, CollectionServiceConfig, ManualBoundary
 from ghimera.delivery_config import DirectoryDeliveryConfig
 from ghimera.delivery_types import DeliveryItem, Positive
 from ghimera.directory_delivery import DirectoryDeliverySink
@@ -57,6 +57,27 @@ class CorpusSearchRequest(Record):
 class ModelObservationRequest(Record):
     schema_version: Literal["ghimera.model-observation-request/1"] = Field(alias="schema")
     snapshot_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+class RecoveryBoundaryRequest(Record):
+    """Explicit manual selector; not a new permission or native acknowledgment."""
+
+    schema_version: Literal["ghimera.service-recovery-request/1"] = Field(alias="schema")
+    boundary: ManualBoundary
+
+    @classmethod
+    def read(cls, body: bytes) -> "RecoveryBoundaryRequest":
+        def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            result: dict[str, object] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate recovery selector field")
+                result[key] = value
+            return result
+
+        # json is the untrusted dynamic boundary; the closed owning record
+        # narrows its result before any service state or native admission.
+        return cls.model_validate(json.loads(body, object_pairs_hook=unique))
 
 
 class CollectionHttpServer:
@@ -219,6 +240,16 @@ class CollectionHttpServer:
                     )
                     return 200, receipt.model_dump_json().encode()
                 if parts[3] == "recover":
+                    if (
+                        self.service.config.recovery is not None
+                        and self.service.config.recovery.schema_version
+                        == "ghimera.service-recovery/6"
+                    ):
+                        selector = RecoveryBoundaryRequest.read(body)
+                        job = await self.service.recover(run_id, boundary=selector.boundary)
+                        return (
+                            202 if job.phase == "recovering" else 409
+                        ), job.model_dump_json().encode()
                     job = await self.service.recover(
                         run_id, attempt=ModelAttemptAuthorization.model_validate_json(body)
                     )
