@@ -195,6 +195,11 @@ class CollectionHttpServer:
                     return 202, self.service.pause(run_id).model_dump_json().encode()
                 if action == "resume":
                     return 202, self.service.resume(run_id).model_dump_json().encode()
+                if action == "recover":
+                    job = await self.service.recover(run_id)
+                    return (
+                        202 if job.phase in {"recovering", "handoff_pending"} else 409
+                    ), job.model_dump_json().encode()
                 if action == "cancel":
                     return 200, (await self.service.cancel(run_id)).model_dump_json().encode()
         if len(parts) == 3 and parts[1] == "deliveries" and self._destination is not None:

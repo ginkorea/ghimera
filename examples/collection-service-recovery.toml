@@ -1,0 +1,43 @@
+# Non-active, owner-private example. No credentials belong in configuration.
+schema = "ghimera.service-command/1"
+host = "127.0.0.1"
+port = 8765
+credential_environment_variable = "GHIMERA_SERVICE_BEARER"
+max_request_bytes = 1000000
+max_header_bytes = 16384
+request_timeout_seconds = 30.0
+max_connections = 16
+
+[service]
+schema = "ghimera.collection-service/2"
+directory = "/replace/private/service"
+max_jobs = 100
+max_active_jobs = 1
+max_manifest_bytes = 65536
+rounds_per_checkpoint = 1
+handoff_retry_seconds = 5.0
+max_handoff_attempts = 8
+shutdown_grace_seconds = 30.0
+
+[service.recovery]
+schema = "ghimera.service-recovery/1"
+# Safe default: retain an interrupted job for explicit authenticated recovery.
+# Set adopt_acknowledged before original job admission for bounded restart adoption.
+on_restart = "hold"
+max_adoption_attempts = 1
+
+[service.command]
+schema = "ghimera.collector-command/2"
+config_path = "/replace/private/collector-with-research-recovery.toml"
+request_path = "/replace/private/unused-request-template.json"
+output_directory = "/replace/private/unused-output-template"
+run_id = "service-template"
+max_input_bytes = 1000000
+max_result_bytes = 50000000
+
+[service.command.execution]
+schema = "ghimera.command-execution/1"
+operation = "run"
+
+# The collector recipe must configure native research_recovery, model_work.results,
+# continuation and journal. Optional corpus/outbox remain their native contracts.
