@@ -104,10 +104,41 @@ refetch; writer exclusion; capacity refusal; recipe/digest/symlink/journal
 mutation; and bounded CLI output. Fixtures test recovery contracts, not real
 language or model accuracy. Full release acceptance is still required.
 
-I03 remains open: persist the *queued* frontier before scheduling, integrate
-explicit uncertain model/graph call reconciliation and reservation accounting,
+I03 remains open: the queued frontier candidate below still needs release
+acceptance; integrate explicit uncertain model/graph reconciliation and reservation accounting,
 cover interrupted local imports/retained-source operations, and reconstruct a
 whole resumed collection/research session without losing queued links or
 inventing exact unknown spend. This web-operation capture is a necessary part
 of that path, not an automatic replay engine or a replacement for I12's
 general unattended collection lifecycle.
+
+## Durable queued frontier candidate
+
+`examples/source-frontier.toml` adds an explicit optional frontier policy to
+the existing source-work recipe. Seeds, scored ordinary links and admitted
+references are committed in that same owner-private database before entering
+the existing priority heap. Each intent retains its exact scope, depth,
+reference hops/origin, first observed enqueue time and priority. An out-of-scope
+candidate is an intent, not permission to fetch it; the ordinary scope check
+still refuses it and its discard is acknowledged. Duplicate intents retain
+their first observation and the highest offered priority. Scope or ancestry
+changes for the same queued URL/depth refuse instead of silently changing the
+source boundary.
+
+The operation's acquisition intent uses the same source-coordinate identity.
+Inspection therefore distinguishes never-started `report.queued` work from
+unresolved acquisition/processing without needing a separate non-atomic queue
+deletion. Completed-round checkpoints must match the acknowledged queue;
+missing, invented or reprioritized entries refuse. The source-work inspector
+adds a bounded queued count only when this optional policy is enabled.
+
+Entry counts and serialized byte bounds are explicit operator inputs. Queue
+payload and active original/result reservations share `max_store_bytes`, in
+addition to the separate queue bound. No physical disk quota is implied.
+Collection concurrency and the native spend ledger keep their existing owners.
+No queued or unresolved item is automatically refetched or replayed by inspection.
+
+This candidate closes capture of queued web intents, not the full I03: interrupted
+whole-session adoption still needs explicit uncertain model/graph reconciliation,
+budget reservations, local/retained operation coverage and durable research
+control state. It is not yet a published release or real model-quality acceptance.

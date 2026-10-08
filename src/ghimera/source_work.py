@@ -21,7 +21,14 @@ from ghimera.journal_types import JournalHeader, digest
 from ghimera.models import Document, Goal, ModelIdentity, Page
 from ghimera.private_database import PrivateDatabase
 from ghimera.refusals import GhimeraRefused
-from ghimera.source_work_types import SourceOperation, SourceRequest, SourceWorkReport
+from ghimera.session_state import SessionState
+from ghimera.source_frontier import SourceFrontier
+from ghimera.source_work_types import (
+    SourceCoordinates,
+    SourceOperation,
+    SourceRequest,
+    SourceWorkReport,
+)
 
 
 class SourceWorkFailure(RuntimeError):
@@ -35,7 +42,7 @@ class SourceWorkToken:
 
 
 def _identity(request: SourceRequest) -> str:
-    return hashlib.sha256(request.model_dump_json().encode()).hexdigest()
+    return request.identity
 
 
 class SourceWorkStore:
@@ -60,6 +67,7 @@ class SourceWorkStore:
         self._writing = False
         self._operations: dict[str, SourceOperation] = {}
         self._reservation = 0
+        self._frontier: SourceFrontier | None = None
         try:
             if create:
                 self._owner.enter_context(self._private.writer())
@@ -76,7 +84,6 @@ class SourceWorkStore:
                     ("ghimera.source-work-store/1", self._header),
                 )
                 self._private.db.commit()
-                self._private.seal_directory()
             else:
                 row = self._private.db.execute(
                     "SELECT schema,header FROM binding WHERE id=1"
@@ -86,6 +93,12 @@ class SourceWorkStore:
                 operations = self._read_operations()
                 self._operations = {item.operation_id: item for item in operations}
                 self._reservation = sum(self._reserved(item) for item in operations)
+            if self._policy.frontier is not None:
+                self._frontier = SourceFrontier(self._private, self._policy.frontier, create=create)
+                if self._reservation + self._frontier.payload_bytes > self._policy.max_store_bytes:
+                    raise ValueError("source work and frontier exceed their shared capacity")
+            if create:
+                self._private.seal_directory()
         except BaseException:
             self.close()
             raise
@@ -221,7 +234,7 @@ class SourceWorkStore:
                     + self._reserved(item)
                     - (self._reserved(previous) if previous is not None else 0)
                 )
-                if size > self._policy.max_store_bytes:
+                if size + self._frontier_bytes > self._policy.max_store_bytes:
                     raise ValueError("source-work byte capacity exhausted")
                 payload = item.model_dump_json().encode()
                 if len(payload) > self._policy.max_operation_bytes:
@@ -248,8 +261,53 @@ class SourceWorkStore:
         except (OSError, ValueError, sqlite3.Error, GhimeraRefused) as exc:
             raise SourceWorkFailure("source work was not durably acknowledged") from exc
 
+    @property
+    def _frontier_bytes(self) -> int:
+        return self._frontier.payload_bytes if self._frontier is not None else 0
+
+    @property
+    def _available_bytes(self) -> int:
+        return self._policy.max_store_bytes - self._reservation - self._frontier_bytes
+
+    def enqueue(self, request: SourceCoordinates, priority: float, ledger_start: int) -> None:
+        if not self._writing:
+            raise SourceWorkFailure("frontier writer is not owned by this session")
+        if self._frontier is None:
+            return
+        if request.identity in self._operations:
+            return
+        try:
+            self._frontier.enqueue(
+                request,
+                priority,
+                ledger_start,
+                available_bytes=self._available_bytes,
+            )
+        except (OSError, ValueError, sqlite3.Error, GhimeraRefused) as exc:
+            raise SourceWorkFailure("frontier intent was not durably acknowledged") from exc
+
+    def discard_queued(self, request: SourceCoordinates, reason: str, ledger_end: int) -> None:
+        if not self._writing:
+            raise SourceWorkFailure("frontier writer is not owned by this session")
+        if self._frontier is None or request.identity in self._operations:
+            return
+        try:
+            self._frontier.discard(
+                request,
+                reason,
+                ledger_end,
+                available_bytes=self._available_bytes,
+            )
+        except (OSError, ValueError, sqlite3.Error, GhimeraRefused) as exc:
+            raise SourceWorkFailure("frontier discard was not durably acknowledged") from exc
+
     def begin(self, request: SourceRequest, ledger_start: int) -> SourceWorkToken:
         request = SourceRequest.model_validate(request.model_dump())
+        if self._frontier is not None:
+            try:
+                self._frontier.require_queued(request)
+            except ValueError as exc:
+                raise SourceWorkFailure("acquisition requires its queued source intent") from exc
         item = SourceOperation(
             schema="ghimera.source-operation/1",
             operation_id=_identity(request),
@@ -342,8 +400,47 @@ class SourceWorkStore:
         if any(item.ledger_end is None for item in self._operations.values()):
             raise SourceWorkFailure("unacknowledged source work cannot be checkpointed or sealed")
 
+    def verify_frontier(self, state: SessionState) -> None:
+        """A completed-round checkpoint may not omit or invent acknowledged queued work."""
+        if self._frontier is None:
+            return
+        report = self.report()
+        queued = {(item.request.url, item.request.depth): item for item in report.queued}
+        observed: dict[str, float] = {}
+        all_keys = {(item.request.url, item.request.depth) for item in report.frontier or ()}
+        for priority, url, depth in state.frontier:
+            if (url, depth) not in all_keys:
+                raise SourceWorkFailure("checkpoint contains unacknowledged frontier work")
+            entry = queued.get((url, depth))
+            if entry is None:
+                # Duplicate heap entries already acquired or discarded are not new work.
+                continue
+            request = entry.request
+            if (
+                request.reference_hops != state.reference_hops.get(url, 0)
+                or request.reference_origin != state.reference_origins.get(url)
+                or request.scope != state.reference_scopes.get(url, request.scope)
+            ):
+                raise SourceWorkFailure("checkpoint changed queued reference ancestry or scope")
+            observed[entry.entry_id] = min(priority, observed.get(entry.entry_id, priority))
+        if observed != {item.entry_id: item.priority for item in report.queued}:
+            raise SourceWorkFailure("checkpoint lost or reprioritized acknowledged queued work")
+
     def _report(self, active: bool) -> SourceWorkReport:
-        operations = self._read_operations()
+        # One read snapshot binds the frontier to its acquisition acknowledgements.
+        # A live writer may otherwise advance between the two SELECTs.
+        self._private.db.execute("BEGIN")
+        try:
+            operations = self._read_operations()
+            frontier = self._frontier.read() if self._frontier is not None else None
+        finally:
+            self._private.db.rollback()
+        if (
+            sum(self._reserved(item) for item in operations)
+            + sum(len(item.model_dump_json().encode()) for item in frontier or ())
+            > self._policy.max_store_bytes
+        ):
+            raise ValueError("source work and frontier exceed their shared capacity")
         if self._config.journal is None:
             raise ValueError("source work requires its native journal")
         journal = read_journal(self._config.journal, self._run_id)
@@ -353,12 +450,19 @@ class SourceWorkStore:
             for item in operations
         ):
             raise ValueError("source work acknowledges observations absent from its journal")
+        if frontier is not None and any(
+            item.ledger_start > len(journal.rows)
+            or (item.ledger_end is not None and item.ledger_end > len(journal.rows))
+            for item in frontier
+        ):
+            raise ValueError("frontier acknowledges observations absent from its journal")
         return SourceWorkReport(
             schema="ghimera.source-work-report/1",
             run_id=self._run_id,
             journal_header_sha256=self._header,
             writer_active=active,
             operations=operations,
+            frontier=frontier,
         )
 
 
@@ -380,9 +484,10 @@ def main() -> int:
     arguments = parser.parse_args()
     try:
         report = read_source_work(GhimeraConfig.from_toml(arguments.config), arguments.run_id)
+        queued = f" queued={len(report.queued)}" if report.frontier is not None else ""
         sys.stdout.write(
             f"run_id={report.run_id} operations={len(report.operations)} "
-            f"writer_active={report.writer_active} unresolved={len(report.unresolved)}\n"
+            f"writer_active={report.writer_active} unresolved={len(report.unresolved)}{queued}\n"
         )
         return 0
     except (OSError, ValueError, sqlite3.Error, SourceWorkFailure, GhimeraRefused):

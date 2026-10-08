@@ -1,5 +1,6 @@
 """Source-work facts: interrupted processing is not an acknowledged result."""
 
+import hashlib
 from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
@@ -11,17 +12,47 @@ Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ObservedTime = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
-class SourceRequest(Record):
+class SourceCoordinates(Record):
+    """Queued coordinates are not permission to fetch an out-of-scope source."""
+
     url: Annotated[str, Field(min_length=1)]
     scope: Scope
     depth: Count
     reference_hops: Count
     reference_origin: str | None
 
+    @property
+    def identity(self) -> str:
+        return hashlib.sha256(self.model_dump_json().encode()).hexdigest()
+
+
+class SourceRequest(SourceCoordinates):
     @model_validator(mode="after")
     def permitted(self) -> "SourceRequest":
         if not self.scope.permits(self.url) or self.depth > self.scope.max_depth:
             raise ValueError("source-work intent must be inside its exact configured scope")
+        return self
+
+
+class SourceFrontierEntry(Record):
+    schema_version: Literal["ghimera.source-frontier-entry/1"] = Field(alias="schema")
+    entry_id: Digest
+    sequence: Count
+    request: SourceCoordinates
+    priority: Annotated[float, Field(ge=-1, le=0, allow_inf_nan=False)]
+    queued_at: ObservedTime
+    ledger_start: Count
+    discard_reason: Annotated[str, Field(min_length=1)] | None = None
+    ledger_end: Count | None = None
+
+    @model_validator(mode="after")
+    def coherent(self) -> "SourceFrontierEntry":
+        if self.entry_id != self.request.identity:
+            raise ValueError("frontier identity must retain its exact source coordinates")
+        if (self.discard_reason is None) != (self.ledger_end is None):
+            raise ValueError("discarded frontier work needs its acknowledged journal boundary")
+        if self.ledger_end is not None and self.ledger_end < self.ledger_start:
+            raise ValueError("frontier journal boundaries cannot move backwards")
         return self
 
 
@@ -75,6 +106,18 @@ class SourceWorkReport(Record):
     journal_header_sha256: Digest
     writer_active: bool
     operations: tuple[SourceOperation, ...]
+    frontier: tuple[SourceFrontierEntry, ...] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+
+    @property
+    def queued(self) -> tuple[SourceFrontierEntry, ...]:
+        started = {item.operation_id for item in self.operations}
+        return tuple(
+            item
+            for item in self.frontier or ()
+            if item.discard_reason is None and item.entry_id not in started
+        )
 
     @property
     def unresolved(self) -> tuple[SourceOperation, ...]:

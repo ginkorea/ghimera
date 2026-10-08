@@ -47,7 +47,7 @@ from ghimera.scoring import Scorer
 from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, SemanticStage
 from ghimera.semantic_recovery import SemanticRecoveryStopped
 from ghimera.session_state import SessionState
-from ghimera.source_work_types import SourceRequest
+from ghimera.source_work_types import SourceCoordinates, SourceRequest
 from ghimera.visual_stage import VisualStage
 from ghimera.visual_types import ImageEvidence
 
@@ -117,6 +117,29 @@ class CollectionSession:
     def reference_origin(self, url: str) -> str | None:
         return self._reference_origins.get(url)
 
+    def source_coordinates(self, scope: Scope, url: str, depth: int) -> SourceCoordinates:
+        return SourceCoordinates(
+            url=url,
+            scope=self._reference_scopes.get(url, scope),
+            depth=depth,
+            reference_hops=self.reference_hops(url),
+            reference_origin=self.reference_origin(url),
+        )
+
+    def queue_source(self, scope: Scope, url: str, depth: int, priority: float) -> None:
+        """Acknowledge scheduler intent before mutating the in-memory frontier."""
+        if self.source_work is not None:
+            self.source_work.enqueue(
+                self.source_coordinates(scope, url, depth), priority, self.ledger.next_sequence
+            )
+        heapq.heappush(self._frontier, (priority, url, depth))
+
+    def discard_source(self, scope: Scope, url: str, depth: int, reason: str) -> None:
+        if self.source_work is not None:
+            self.source_work.discard_queued(
+                self.source_coordinates(scope, url, depth), reason, self.ledger.next_sequence
+            )
+
     def claim_cited_by(self, document: Document) -> bool:
         """Reserve a source-derived query once, before I/O, across research rounds."""
         policy = self.budget.config.references
@@ -133,7 +156,7 @@ class CollectionSession:
             raise ValueError("checkpoint requires a quiescent live collection session")
         if self.source_work is not None:
             self.source_work.assert_quiescent()
-        return SessionState(
+        state = SessionState(
             frontier=tuple(self._frontier),
             visited=tuple(sorted(self._visited)),
             reference_hosts=self.reference_hosts,
@@ -146,6 +169,9 @@ class CollectionSession:
             semantic_sources=tuple(sorted(self._semantic_sources)),
             content_revisions=self._content.revisions if self._content is not None else (),
         )
+        if self.source_work is not None:
+            self.source_work.verify_frontier(state)
+        return state
 
     @contextmanager
     def operation(self) -> Iterator[None]:
@@ -159,6 +185,8 @@ class CollectionSession:
             self._operating = False
 
     def restore_state(self, state: SessionState, harvest: Harvest) -> None:
+        if self.source_work is not None:
+            self.source_work.verify_frontier(state)
         self._documents = {doc.sha256: doc for doc in harvest.documents}
         self._retained_sources = {
             item.origin.document_sha256: item for item in harvest.retained_sources
@@ -480,7 +508,7 @@ class GoalLoop:
         frontier, visited = session._frontier, session._visited
         for seed in seeds:
             if seed not in visited:
-                heapq.heappush(frontier, (-1.0, seed, 0))
+                session.queue_source(scope, seed, 0, -1.0)
         starting_fetches = budget.fetches
         stop: CollectionStop = "frontier_empty"
         while frontier:
@@ -489,6 +517,7 @@ class GoalLoop:
                 break
             _, url, depth = heapq.heappop(frontier)
             if url in visited:
+                session.discard_source(scope, url, depth, "already_visited")
                 continue
             visited.add(url)
             result = await self._collect_source(session, scope, url, depth)
@@ -554,6 +583,8 @@ class GoalLoop:
                 work.refused(
                     token, "source_processing_cancelled", ledger.next_sequence, cancelled=True
                 )
+            elif work is not None:
+                session.discard_source(scope, url, depth, "source_processing_cancelled")
             raise
         except (GhimeraRefused, TimeoutError) as exc:
             if isinstance(exc, ExtractionFailure):
@@ -572,6 +603,8 @@ class GoalLoop:
             )
             if work is not None and token is not None:
                 work.refused(token, code.value, ledger.next_sequence)
+            elif work is not None:
+                session.discard_source(scope, url, depth, code.value)
             if code == RefusalCode.BUDGET_EXHAUSTED:
                 return "budget_exhausted"
             if isinstance(exc, SemanticRecoveryStopped) or code in {
@@ -598,9 +631,10 @@ class GoalLoop:
         budget, frontier, visited = session.budget, session._frontier, session._visited
         for seed in seeds:
             if seed not in visited:
-                heapq.heappush(frontier, (-1.0, seed, 0))
+                session.queue_source(scope, seed, 0, -1.0)
         start = budget.fetches
         sources: dict[asyncio.Task[CollectionStop | None], int] = {}
+        source_requests: dict[asyncio.Task[CollectionStop | None], tuple[str, int]] = {}
         grade: asyncio.Task[CollectionStop | None] | None = None
         graded_documents: int | None = None
         grading_stopped = False
@@ -634,12 +668,14 @@ class GoalLoop:
                         break
                     _, url, depth = heapq.heappop(frontier)
                     if url in visited:
+                        session.discard_source(scope, url, depth, "already_visited")
                         continue
                     # Reserve identity before the task's first await. Discovered
                     # links cannot dispatch a second copy of an in-flight URL.
                     visited.add(url)
                     task = asyncio.create_task(self._collect_source(session, scope, url, depth))
                     sources[task] = admitted
+                    source_requests[task] = (url, depth)
                     admitted += 1
                 if (
                     grade is None
@@ -677,6 +713,7 @@ class GoalLoop:
                             grading_stopped = True
                     else:
                         del sources[task]
+                        del source_requests[task]
                     if result == "failed":
                         decision = result
                     elif result == "goal_satisfied" and decision is None:
@@ -696,7 +733,14 @@ class GoalLoop:
                 if not task.done():
                     task.cancel()
             if pending:
-                outcomes = await asyncio.gather(*pending, return_exceptions=True)
+                tasks_to_drain = tuple(pending)
+                outcomes = await asyncio.gather(*tasks_to_drain, return_exceptions=True)
+                for task, outcome in zip(tasks_to_drain, outcomes, strict=True):
+                    if isinstance(outcome, asyncio.CancelledError) and task in source_requests:
+                        url, depth = source_requests[task]
+                        # A task cancelled before its first instruction never
+                        # entered _collect_source's cancellation handler.
+                        session.discard_source(scope, url, depth, "scheduler_cancelled")
                 for outcome in outcomes:
                     if isinstance(outcome, Exception):
                         # A concurrent storage/contract failure cannot disappear
@@ -766,7 +810,7 @@ class GoalLoop:
     ) -> Document | None:
         """One extraction/scoring/verdict/identity owner for web and local snapshots."""
         goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
-        documents, frontier, visited = session._documents, session._frontier, session._visited
+        documents, visited = session._documents, session._visited
         candidate = None
         extraction_started = self._clock()
         async with session._slots.slot("extraction"), asyncio.timeout(budget.remaining_seconds):
@@ -962,13 +1006,13 @@ class GoalLoop:
             ):
                 if graph is not None and document_node_id is not None:
                     await graph.discovered(link.url, document_node_id)
-                heapq.heappush(frontier, (-link.score, link.url, depth + 1))
                 if parent_hops:
                     session._reference_scopes.setdefault(link.url, active_scope)
                     session._reference_hops.setdefault(link.url, parent_hops)
                     session._reference_origins.setdefault(
                         link.url, session._reference_origins.get(url, url)
                     )
+                session.queue_source(active_scope, link.url, depth + 1, -link.score)
         return candidate
 
     async def _document_verdict(
@@ -1092,7 +1136,7 @@ class GoalLoop:
         session._reference_scopes[link.url] = selected
         session._reference_hops[link.url] = parent_hops + 1
         session._reference_origins[link.url] = link.url
-        heapq.heappush(session._frontier, (-link.score, link.url, 0))
+        session.queue_source(selected, link.url, 0, -link.score)
         if session.graph is not None:
             graph = session.graph
             parent = await graph.document(

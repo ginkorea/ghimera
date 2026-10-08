@@ -1,0 +1,7 @@
+# Append to an explicitly configured source-work/journal collector recipe.
+# These are operator capacities, not defaults or a filesystem quota.
+[source_work.frontier]
+schema = "ghimera.source-frontier/1"
+max_entries = 10000
+max_entry_bytes = 16384
+max_frontier_bytes = 16777216
