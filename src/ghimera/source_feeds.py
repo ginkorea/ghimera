@@ -1,7 +1,6 @@
 """Feed extraction composes with the existing collector; it never owns fetch I/O."""
 
 import os
-from pathlib import Path
 
 from ghimera.config import GhimeraConfig
 from ghimera.models import Extracted, LinkCandidate, Page, Record
@@ -37,7 +36,6 @@ class SourceFeedExtractor:
             max_diagnostic_bytes=policy.max_diagnostic_bytes,
             cleanup_timeout_seconds=policy.cleanup_timeout_seconds,
             environment={
-                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "PYTHONNOUSERSITE": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
             },

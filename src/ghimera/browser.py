@@ -24,6 +24,7 @@ from ghimera.models import Page, Record, Scope
 from ghimera.passive_worker import private_directory, read_bounded
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.response import REDIRECT_STATUSES, redirect_target
+from ghimera.worker_package import admit_package
 
 
 class ResourceFetcher(Protocol):
@@ -123,7 +124,10 @@ class IsolatedBrowserRenderer:
                 self._slots,
             ):
                 self._check_artifacts()
-                return await self._run(request, page, scope, resources)
+                private_directory(self.config.work_directory)
+                inventory = await admit_package()
+                async with inventory.project(self.config.work_directory) as package_root:
+                    return await self._run(request, page, scope, resources, package_root)
         except TimeoutError:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED) from None
         except (OSError, ValueError):
@@ -220,6 +224,7 @@ class IsolatedBrowserRenderer:
         page: Page,
         scope: Scope,
         resources: ResourceFetcher,
+        package_root: Path,
     ) -> RenderResult:
         private_directory(self.config.work_directory)
         scratch = Path(tempfile.mkdtemp(prefix="render-", dir=self.config.work_directory))
@@ -246,6 +251,9 @@ class IsolatedBrowserRenderer:
                     "--bind",
                     str(scratch),
                     str(self.config.sandbox_work_directory),
+                    "--ro-bind",
+                    str(package_root),
+                    str(self.config.sandbox_work_directory / "package"),
                     "--proc",
                     "/proc",
                     "--dev",
@@ -262,7 +270,7 @@ class IsolatedBrowserRenderer:
                     start_new_session=True,
                     limit=self.config.max_protocol_bytes + 1,
                     env={
-                        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+                        "PYTHONPATH": str(self.config.sandbox_work_directory / "package"),
                         "PYTHONNOUSERSITE": "1",
                         "PYTHONDONTWRITEBYTECODE": "1",
                         "TMPDIR": str(self.config.sandbox_work_directory),

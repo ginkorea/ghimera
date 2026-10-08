@@ -5,7 +5,6 @@ import json
 import math
 import os
 import struct
-from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field
@@ -160,7 +159,6 @@ class PdfFigureCropper:
             max_diagnostic_bytes=renderer.max_diagnostic_bytes,
             cleanup_timeout_seconds=renderer.cleanup_timeout_seconds,
             environment={
-                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "PYTHONNOUSERSITE": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "HF_HUB_OFFLINE": "1",

@@ -56,7 +56,6 @@ class TesseractOcr:
             max_diagnostic_bytes=config.max_diagnostic_bytes,
             cleanup_timeout_seconds=config.cleanup_timeout_seconds,
             environment={
-                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "PYTHONNOUSERSITE": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
             },

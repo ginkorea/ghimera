@@ -7,6 +7,17 @@ acceptance; the exact boundary is recorded in `C2_PDF_MODELS_EVIDENCE.md`.
 
 ## Ownership and configuration
 
+Native worker imports expose only a private immutable inventory of this
+installation's Ghimera code and its existing legacy facade, not the caller's
+site-packages directory. The configured interpreter owns all dependencies.
+Inventory count and individual byte sizes bound admission and copying; changed
+files and links refuse. Projection creation, parsing and reaping share the
+existing worker slot/deadline, and exact private code copies are removed after
+the child is reaped, including refusal/cancellation. No serialized configuration
+or dependency pin changes. The same package-only helper serves passive workers
+and the isolated browser's read-only package bind. This fixes installed-package
+dependency collisions; it establishes no OCR recognition quality.
+
 `chimera.document-extraction/1`, parsed once at the main configuration's
 `document_extraction` field, supplies the absolute worker interpreter and
 private scratch path, concurrency/deadlines (including cleanup), byte/text/page

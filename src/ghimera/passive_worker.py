@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.worker_package import admit_package
 
 
 def private_directory(path: Path) -> None:
@@ -53,12 +54,28 @@ class PassiveWorker:
         self._cleanup_timeout = cleanup_timeout_seconds
 
     async def run(self, request: bytes) -> bytes:
+        try:
+            async with asyncio.timeout(self._timeout), self._slots:
+                private_directory(self._directory)
+                inventory = await admit_package()
+                async with inventory.project(self._directory) as package_root:
+                    environment = self._environment | {
+                        "PYTHONPATH": str(package_root),
+                        "PYTHONNOUSERSITE": "1",
+                        "PYTHONDONTWRITEBYTECODE": "1",
+                    }
+                    return await self._run(request, environment)
+        except TimeoutError:
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED) from None
+        except OSError:
+            raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED) from None
+
+    async def _run(self, request: bytes, environment: dict[str, str]) -> bytes:
         process: asyncio.subprocess.Process | None = None
         starting: asyncio.Task[asyncio.subprocess.Process] | None = None
         readers: list[asyncio.Task[bytes]] = []
         try:
-            async with asyncio.timeout(self._timeout), self._slots:
-                private_directory(self._directory)
+            async with asyncio.timeout(self._timeout):
                 starting = asyncio.create_task(
                     asyncio.create_subprocess_exec(
                         str(self._interpreter),
@@ -68,7 +85,7 @@ class PassiveWorker:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                         cwd=self._directory,
-                        env=self._environment,
+                        env=environment,
                     )
                 )
                 # Cancelling asyncio's process creation can lose the child handle

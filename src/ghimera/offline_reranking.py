@@ -2,7 +2,6 @@
 
 import json
 import os
-from pathlib import Path
 
 from ghimera.passive_worker import PassiveWorker
 from ghimera.refusals import GhimeraRefused, RefusalCode
@@ -29,7 +28,6 @@ class OfflineCrossEncoder:
             max_diagnostic_bytes=self.config.max_diagnostic_bytes,
             cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
             environment={
-                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "PYTHONNOUSERSITE": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "HF_HOME": str(self.config.work_directory / "hf-offline"),

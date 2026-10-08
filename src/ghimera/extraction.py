@@ -84,7 +84,6 @@ class HtmlExtractor:
             max_diagnostic_bytes=self.config.max_diagnostic_bytes,
             cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
             environment={
-                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "PYTHONNOUSERSITE": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "CRAWL4_AI_BASE_DIRECTORY": str(self.config.work_directory),

@@ -147,7 +147,6 @@ class SearxHtmlSearch(GroundedSearch):
             max_diagnostic_bytes=self._config.max_diagnostic_bytes,
             cleanup_timeout_seconds=self._config.cleanup_timeout_seconds,
             environment={
-                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "PYTHONNOUSERSITE": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
             },

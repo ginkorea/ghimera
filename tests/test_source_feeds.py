@@ -208,7 +208,9 @@ def test_worker_and_serialized_document_reject_invented_native_values(tmp_path):
         )
 
 
-def test_feed_worker_deadline_reaps_child_and_releases_capacity(tmp_path, monkeypatch):
+def test_feed_deadline_includes_precontact_package_admission_and_releases_capacity(
+    tmp_path, monkeypatch
+):
     children = []
     create = asyncio.create_subprocess_exec
 
@@ -227,7 +229,11 @@ def test_feed_worker_deadline_reaps_child_and_releases_capacity(tmp_path, monkey
             with pytest.raises(GhimeraRefused) as exc:
                 await client.extract(page)
             assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED
-        assert len(children) == 2 and all(child.returncode is not None for child in children)
+        # The same deadline now owns package admission before child contact.
+        # A 1ms allowance may expire without starting any child at all.
+        assert len(children) <= 2 and all(child.returncode is not None for child in children)
+        assert not client._worker._slots.locked()
+        assert not list(cfg.source_feeds.work_directory.iterdir())
 
     asyncio.run(exercise())
 

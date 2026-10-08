@@ -2,7 +2,6 @@
 
 import hashlib
 import os
-from pathlib import Path
 
 from ghimera.page_transcription_config import PageRenderConfig
 from ghimera.page_transcription_types import RenderedPdf, TranscriptionRecord
@@ -30,7 +29,6 @@ class PdfPageRenderer:
             max_diagnostic_bytes=config.max_diagnostic_bytes,
             cleanup_timeout_seconds=config.cleanup_timeout_seconds,
             environment={
-                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "PYTHONNOUSERSITE": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "HF_HUB_OFFLINE": "1",

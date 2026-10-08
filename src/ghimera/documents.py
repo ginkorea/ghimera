@@ -2,7 +2,6 @@
 
 import hashlib
 import os
-from pathlib import Path
 
 from ghimera.config import GhimeraConfig
 from ghimera.document_config import DocumentExtractionConfig
@@ -64,7 +63,6 @@ class DocumentExtractor:
             max_diagnostic_bytes=self.config.max_diagnostic_bytes,
             cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
             environment={
-                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
                 "PYTHONNOUSERSITE": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "HF_HOME": str(self.config.work_directory / "hf-offline"),
