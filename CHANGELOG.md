@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.9 — 2026-10-08
+
+- Explicit typed model-work policy requires the run's exactly bound durable
+  journal. Phase reservation and native intent precede model contact; one
+  invocation cannot be reused. Linked acknowledgements distinguish observed
+  returns and known rejected completions from unanswered failures or cancellation.
+- Native journal inspection exposes original uncertain sequences. Budget restore
+  holds them rather than inventing zero spend or automatically retrying. Existing
+  disabled-policy config and ledger identities remain unchanged.
+- Frozen source gate: 1,239 passed with no failures/skips under Python 3.11.16.
+  Installed-package and artifact/publication acceptance are tracked separately in
+  [release acceptance](docs/RELEASE_049.md).
+- Whole-session adoption, acknowledged-result replay, explicit reconciliation,
+  graph uncertainty and embedding-call intents remain open. This increment does
+  not establish served-model accuracy or validated Chinese scanned-PDF OCR.
+
 ## 0.4.8 — 2026-10-08
 
 - Typed private cross-run source refresh retains immutable native HTTP versions

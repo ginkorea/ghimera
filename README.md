@@ -4,7 +4,14 @@ Intent-driven web research: discover sources, collect native-language documents,
 follow evidence gaps, and return a source-cited answer—or an explicit partial
 result when the evidence or budget is insufficient.
 
-**v0.4.8 adds private cross-run source refresh and cancellation-safe graph acknowledgements.**
+**v0.4.9 adds durable model-call intent and explicit uncertainty holds.**
+
+With explicit model-work and journal configuration, the collector persists its
+reservation before invoking a model and links observed returns to the original
+request. A crash or unanswered call remains visible and cannot silently reset
+its allowance or retry. This is a recovery prerequisite, not whole-session
+adoption or acknowledged-answer replay. See [model work](docs/MODEL_WORK.md)
+and [release acceptance](docs/RELEASE_049.md).
 
 Explicit source-refresh configuration preserves native HTTP originals across
 runs and reuses them only after a guarded conditional request. Changed request
@@ -213,13 +220,13 @@ Use a dedicated virtual environment:
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'ghimera==0.4.8'
+python -m pip install 'ghimera==0.4.9'
 ```
 
 Install the adapters you intend to configure:
 
 ```bash
-python -m pip install 'ghimera[html,documents,browser]==0.4.8'
+python -m pip install 'ghimera[html,documents,browser]==0.4.9'
 ```
 
 The base package contains the typed core, HTTP/Tor transport, research/search
