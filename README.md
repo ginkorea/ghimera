@@ -4,7 +4,15 @@ Intent-driven web research: discover sources, collect native-language documents,
 follow evidence gaps, and return a source-cited answer—or an explicit partial
 result when the evidence or budget is insufficient.
 
-**v0.4.7 adds durable source operations and atomic pending-document batches.**
+**v0.4.8 adds private cross-run source refresh and cancellation-safe graph acknowledgements.**
+
+Explicit source-refresh configuration preserves native HTTP originals across
+runs and reuses them only after a guarded conditional request. Changed request
+authority, refusals and cache prohibitions cannot resurrect an earlier original.
+Real 304 observations retain version provenance without inventing transferred
+bytes. Repeated cancellation waits for an owned graph write and its exact
+acknowledgement before changing the live view. See
+[source refresh](docs/SOURCE_REFRESH.md) and [release acceptance](docs/RELEASE_048.md).
 
 Explicit source-work configuration retains fresh web/local originals before
 processing and records historical corpus admission separately. Its optional
@@ -12,15 +20,16 @@ frontier preserves queued web intents and complete owned-file batches before
 first I/O. Quiescent continuation verifies pending order and pins without
 rereading handled files. Uncertain model/graph calls and whole-research crash
 adoption remain explicit requirements. See [source work](docs/SOURCE_WORK.md)
-and [release acceptance](docs/RELEASE_047.md).
+and the earlier [release acceptance](docs/RELEASE_047.md).
 
 Configured RSS, Atom, sitemap/index and JSON Feed seeds use the same scoped
 HTTP/Tor fetch, robots, pacing and native evidence path as ordinary documents.
 Their outgoing links remain separately admitted frontier work. A configured
 corpus reader can supply retained originals to current assessment, citations
 and graph expansion without refetching them or treating old judgments as new.
-Stored source age remains explicitly unknown; cross-run feed refresh and
-freshness/reranking are still separate requirements. See
+Retained source age is not inferred. Cross-run conditional refresh uses its own
+explicit configuration; semantic freshness and reranking remain separate
+requirements. See
 [source feeds](docs/SOURCE_FEEDS.md), [retained evidence](docs/RETAINED_EVIDENCE.md)
 and [release acceptance](docs/RELEASE_046.md).
 
@@ -204,13 +213,13 @@ Use a dedicated virtual environment:
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'ghimera==0.4.7'
+python -m pip install 'ghimera==0.4.8'
 ```
 
 Install the adapters you intend to configure:
 
 ```bash
-python -m pip install 'ghimera[html,documents,browser]==0.4.7'
+python -m pip install 'ghimera[html,documents,browser]==0.4.8'
 ```
 
 The base package contains the typed core, HTTP/Tor transport, research/search

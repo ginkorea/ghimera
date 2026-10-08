@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.8 — 2026-10-08
+
+- Typed private cross-run source refresh retains immutable native HTTP versions
+  and exact request/credential partitions. Guarded conditional 304 reuse carries
+  original-version provenance through documents, journals, corpus and graph.
+  Expiry, cache prohibitions and refusals do not silently serve stale content or
+  delete historical originals. Capacity and bootstrap are explicit configuration.
+- Repeated cancellation drains native graph writes and preserves exact
+  acknowledgement/application before propagating cancellation. The regression
+  includes a committed native file and a fresh replay, not just a mocked sink.
+- Exact frozen-source gate: 1,217 passed, no failures/skips under Python 3.11.16.
+  Installed-build and publication evidence are separate requirements in
+  [release acceptance](docs/RELEASE_048.md).
+- Whole-session recovery, uncertain model requests and representative
+  multilingual quality remain open. The Chinese OCR control is still unvalidated;
+  a configurable vision-transcription interface is not a Qwen quality result.
+
 ## 0.4.7 — 2026-10-08
 
 - Explicit private source-operation storage captures fresh web/owned-file

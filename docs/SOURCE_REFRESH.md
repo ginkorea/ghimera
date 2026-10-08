@@ -1,6 +1,7 @@
 # Cross-run conditional source refresh
 
-Development candidate, not yet a published release. The optional typed
+Version 0.4.8 source increment; package/publication acceptance is recorded
+separately in [RELEASE_048.md](RELEASE_048.md). The optional typed
 `ghimera.source-refresh/1` section in `examples/source-refresh.toml` connects
 the ordinary Collector to a private source-version store. No second crawler,
 polling loop, scheduler or implicit source scope is introduced.
