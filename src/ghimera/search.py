@@ -10,6 +10,8 @@ from ghimera.budget import RunBudget
 from ghimera.discovery_config import SearchCallLimits
 from ghimera.ledger import Ledger
 from ghimera.models import LedgerRow
+from ghimera.query_work import QueryWork
+from ghimera.query_work_types import QueryCorpusBinding, QueryReservation
 from ghimera.refusals import FetchCancelled, FetchFailure, GhimeraRefused, RefusalCode
 from ghimera.research_reranking_types import RerankDecision
 from ghimera.research_types import SearchQuery, SearchRequest, SearchResponse
@@ -28,6 +30,13 @@ class GroundedSearch(ABC):
     @property
     def identity(self) -> tuple[str, str]:
         return self.name, self.revision
+
+    def query_binding(self, query: SearchQuery) -> QueryCorpusBinding | None:
+        return None
+
+    def admit_query(self, reservation: QueryReservation, response: SearchResponse | None) -> None:
+        if reservation.corpus is not None:
+            raise ValueError("corpus query recovery requires its actual owning provider")
 
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
@@ -48,13 +57,13 @@ class GroundedSearch(ABC):
         *,
         limits: SearchCallLimits | None = None,
         rerank_decision: RerankDecision | None = None,
+        query_work: QueryWork | None = None,
     ) -> SearchResponse:
         policy = budget.config.research
         if policy is None or len(query.text) > policy.max_query_chars or not query.text.strip():
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
         if limits is not None:
             limits = SearchCallLimits.model_validate(limits.model_dump())
-        budget.reserve_search()
         maximum = (
             budget.config.http.max_response_bytes
             if budget.config.http is not None
@@ -62,9 +71,51 @@ class GroundedSearch(ABC):
         )
         if limits is not None:
             maximum = min(maximum, limits.max_bytes)
+        if query_work is not None:
+            request = (
+                SearchRequest.model_validate_json(query_work.original.request_json)
+                if query_work.original is not None
+                else SearchRequest(
+                    query=query,
+                    limit=min(policy.results_per_query, limits.limit)
+                    if limits
+                    else policy.results_per_query,
+                    max_bytes=min(maximum, budget.remaining_bytes),
+                    timeout_seconds=min(
+                        budget.config.request_timeout_seconds,
+                        budget.remaining_seconds,
+                        limits.timeout_seconds if limits else budget.remaining_seconds,
+                    ),
+                )
+            )
+            if request.query != query:
+                raise ValueError("query recovery changed its original native search input")
+            reservation = query_work.prepare(
+                "discovery",
+                request.model_dump_json().encode(),
+                self.identity,
+                corpus=self.query_binding(query),
+                rerank_operation_key=rerank_decision.operation_key
+                if rerank_decision is not None
+                else None,
+            )
+            if query_work.resuming:
+                response = (
+                    SearchResponse.model_validate_json(query_work.ack.result_json)
+                    if query_work.ack is not None and query_work.ack.result_json is not None
+                    else None
+                )
+                self.admit_query(reservation, response)
+                query_work.commit()
+                if response is not None:
+                    return response
+            maximum = request.max_bytes
+        if query_work is None or not query_work.resuming:
+            budget.reserve_search()
         allowance = budget.reserve_bytes(maximum)
         try:
-            budget.reserve_fetch()
+            if query_work is None or not query_work.resuming:
+                budget.reserve_fetch()
         except BaseException:
             budget.release_bytes(allowance)
             raise
@@ -73,22 +124,38 @@ class GroundedSearch(ABC):
         code = None
         size = 0
         cancelled = False
-        request = SearchRequest(
-            query=query,
-            limit=min(policy.results_per_query, limits.limit)
-            if limits
-            else policy.results_per_query,
-            max_bytes=allowance,
-            timeout_seconds=min(
-                budget.config.request_timeout_seconds,
-                budget.remaining_seconds,
-                limits.timeout_seconds if limits else budget.remaining_seconds,
-            ),
+        request = (
+            SearchRequest(
+                query=query,
+                limit=min(policy.results_per_query, limits.limit)
+                if limits
+                else policy.results_per_query,
+                max_bytes=allowance,
+                timeout_seconds=min(
+                    budget.config.request_timeout_seconds,
+                    budget.remaining_seconds,
+                    limits.timeout_seconds if limits else budget.remaining_seconds,
+                ),
+            )
+            if query_work is None
+            else request
         )
+        if query_work is not None:
+            query_work.commit()
+            rerank_decision = query_work.decision(rerank_decision)
         try:
             try:
-                async with asyncio.timeout(request.timeout_seconds):
-                    response = await self.request_for_run(request, budget, ledger, rerank_decision)
+                # The original request bytes stay pinned across restart. Its
+                # timeout is not a renewed wall allowance after charged downtime.
+                budget.check_time()
+                async with asyncio.timeout(min(request.timeout_seconds, budget.remaining_seconds)):
+                    response = (
+                        await self.request_for_run(request, budget, ledger, rerank_decision)
+                        if query_work is None
+                        else await self.request_for_run(
+                            request, budget, ledger, rerank_decision, query_work
+                        )
+                    )
                 size = min(len(response.raw), allowance)
                 if len(response.raw) > allowance or len(response.hits) > request.limit:
                     code = RefusalCode.ADAPTER_CONTRACT
@@ -122,6 +189,14 @@ class GroundedSearch(ABC):
                         if response is not None
                         else "search_contract"
                     ),
+                    query_ack=query_work.acknowledgement(
+                        response.model_dump_json().encode()
+                        if response is not None and code is None
+                        else None,
+                        "returned" if code is None else "cancelled" if cancelled else "refused",
+                    )
+                    if query_work is not None
+                    else None,
                 )
             )
             budget.record_bytes(size)
@@ -141,6 +216,7 @@ class GroundedSearch(ABC):
         budget: RunBudget,
         ledger: Ledger,
         rerank_decision: RerankDecision | None,
+        query_work: QueryWork | None = None,
     ) -> SearchResponse:
         """Default providers retain their port; the final template owns all accounting."""
         return await self.request(request)

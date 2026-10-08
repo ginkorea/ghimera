@@ -1,0 +1,14 @@
+# Inert fragment for a fresh original run, not migration of retained receipts.
+# Requires native journal, retained model_work, serial research/discovery and
+# source_work with its bounded durable frontier. Merge into an explicit recipe.
+[research_recovery]
+schema = "ghimera.research-recovery/6"
+max_snapshot_bytes = 4000000
+clock_policy = "include_downtime"
+tail_policy = "acknowledged_model_return"
+query_control = "serial_acknowledged"
+
+[research_recovery.source_acquisition]
+schema = "ghimera.source-acquisition-recovery/1"
+execution = "serial"
+max_capsule_bytes = 4000000

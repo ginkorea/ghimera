@@ -6,11 +6,15 @@ import os
 import re
 import stat
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ghimera.research_types import ResearchResult
+
+if TYPE_CHECKING:
+    from ghimera.config import GhimeraConfig
+    from ghimera.research_types import ResearchRequest
 
 
 class ArchiveReceipt(BaseModel):
@@ -238,6 +242,100 @@ class ResearchResultArchive:
             return receipt, result
         finally:
             archive.close()
+
+    @classmethod
+    async def acknowledged_research(
+        cls,
+        path: Path,
+        *,
+        reservation: ArchiveReservation,
+        config: "GhimeraConfig",
+        request: "ResearchRequest",
+        max_bytes: int,
+        max_reservation_bytes: int,
+    ) -> tuple[ArchiveReceipt, ResearchResult]:
+        """Prove completed original research for archive-only native handoff, without contact."""
+        from ghimera.config import GhimeraConfig
+        from ghimera.graph import DirectoryGraphSink, ResearchGraph
+        from ghimera.journal import read_journal
+        from ghimera.journal_types import JournalDocument, JournalRetainedDocument
+        from ghimera.model_reconciliation import unreconciled_model_sequences
+        from ghimera.query_work import validate_query_rows
+        from ghimera.research_types import ResearchRequest
+        from ghimera.source_work import read_source_work
+
+        config = GhimeraConfig.model_validate(config.model_dump())
+        request = ResearchRequest.model_validate(request.model_dump())
+        reservation = ArchiveReservation.model_validate(reservation.model_dump())
+        if (
+            reservation.config_sha256
+            != hashlib.sha256(config.model_dump_json().encode()).hexdigest()
+            or reservation.request_sha256 != request.content_digest()
+            or config.journal is None
+        ):
+            raise ValueError("completed research lost its original request/recipe reservation")
+        receipt, result = cls.acknowledged(
+            path,
+            reservation=reservation,
+            max_bytes=max_bytes,
+            max_reservation_bytes=max_reservation_bytes,
+        )
+        if (
+            result.harvest.receipt.effective_config != config
+            or result.harvest.goal.text != request.intent
+            or result.harvest.goal.seeds != request.seeds
+        ):
+            raise ValueError("archive changed its original request or recipe")
+        report = read_journal(config.journal, reservation.run_id)
+        documents = tuple(
+            JournalDocument(
+                url=doc.url,
+                sha256=doc.sha256,
+                native_text_sha256=hashlib.sha256(doc.extracted.text.encode()).hexdigest(),
+                raw_bytes=len(doc.raw),
+            )
+            for doc in result.harvest.documents
+        )
+        retained = tuple(
+            JournalRetainedDocument(
+                url=item.document.url,
+                sha256=item.document.sha256,
+                native_text_sha256=hashlib.sha256(
+                    item.document.extracted.text.encode()
+                ).hexdigest(),
+                raw_bytes=len(item.document.raw),
+                origin=item.origin,
+            )
+            for item in result.harvest.retained_sources
+        )
+        if (
+            report.state != "complete"
+            or report.incomplete_tail
+            or unreconciled_model_sequences(report.rows)
+            or validate_query_rows(config, report.rows)
+            or report.header.config != config
+            or report.header.goal != result.harvest.goal
+            or report.rows != result.harvest.ledger
+            or report.summary is None
+            or report.summary.receipt != result.harvest.receipt
+            or report.summary.documents != documents
+            or report.summary.retained_documents != retained
+        ):
+            raise ValueError("archive lost its original journal/source proof")
+        if config.source_work is not None:
+            sources = read_source_work(config, reservation.run_id)
+            if sources.writer_active or any(item.ledger_end is None for item in sources.operations):
+                raise ValueError("archive has unfinished source work")
+        if config.graph is not None and config.graph.enabled:
+            if result.harvest.graph is None:
+                raise ValueError("archive lost its native graph")
+            graph = ResearchGraph(
+                config.graph,
+                reservation.run_id,
+                DirectoryGraphSink(config.graph, reservation.run_id),
+            )
+            await graph.start(result.harvest.goal.text, expected=result.harvest.graph)
+        return receipt, result
 
     @classmethod
     def read(cls, path: Path, *, max_bytes: int) -> ResearchResult:

@@ -5,7 +5,7 @@ import hashlib
 import heapq
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import TYPE_CHECKING, Literal
 
 from ghimera.budget import RunBudget
@@ -46,6 +46,7 @@ from ghimera.models import (
     Scope,
     StopReason,
     Verdict,
+    count_fetch_attempts,
 )
 from ghimera.pdf_transcription import PdfTranscriptionStage
 from ghimera.ports import Extractor, Judge, ScoredDocumentJudge
@@ -56,13 +57,21 @@ from ghimera.scoring import Scorer
 from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, SemanticStage
 from ghimera.semantic_recovery import SemanticRecoveryStopped
 from ghimera.session_state import SessionState
+from ghimera.source_acquisition import SourceAcquisitionRead, SourceAcquisitionSnapshot
+from ghimera.source_acquisition_types import SourceAcquisitionReturn
 from ghimera.source_completion import SourceCompletionRuntime
-from ghimera.source_work_types import LocalSourceRequest, SourceCoordinates, SourceRequest
+from ghimera.source_work_types import (
+    LocalSourceRequest,
+    SourceCoordinates,
+    SourceOperation,
+    SourceRequest,
+)
 from ghimera.visual_evidence import graph_visual_readings, project_visuals
 from ghimera.visual_stage import VisualStage
 from ghimera.visual_types import ImageEvidence
 
 CollectionStop = StopReason | Literal["round_limit"]
+AcquisitionControl = Callable[[SourceOperation, int, int], SourceAcquisitionSnapshot]
 
 if TYPE_CHECKING:
     from ghimera.research_recovery_types import ResearchRecoveryRead
@@ -171,6 +180,21 @@ class CollectionSession:
             raise ValueError("checkpoint requires a quiescent live collection session")
         if self.source_work is not None:
             self.source_work.assert_quiescent()
+        return self._state()
+
+    def acquisition_state(self, operation_id: str) -> SessionState:
+        if (
+            self._closed
+            or self._operating
+            or not self.budget.quiescent
+            or self.source_work is None
+            or not self._driving
+        ):
+            raise ValueError("acquisition capture needs ended I/O under its native serial driver")
+        self.source_work.acquisition_state(operation_id)
+        return self._state()
+
+    def _state(self) -> SessionState:
         state = SessionState(
             frontier=tuple(self._frontier),
             visited=tuple(sorted(self._visited)),
@@ -380,6 +404,7 @@ class GoalLoop:
         search_calls: int,
         downtime_seconds: float,
         model_return: "ResearchRecoveryRead | None" = None,
+        acquisition: SourceAcquisitionRead | None = None,
     ) -> CollectionSession:
         """Resume the exact durable run; no new identity, calls or budget reset."""
         from ghimera.journal import DirectoryLedgerSink
@@ -390,6 +415,13 @@ class GoalLoop:
         ):
             raise ValueError("continuation requires the original collection recipe and judge")
         rows, receipt = harvest.ledger, harvest.receipt
+        if acquisition is not None and (
+            model_return is not None
+            or acquisition.snapshot.progress.harvest != harvest
+            or acquisition.snapshot.session != state
+            or acquisition.snapshot.run_id != run_id
+        ):
+            raise ValueError("acquisition must preserve its exact original session snapshot")
         if model_return is not None:
             from ghimera.journal_types import canonical
             from ghimera.research_recovery_store import ResearchRecoveryStore
@@ -414,9 +446,17 @@ class GoalLoop:
                 update={
                     "judge_calls": validate_model_rows(
                         self._config.model_work, self._config.judge_budget, rows
-                    )
+                    ),
+                    "fetches": count_fetch_attempts(self._config, rows),
+                    "bytes_read": sum(row.bytes_read for row in rows),
                 }
             )
+            if model_return.snapshot.phase == "query":
+                search_calls += sum(
+                    row.query_reservation is not None
+                    and row.query_reservation.channel == "discovery"
+                    for row in rows[len(harvest.ledger) :]
+                )
         sink = DirectoryLedgerSink(
             self._config, run_id, harvest.goal, self._judge.model, resume_rows=rows
         )
@@ -426,7 +466,9 @@ class GoalLoop:
             if self._config.source_work is not None:
                 from ghimera.source_work import SourceWorkStore
 
-                source_work = SourceWorkStore.resume(self._config, run_id, len(rows))
+                source_work = SourceWorkStore.resume(
+                    self._config, run_id, len(rows), acquisition=acquisition
+                )
             budget = RunBudget(self._config, self._clock)
             admission = (
                 (model_return.decision or model_return.attempt)
@@ -479,8 +521,33 @@ class GoalLoop:
             session.close()
 
     async def import_local(
-        self, session: CollectionSession, seeds: tuple[LocalDocumentSeed, ...]
+        self,
+        session: CollectionSession,
+        seeds: tuple[LocalDocumentSeed, ...],
+        *,
+        acquisition_control: AcquisitionControl | None = None,
+        acquisition: SourceAcquisitionRead | None = None,
     ) -> None:
+        acquired = None
+        if acquisition is not None:
+            if (
+                session.source_work is None
+                or acquisition_control is None
+                or acquisition.snapshot.runtime != self.source_runtime()
+                or acquisition.snapshot.phase != "initial_local"
+            ):
+                raise ValueError(
+                    "owned acquisition requires exact native runtime/control admission"
+                )
+            acquired = session.source_work.admitted_token(acquisition)
+        if acquisition_control is not None:
+            with session.serial_driver():
+                await self._import_local(
+                    session, seeds, acquisition_control=acquisition_control, acquired=acquired
+                )
+                with session.operation():
+                    await self._resolve_identity(session)
+            return
         with session.operation():
             await self._import_local(session, seeds)
             await self._resolve_identity(session)
@@ -498,8 +565,81 @@ class GoalLoop:
         with session.operation():
             await self._resolve_identity(session)
 
+    def _commit_acquisition(
+        self,
+        session: CollectionSession,
+        token: "SourceWorkToken",
+        page: Page,
+        control: AcquisitionControl,
+        starting_fetches: int,
+    ) -> None:
+        work = session.source_work
+        if (
+            work is None
+            or session._operating
+            or not session.budget.quiescent
+            or not session._driving
+        ):
+            raise ValueError(
+                "acquisition commit requires ended native read under its serial driver"
+            )
+        original = work.pending_operation(token)
+        sequence = session.ledger.next_sequence
+        session.ledger.append(
+            LedgerRow(
+                sequence=sequence,
+                event="source_acquisition",
+                url=page.url,
+                reason="native_original_returned_before_processing",
+                source_acquisition=SourceAcquisitionReturn(
+                    schema="ghimera.source-acquisition-return/1",
+                    operation_id=token.operation_id,
+                    request_sha256=hashlib.sha256(
+                        original.request.model_dump_json().encode()
+                    ).hexdigest(),
+                    page_sha256=hashlib.sha256(page.model_dump_json().encode()).hexdigest(),
+                    source_sha256=hashlib.sha256(page.body).hexdigest(),
+                    source_url=page.url,
+                    kind="owned_file"
+                    if isinstance(original.request, LocalSourceRequest)
+                    else "fetched",
+                ),
+            )
+        )
+        work.acquired(token, page, control=lambda item: control(item, sequence, starting_fetches))
+
+    async def process_acquisition(
+        self, session: CollectionSession, admission: SourceAcquisitionRead
+    ) -> CollectionStop | None:
+        work = session.source_work
+        if (
+            work is None
+            or not isinstance(admission.operation.request, SourceRequest)
+            or admission.snapshot.runtime != self.source_runtime()
+        ):
+            raise ValueError("fetched acquisition requires its original native source request")
+        token = work.admitted_token(admission)
+        request = admission.operation.request
+        with session.operation():
+            result = await self._collect_source(
+                session, request.scope, request.url, request.depth, acquired=token
+            )
+        if (
+            result is None
+            and session.budget.fetches - session._window_start >= self._config.saturation_window
+        ):
+            if session._window_new < self._config.saturation_min_new:
+                return "saturated"
+            session._window_start, session._window_new = session.budget.fetches, 0
+        return result
+
     async def _import_local(
-        self, session: CollectionSession, seeds: tuple[LocalDocumentSeed, ...]
+        self,
+        session: CollectionSession,
+        seeds: tuple[LocalDocumentSeed, ...],
+        *,
+        acquisition_control: AcquisitionControl | None = None,
+        acquired: "SourceWorkToken | None" = None,
     ) -> None:
         """Admit local snapshots before planning, through the shared document pipeline."""
         if session._closed or session.budget.config != self._config:
@@ -528,45 +668,77 @@ class GoalLoop:
                 if request not in session._local_frontier:
                     session._local_frontier.append(request)
             requests = tuple(session._local_frontier)
+        if acquired is not None:
+            if session.source_work is None:
+                raise ValueError("acquired local source lost native store")
+            original = session.source_work.acquired_operation(acquired)
+            if not isinstance(original.request, LocalSourceRequest):
+                raise ValueError("local cursor cannot adopt fetched source")
+            requests = (original.request,) + requests
         for request in requests:
             seed = request.seed
             work, token = session.source_work, None
             try:
-                if work is not None:
-                    if not policy.permits(seed.path):
-                        raise GhimeraRefused(RefusalCode.LOCAL_INPUT_FAILED)
-                    token = work.begin_local(request, ledger.next_sequence)
-                    if queued:
-                        session._local_frontier.remove(request)
-                snapshot, code, cancelled = await self._read_local(session, loader, seed)
-                page = None
-                if snapshot is not None:
-                    # Existing parser byte envelope, never a fictitious HTTP fetch.
-                    page = Page(
-                        url=seed.source_id,
-                        final_url=seed.source_id,
-                        status=200,
-                        content_type=seed.content_type,
-                        body=snapshot.raw,
-                        local_input=snapshot.evidence,
-                    )
-                    if work is not None and token is not None:
-                        # A drained cancelled read still acquired these original bytes.
-                        work.acquired(token, page)
+                page, code, cancelled = None, None, False
+                if acquired is not None and work is not None:
+                    token = acquired
+                    page = work.acquired_operation(token).page
+                    acquired = None
+                else:
+                    with session.operation() if acquisition_control is not None else nullcontext():
+                        if work is not None:
+                            if not policy.permits(seed.path):
+                                raise GhimeraRefused(RefusalCode.LOCAL_INPUT_FAILED)
+                            token = work.begin_local(request, ledger.next_sequence)
+                            if queued:
+                                session._local_frontier.remove(request)
+                        snapshot, code, cancelled = await self._read_local(session, loader, seed)
+                        if snapshot is not None:
+                            page = Page(
+                                url=seed.source_id,
+                                final_url=seed.source_id,
+                                status=200,
+                                content_type=seed.content_type,
+                                body=snapshot.raw,
+                                local_input=snapshot.evidence,
+                            )
+                            if (
+                                work is not None
+                                and token is not None
+                                and acquisition_control is None
+                            ):
+                                work.acquired(token, page)
+                    if (
+                        page is not None
+                        and token is not None
+                        and work is not None
+                        and acquisition_control is not None
+                    ):
+                        if cancelled or code is not None:
+                            # Drained bytes remain known, but the already observed
+                            # cancellation/refusal must not become a resumable cut.
+                            work.acquired(token, page)
+                        else:
+                            self._commit_acquisition(
+                                session, token, page, acquisition_control, budget.fetches
+                            )
                 if cancelled:
                     raise asyncio.CancelledError
                 if code is not None:
                     raise GhimeraRefused(code)
                 if page is None:
                     raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-                if work is not None and token is not None:
-                    work.processing(token)
-                if session.graph is not None:
-                    await session.graph.discovered(seed.source_id, session.graph.intent_id)
-                budget.check_time()
-                result = await self._process_page(session, page, seed.source_id, 0, None, 0)
-                if work is not None and token is not None:
-                    work.processed(token, result, ledger.next_sequence)
+                with session.operation() if acquisition_control is not None else nullcontext():
+                    if work is not None and token is not None:
+                        work.processing(token)
+                    if acquisition_control is not None:
+                        budget.check_time()
+                    if session.graph is not None:
+                        await session.graph.discovered(seed.source_id, session.graph.intent_id)
+                    budget.check_time()
+                    result = await self._process_page(session, page, seed.source_id, 0, None, 0)
+                    if work is not None and token is not None:
+                        work.processed(token, result, ledger.next_sequence)
             except asyncio.CancelledError:
                 ledger.append(
                     LedgerRow(
@@ -677,12 +849,14 @@ class GoalLoop:
         allow_grade: bool = True,
         source_control: "Callable[[int, str], SourceCompletionSnapshot] | None" = None,
         starting_fetches: int | None = None,
+        acquisition_control: AcquisitionControl | None = None,
     ) -> CollectionStop:
-        if source_control is not None:
+        if source_control is not None or acquisition_control is not None:
             policy = self._config.research_recovery
             if (
                 policy is None
-                or policy.source_completion is None
+                or (source_control is not None and policy.source_completion is None)
+                or (acquisition_control is not None and policy.source_acquisition is None)
                 or self._config.execution is not None
                 or session.source_work is None
                 or allow_grade
@@ -699,6 +873,7 @@ class GoalLoop:
                     fetch_limit=fetch_limit,
                     source_control=source_control,
                     starting_fetches=starting_fetches,
+                    acquisition_control=acquisition_control,
                 )
         if session._driving:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -722,8 +897,9 @@ class GoalLoop:
         seeds: tuple[str, ...],
         *,
         fetch_limit: int,
-        source_control: "Callable[[int, str], SourceCompletionSnapshot]",
+        source_control: "Callable[[int, str], SourceCompletionSnapshot] | None",
         starting_fetches: int | None,
+        acquisition_control: AcquisitionControl | None = None,
     ) -> CollectionStop:
         if session._closed or session.budget.config != self._config or fetch_limit <= 0:
             raise ValueError("source completion requires its original positive collection quantum")
@@ -745,6 +921,7 @@ class GoalLoop:
                 continue
             session._visited.add(url)
             completed: list[tuple[SourceWorkToken, Document | None]] = []
+            acquired_pages: list[tuple[SourceWorkToken, Page]] = []
 
             def captured(
                 token: "SourceWorkToken",
@@ -760,7 +937,15 @@ class GoalLoop:
                     url,
                     depth,
                     completion=captured,
+                    acquisition=acquired_pages if acquisition_control is not None else None,
                 )
+            if acquired_pages and acquisition_control is not None:
+                token, page = acquired_pages[0]
+                self._commit_acquisition(session, token, page, acquisition_control, start)
+                with session.operation():
+                    result = await self._collect_source(
+                        session, scope, url, depth, completion=captured, acquired=token
+                    )
             stop: CollectionStop | None = result
             if (
                 stop is None
@@ -774,13 +959,15 @@ class GoalLoop:
                 token, document = completed[0]
 
                 def snapshot(result: CollectionStop | None = stop) -> "SourceCompletionSnapshot":
+                    if source_control is None:
+                        raise ValueError("completion control is not selected")
                     return source_control(start, result or "frontier_empty")
 
                 work.processed(
                     token,
                     document,
                     session.ledger.next_sequence,
-                    control=snapshot,
+                    control=snapshot if source_control is not None else None,
                 )
             if stop is not None:
                 return stop
@@ -839,29 +1026,50 @@ class GoalLoop:
         depth: int,
         *,
         completion: "Callable[[SourceWorkToken, Document | None], None] | None" = None,
+        acquisition: "list[tuple[SourceWorkToken, Page]] | None" = None,
+        acquired: "SourceWorkToken | None" = None,
     ) -> CollectionStop | None:
         budget, ledger = session.budget, session.ledger
-        work, token = session.source_work, None
+        work, token = session.source_work, acquired
         try:
             budget.check_time()
             active_scope = session._reference_scopes.get(url, scope)
             parent_hops = session._reference_hops.get(url, 0)
             if depth > active_scope.max_depth or not active_scope.permits(url):
                 raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
-            if work is not None:
-                token = work.begin(
-                    SourceRequest(
-                        url=url,
-                        scope=active_scope,
-                        depth=depth,
-                        reference_hops=parent_hops,
-                        reference_origin=session.reference_origin(url),
-                    ),
-                    ledger.next_sequence,
-                )
-            page = await self._fetcher.fetch(url, active_scope, budget, ledger)
-            if work is not None and token is not None:
-                work.acquired(token, page)
+            if acquired is not None:
+                if work is None:
+                    raise ValueError("acquired source lost original store")
+                original = work.acquired_operation(acquired)
+                if (
+                    not isinstance(original.request, SourceRequest)
+                    or original.request.model_dump()
+                    != session.source_coordinates(scope, url, depth).model_dump()
+                ):
+                    raise ValueError("acquired source changed original coordinates")
+                token, page = acquired, original.page
+                if page is None:
+                    raise ValueError("acquired source lost original bytes")
+            else:
+                if work is not None:
+                    token = work.begin(
+                        SourceRequest(
+                            url=url,
+                            scope=active_scope,
+                            depth=depth,
+                            reference_hops=parent_hops,
+                            reference_origin=session.reference_origin(url),
+                        ),
+                        ledger.next_sequence,
+                    )
+                page = await self._fetcher.fetch(url, active_scope, budget, ledger)
+                if acquisition is not None:
+                    if token is None:
+                        raise ValueError("acquisition cursor requires native source work")
+                    acquisition.append((token, page))
+                    return None
+                if work is not None and token is not None:
+                    work.acquired(token, page)
             if parent_hops:
                 session._reference_hops[page.final_url] = parent_hops
                 session._reference_origins[page.final_url] = session._reference_origins[url]
@@ -1773,6 +1981,10 @@ class GoalLoop:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if session.source_work is not None:
             session.source_work.assert_quiescent()
+        from ghimera.query_work import validate_query_rows
+
+        if validate_query_rows(self._config, session.ledger.snapshot()):
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         session._closed = True
         ledger = session.ledger
         ledger.append(LedgerRow(sequence=ledger.next_sequence, event="stop", reason=stop))

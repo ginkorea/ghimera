@@ -41,7 +41,7 @@ from ghimera.pdf_transcription import PdfTranscriptionStage
 from ghimera.ports import Extractor
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research import ResearchLoop
-from ghimera.research_recovery_types import ResearchRecoveryModels
+from ghimera.research_recovery_types import ResearchRecoveryModels, ResearchRecoveryRead
 from ghimera.research_types import ResearchRequest, ResearchResult
 from ghimera.search import GroundedSearch
 from ghimera.searxng import SearxHtmlSearch, SearxSearch
@@ -136,7 +136,17 @@ class Collector:
             raise ValueError("single Ahmia credentials require an Ahmia search binding")
         if discovery_credentials is not None and config.discovery is None:
             raise ValueError("discovery credentials require a discovery recipe")
-        if corpus is not None and not isinstance(config.search, CorpusSearchConfig):
+        if (
+            corpus is not None
+            and not isinstance(config.search, CorpusSearchConfig)
+            and (
+                config.research.retained_evidence is None
+                or retained_reader is None
+                or retained_reader.policy != config.research.retained_evidence.reader
+                or corpus.config.identity != retained_reader.policy.corpus_config_sha256
+                or corpus.identity != retained_reader.policy.corpus_id
+            )
+        ):
             raise ValueError(
                 "a single discovery corpus requires its explicit corpus-search binding"
             )
@@ -413,13 +423,18 @@ class Collector:
         run_id: str,
         *,
         snapshot_sha256: str,
-        boundary: Literal["model_return", "source_completion"] = "model_return",
+        boundary: Literal[
+            "model_return", "source_completion", "query_return", "source_acquisition"
+        ] = "model_return",
         attempt: "ModelAttemptAuthorization | None" = None,
     ) -> ResearchResult:
         """Adopt an exact native model boundary; never retry an unknown contact."""
         return await self._research.recover(
             run_id, snapshot_sha256=snapshot_sha256, boundary=boundary, attempt=attempt
         )
+
+    def validate_query_recovery(self, recovery: ResearchRecoveryRead) -> None:
+        self._research.validate_query_recovery(recovery)
 
     def validate_request(self, request: str | ResearchRequest) -> ResearchRequest:
         """Validate an intent before a caller reserves output or launches work."""

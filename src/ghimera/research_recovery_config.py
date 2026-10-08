@@ -14,10 +14,22 @@ class SourceCompletionPolicy(BaseModel):
     max_capsule_bytes: Annotated[int, Field(strict=True, gt=0)]
 
 
+class SourceAcquisitionPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.source-acquisition-recovery/1"] = Field(alias="schema")
+    execution: Literal["serial"]
+    max_capsule_bytes: Annotated[int, Field(strict=True, gt=0)]
+
+
 class ResearchRecoveryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal[
-        "ghimera.research-recovery/1", "ghimera.research-recovery/2", "ghimera.research-recovery/3"
+        "ghimera.research-recovery/1",
+        "ghimera.research-recovery/2",
+        "ghimera.research-recovery/3",
+        "ghimera.research-recovery/4",
+        "ghimera.research-recovery/5",
+        "ghimera.research-recovery/6",
     ] = Field(alias="schema")
     max_snapshot_bytes: Annotated[int, Field(strict=True, gt=0)]
     clock_policy: Literal["include_downtime"]
@@ -28,9 +40,47 @@ class ResearchRecoveryConfig(BaseModel):
     model_reconciliation: ModelReconciliationPolicy | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    query_control: Literal["serial_acknowledged"] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    source_acquisition: SourceAcquisitionPolicy | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def versioned(self) -> "ResearchRecoveryConfig":
+        if self.schema_version in {
+            "ghimera.research-recovery/4",
+            "ghimera.research-recovery/5",
+            "ghimera.research-recovery/6",
+        }:
+            if self.model_fields_set & {"source_completion", "model_reconciliation"}:
+                raise ValueError("recovery /4-/6 cannot carry unrelated legacy controls")
+            query = self.schema_version in {
+                "ghimera.research-recovery/4",
+                "ghimera.research-recovery/6",
+            }
+            acquisition = self.schema_version in {
+                "ghimera.research-recovery/5",
+                "ghimera.research-recovery/6",
+            }
+            if query:
+                if self.query_control != "serial_acknowledged":
+                    raise ValueError("query recovery requires explicit serial acknowledged control")
+            elif "query_control" in self.model_fields_set:
+                raise ValueError("source-only recovery cannot carry query control")
+            if acquisition:
+                if self.source_acquisition is None:
+                    raise ValueError(
+                        "acquired-source recovery requires explicit acquisition policy"
+                    )
+            elif "source_acquisition" in self.model_fields_set:
+                raise ValueError("query-only recovery cannot carry source acquisition")
+            return self
+        if "source_acquisition" in self.model_fields_set:
+            raise ValueError("source acquisition requires explicit recovery /5 or /6")
+        if self.query_control is not None:
+            raise ValueError("query control requires explicit recovery /4 or /6")
         if self.schema_version == "ghimera.research-recovery/3":
             if self.model_reconciliation is None:
                 raise ValueError("recovery /3 requires explicit model reconciliation policy")

@@ -49,6 +49,7 @@ from ghimera.model_types import IdentityCallEvidence, ModelCallEvidence
 from ghimera.model_work_types import ModelAcknowledgement, ModelIntent, ModelReplay
 from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.page_transcription_types import PageTranscriptionCall, ReviewedPageTranscription
+from ghimera.query_work_types import QueryAcknowledgement, QueryReservation
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_reranking_types import RerankReservation
@@ -62,6 +63,7 @@ from ghimera.semantic_types import (
     SemanticReview,
     SemanticWindow,
 )
+from ghimera.source_acquisition_types import SourceAcquisitionReturn
 from ghimera.source_feed_types import SourceFeedEvidence
 from ghimera.source_refresh_types import SourceRefreshUse
 from ghimera.source_session_types import SourceSessionUse
@@ -746,7 +748,15 @@ class LedgerRow(Record):
             "model_replay",
         ]
         | SkipJsonSchema[
-            Literal["model_attempt", "judgment_context", "scoring_source", "semantic_selection"]
+            Literal[
+                "model_attempt",
+                "judgment_context",
+                "scoring_source",
+                "semantic_selection",
+                "query_intent",
+                "query_ack",
+                "source_acquisition",
+            ]
         ]
     )
     url: str | None = None
@@ -765,6 +775,12 @@ class LedgerRow(Record):
     model_call: IdentityCallEvidence | ModelCallEvidence | None = None
     model_intent: ModelIntent | None = Field(default=None, exclude_if=lambda v: v is None)
     model_ack: ModelAcknowledgement | None = Field(default=None, exclude_if=lambda v: v is None)
+    query_reservation: SkipJsonSchema[QueryReservation | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    query_ack: SkipJsonSchema[QueryAcknowledgement | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     model_replay: ModelReplay | None = Field(default=None, exclude_if=lambda v: v is None)
     rerank_reservation: SkipJsonSchema[RerankReservation | None] = Field(
         default=None, exclude_if=lambda v: v is None
@@ -792,6 +808,9 @@ class LedgerRow(Record):
     encoding_call: EncodingCall | None = None
     similarity: SimilarityEvidence | None = None
     scoring_source: SkipJsonSchema[ScoringSourceBinding | None] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    source_acquisition: SkipJsonSchema[SourceAcquisitionReturn | None] = Field(
         default=None, exclude_if=lambda value: value is None
     )
     scoring_reading: SkipJsonSchema[ScoringNativeReading | None] = Field(
@@ -852,6 +871,20 @@ class LedgerRow(Record):
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if (
+            (self.event == "query_intent") != (self.query_reservation is not None)
+            or (self.query_ack is not None and self.event not in {"query_ack", "fetch"})
+            or (self.event == "query_ack" and self.query_ack is None)
+        ):
+            raise ValueError("query reservation/ACK belong only to their native events")
+        if self.query_reservation is not None and (
+            self.bytes_read
+            or self.model is not None
+            or self.refusal is not None
+            or self.model_intent is not None
+            or self.model_ack is not None
+        ):
+            raise ValueError("query intent cannot fabricate returned source/model evidence")
         if (self.rerank_reservation is not None) != (
             self.model_intent is not None and self.model_intent.phase == "reranking"
         ):
@@ -892,6 +925,18 @@ class LedgerRow(Record):
             raise ValueError("a known refused completion must retain its invoked model identity")
         if self.scoring_source is not None and self.event != "scoring":
             raise ValueError("scoring source attribution belongs to its native scoring operation")
+        if (self.event == "source_acquisition") != (self.source_acquisition is not None) or (
+            self.source_acquisition is not None
+            and (
+                self.url != self.source_acquisition.source_url
+                or self.refusal is not None
+                or self.model_call is not None
+                or self.bytes_read != 0
+            )
+        ):
+            raise ValueError(
+                "acquisition return is exact local provenance, not extra spend or a model ACK"
+            )
         if (self.event == "scoring_source") != (self.scoring_reading is not None) or (
             self.scoring_reading is not None and self.url != self.scoring_reading.source_url
         ):
@@ -1163,7 +1208,13 @@ def count_fetch_attempts(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> 
     return sum(
         row.browser_action is not None
         or row.event == "challenge"
-        or (row.event == "fetch" and not (guarded and row.route == "human_browser_dom"))
+        or row.query_reservation is not None
+        and row.query_reservation.fetch_reservation is not None
+        or (
+            row.event == "fetch"
+            and row.query_ack is None
+            and not (guarded and row.route == "human_browser_dom")
+        )
         for row in rows
     )
 
@@ -1339,6 +1390,9 @@ class Harvest(Record):
         from ghimera.judgment_validation import validate_judgment_rows
 
         validate_judgment_rows(self.receipt.effective_config, self.goal.text, self.ledger)
+        from ghimera.source_acquisition_types import validate_acquisition_rows
+
+        validate_acquisition_rows(self.receipt.effective_config, self.ledger)
         if self.receipt.fetches != count_fetch_attempts(self.receipt.effective_config, self.ledger):
             raise ValueError("fetch count does not match ledger")
         challenge_rows = tuple(row for row in self.ledger if row.event == "challenge")
@@ -1356,6 +1410,9 @@ class Harvest(Record):
         native_model_policy = self.receipt.effective_config.model_work
         validate_model_decisions(self.receipt.effective_config, self.ledger)
         validate_rerank_rows(self.receipt.effective_config, self.ledger)
+        from ghimera.query_work import validate_query_rows
+
+        validate_query_rows(self.receipt.effective_config, self.ledger)
         observed_judge_calls = (
             validate_model_rows(
                 native_model_policy, self.receipt.effective_config.judge_budget, self.ledger

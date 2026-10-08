@@ -1,0 +1,14 @@
+# Inert recipe fragment: merge into an exact native research/journal/model-work/
+# source-work/frontier recipe. Choose all capacities for the operator's run.
+# No execution policy selects existing serial execution; concurrent adoption
+# is not supported by this acquisition-only policy.
+[research_recovery]
+schema = "ghimera.research-recovery/5"
+max_snapshot_bytes = 4000000
+clock_policy = "include_downtime"
+tail_policy = "acknowledged_model_return"
+
+[research_recovery.source_acquisition]
+schema = "ghimera.source-acquisition-recovery/1"
+execution = "serial"
+max_capsule_bytes = 8000000

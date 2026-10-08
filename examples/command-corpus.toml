@@ -1,0 +1,25 @@
+# Inert composition; referenced files and identity are deliberately placeholders.
+schema = "ghimera.collector-command/7"
+action = "execute"
+
+[command]
+schema = "ghimera.collector-command/2"
+config_path = "/absolute/operator/collector.toml"
+request_path = "/absolute/operator/request.json"
+output_directory = "/absolute/operator/new-result"
+run_id = "operator-run"
+max_input_bytes = 1000000
+max_result_bytes = 10000000
+
+[command.execution]
+schema = "ghimera.command-execution/1"
+operation = "run"
+
+[corpus]
+schema = "ghimera.command-corpus/1"
+config_path = "/absolute/operator/corpus.toml"
+config_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+mode = "open"
+append_result = false
+corpus_id = "00000000000000000000000000000000"
+generation = 0
