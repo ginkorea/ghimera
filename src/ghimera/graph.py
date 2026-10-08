@@ -11,7 +11,7 @@ import re
 import tempfile
 from datetime import date
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import ValidationError
 
@@ -27,6 +27,7 @@ from ghimera.graph_types import (
     GraphRetainedOrigin,
     GraphSnapshot,
     GraphVisualReading,
+    IdentityDecision,
     VisualProjectionConfig,
 )
 from ghimera.human_browser_types import BrowserSourceEvidence
@@ -35,6 +36,10 @@ from ghimera.identity_resolution import (
     resolve_identities,
     validate_decisions,
 )
+
+if TYPE_CHECKING:
+    from ghimera.config import GhimeraConfig
+    from ghimera.ledger import Ledger
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.owned_worker import off_loop
 from ghimera.refusals import GhimeraRefused, RefusalCode
@@ -163,16 +168,31 @@ class DirectoryGraphSink:
 
 
 class ResearchGraph:
-    def __init__(self, config: GraphConfig, run_id: str, sink: GraphSink) -> None:
+    def __init__(
+        self,
+        config: GraphConfig,
+        run_id: str,
+        sink: GraphSink,
+        *,
+        identity_config: "GhimeraConfig | None" = None,
+        identity_ledger: "Ledger | None" = None,
+    ) -> None:
         if not config.enabled or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", run_id):
             raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
         self._config = config
         self._run_id = run_id
         self._sink = sink
+        self._identity_config, self._identity_ledger = identity_config, identity_ledger
+        if (identity_config is None) != (identity_ledger is None) or (
+            identity_config is not None and identity_config.graph != config
+        ):
+            raise ValueError(
+                "identity decision admission must bind the owning graph recipe and journal"
+            )
         self._nodes: dict[str, GraphNode] = {}
         self._edges: dict[str, GraphEdge] = {}
         self._checkpoint: GraphCheckpoint | None = None
-        self._identity_decisions: dict[str, GraphIdentityDecision] = {}
+        self._identity_decisions: dict[str, IdentityDecision] = {}
         self._lock = asyncio.Lock()
         self._started = False
         self._intent_id: str | None = None
@@ -354,6 +374,24 @@ class ResearchGraph:
                     raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
             edges[edge.id] = edge
         try:
+            if any(decision.basis == "model_reviewed" for decision in batch.identity_decisions):
+                from ghimera.identity_automation import validate_model_decision_bindings
+
+                if (
+                    self._identity_config is None
+                    or self._identity_ledger is None
+                    or not self._identity_ledger.has_replay_binding(self._identity_config)
+                ):
+                    raise ValueError(
+                        "model identity decisions require their native durable journal"
+                    )
+                validate_model_decision_bindings(
+                    self._identity_config,
+                    self._identity_ledger.snapshot(),
+                    batch.identity_decisions,
+                    self._checkpoint,
+                    tuple(self._identity_decisions.values()),
+                )
             validate_decisions(
                 self._config.identity_resolution,
                 tuple(nodes.values()),
@@ -377,7 +415,7 @@ class ResearchGraph:
         *,
         nodes: tuple[GraphNode, ...] = (),
         edges: tuple[GraphEdge, ...] = (),
-        identity_decisions: tuple[GraphIdentityDecision, ...] = (),
+        identity_decisions: tuple[IdentityDecision, ...] = (),
     ) -> None:
         async with self._lock:
             if not self._started:

@@ -1,0 +1,30 @@
+# Fragment only; integrate into an OWNED complete recipe and validate it.
+# Requires graph.identity_resolution, semantics, journal, models and model_work
+# with retained results. No endpoint, model, sink or resource choice is supplied.
+[identity_automation]
+schema = "ghimera.identity-automation/1"
+roles = ["entity"]
+proposer_role = "analyst"
+reviewer_role = "reviewer"
+require_distinct_models = true
+max_mentions = 8
+max_pairs_per_pass = 12
+max_proposal_calls = 3
+max_review_calls = 3
+max_context_chars = 64000
+max_evidence_chars = 12000
+max_reason_chars = 1000
+# Example date, not a default: select the mission's actual date in BOTH places.
+as_of = 2026-10-08
+
+[research.graph_context]
+schema = "ghimera.graph-planning/5"
+entity_roles = ["entity"]
+relation_rules = []
+selection = "newest_first"
+max_entities = 16
+max_relations = 12
+max_gaps = 4
+max_evidence_chars = 20000
+max_context_chars = 120000
+resolved_as_of = 2026-10-08

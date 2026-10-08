@@ -276,6 +276,12 @@ class Collector:
             semantic_reviewer=models.service(config.semantics.verification.model_role)
             if config.semantics is not None and config.semantics.verification is not None
             else None,
+            identity_proposer=models.service(config.identity_automation.proposer_role)
+            if config.identity_automation is not None
+            else None,
+            identity_reviewer=models.service(config.identity_automation.reviewer_role)
+            if config.identity_automation is not None
+            else None,
         )
         research = ResearchLoop(
             config=config,

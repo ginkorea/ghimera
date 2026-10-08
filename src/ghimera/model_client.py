@@ -27,6 +27,14 @@ from ghimera.config import GhimeraConfig
 from ghimera.evidence_context import ContextSelector, EvidenceContext, native_citation
 from ghimera.graph_planning import planning_call_revision, validate_context
 from ghimera.graph_planning_types import PlanningGraph
+from ghimera.identity_automation_types import (
+    IDENTITY_PROPOSAL_REVISION,
+    IDENTITY_REVIEW_REVISION,
+    IdentityProposal,
+    IdentityProposalRequest,
+    IdentityReview,
+    IdentityReviewRequest,
+)
 from ghimera.model_citations import ModelCitationResolver, citation_id, referenced_output
 from ghimera.model_config import ModelServiceConfig
 from ghimera.model_http import (
@@ -85,6 +93,8 @@ T = TypeVar(
     SemanticReview,
     IndependentSemanticReview,
     NativeQuotedSemanticReview,
+    IdentityProposal,
+    IdentityReview,
 )
 PROMPT_REVISION = "chimera-research-prompts/1"
 CITATION_PROMPT_REVISION = "chimera-research-prompts/2"
@@ -93,6 +103,24 @@ RETAINED_PROMPT_REVISION = "ghimera-retained-research-prompts/1"
 VISUAL_PROMPT_REVISION = "ghimera-visual-evidence-prompts/1"
 INSTRUCTIONS = MappingProxyType(
     {
+        "identity_propose": (
+            "Propose merge, split or unresolved for every supplied identity pair exactly once. "
+            "Retain exact request_digest and original pair IDs. Different scripts or equal names "
+            "are not proof. Use only supplied native evidence, copying exact evidence objects. "
+            "Do not equate offices with officeholders, infer dates, canonicalize names, "
+            "or overwrite "
+            "prior decisions. Use unresolved when identity or temporal support is insufficient. "
+            "Assert dates only when their exact ISO text occurs in supplied evidence."
+        ),
+        "identity_review": (
+            "Separately review every proposed identity pair against the supplied native contexts. "
+            "Preserve proposal_digest exactly. Independently assess identity, role compatibility "
+            "and temporal support; all must be supported before a decision can be applied. "
+            "Equal names, translation similarity, co-occurrence and proposer confidence do not "
+            "establish identity. Copy only exact supplied evidence objects, "
+            "keep ambiguity explicit, and do not repair proposals, invent dates, "
+            "merge offices/people or claim human approval."
+        ),
         "semantic_review": (
             "Independently assess the supplied semantic proposal against this one native "
             "source window and the explicit role/relation definitions. Preserve the supplied "
@@ -398,6 +426,7 @@ class PromptInput(Record):
     native_quote_templates: tuple[NativeQuoteTemplate, ...] | None = None
     proposal_digest: str | None = None
     graph_context: PlanningGraph | None = None
+    identity_request: IdentityProposalRequest | IdentityReviewRequest | None = None
     retained_sources: tuple[RetainedSourceNotice, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
@@ -409,6 +438,7 @@ class PromptInput(Record):
                 "assessment": {"model_call"},
                 "answer": {"model_call"},
                 "semantic_proposal": {"model_call"},
+                "identity_request": {"proposal": {"model_call"}},
             },
         )
 
@@ -436,6 +466,7 @@ def model_schema(
             "LocalGenerationConfig",
             "TokenUsage",
             "CompletionShape",
+            "IdentityCallEvidence",
         ):
             definitions.pop(name, None)
     return schema
@@ -496,11 +527,15 @@ class SelfHostedModel:
             review_revision = semantic.verification.effective_prompt_revision
 
         def evidence(outcome: Literal["success", "refused", "cancelled"]) -> ModelCallEvidence:
-            return ModelCallEvidence(
+            call = ModelCallEvidence(
                 schema="chimera.model-call/1",
                 service=service,
                 task=prompt.task,
-                prompt_revision=semantic.effective_prompt_revision
+                prompt_revision=IDENTITY_PROPOSAL_REVISION
+                if prompt.task == "identity_propose"
+                else IDENTITY_REVIEW_REVISION
+                if prompt.task == "identity_review"
+                else semantic.effective_prompt_revision
                 if prompt.task == "semantic_extract" and semantic is not None
                 else review_revision
                 if prompt.task == "semantic_review"
@@ -538,6 +573,11 @@ class SelfHostedModel:
                 outcome=outcome,
                 completion=completion,
             )
+            if prompt.task in {"identity_propose", "identity_review"}:
+                from ghimera.model_types import IdentityCallEvidence
+
+                return IdentityCallEvidence.model_validate(call.model_dump())
+            return call
 
         try:
             limit = (
@@ -759,6 +799,17 @@ class SelfHostedModel:
                     else ""
                 )
                 + (
+                    " Supplied resolved identities are dated, reviewed projections over immutable "
+                    "source-local members, not global canonical IDs or upgraded source assertions. "
+                    "Use exact decision IDs in graph_refs; preserve unknown dates, "
+                    "unresolved groups and omission counts. Never extend a dated resolution "
+                    "beyond its supplied as_of."
+                    if prompt.task == "plan"
+                    and prompt.graph_context is not None
+                    and prompt.graph_context.resolved is not None
+                    else ""
+                )
+                + (
                     " Supplied semantic_refusal gaps are client-observed extraction/review "
                     "failures, not model-assessed missing facts or successful coverage. "
                     "Other supplied coverage gaps remain independent model assessments, "
@@ -767,7 +818,8 @@ class SelfHostedModel:
                     "cite the exact gap ID in graph_refs. No failed proposal is a graph fact."
                     if prompt.task == "plan"
                     and prompt.graph_context is not None
-                    and prompt.graph_context.schema_version == "ghimera.planning-graph/4"
+                    and prompt.graph_context.schema_version
+                    in {"ghimera.planning-graph/4", "ghimera.planning-graph/5"}
                     else ""
                 )
                 + (
@@ -1055,6 +1107,52 @@ class SelfHostedModel:
                 observed.model_call.model_copy(update={"outcome": "refused"}),
             ) from None
         return result
+
+    async def identity_propose(self, request: IdentityProposalRequest) -> IdentityProposal:
+        from ghimera.identity_automation import validate_request
+
+        request = IdentityProposalRequest.model_validate(request.model_dump())
+        validate_request(self._config, request)
+        policy = self._config.identity_automation
+        if (
+            policy is None
+            or self._config.models is None
+            or self._service != self._config.models.service(policy.proposer_role)
+        ):
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        return await self._invoke(
+            PromptInput(
+                task="identity_propose",
+                intent=request.intent,
+                evidence=self._evidence(request.intent, ()),
+                identity_request=request,
+                proposal_digest=request.content_digest(),
+            ),
+            IdentityProposal,
+        )
+
+    async def identity_review(self, request: IdentityReviewRequest) -> IdentityReview:
+        from ghimera.identity_automation import validate_proposal
+
+        request = IdentityReviewRequest.model_validate(request.model_dump())
+        validate_proposal(self._config, request.request, request.proposal)
+        policy = self._config.identity_automation
+        if (
+            policy is None
+            or self._config.models is None
+            or self._service != self._config.models.service(policy.reviewer_role)
+        ):
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        return await self._invoke(
+            PromptInput(
+                task="identity_review",
+                intent=request.request.intent,
+                evidence=self._evidence(request.request.intent, ()),
+                identity_request=request,
+                proposal_digest=request.proposal.content_digest(),
+            ),
+            IdentityReview,
+        )
 
     async def plan(self, request: PlanningRequest) -> ResearchPlan:
         request = PlanningRequest.model_validate(request.model_dump())

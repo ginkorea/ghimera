@@ -19,6 +19,7 @@ from ghimera.extraction_attempts import (
 )
 from ghimera.fetch import FetchLadder
 from ghimera.graph import DirectoryGraphSink, GraphSink, ResearchGraph
+from ghimera.identity_automation import IdentityProposer, IdentityReviewer, IdentityStage
 from ghimera.ledger import Ledger
 from ghimera.local_input_types import LocalDocumentSeed
 from ghimera.local_inputs import (
@@ -259,6 +260,8 @@ class GoalLoop:
         judge: Judge,
         semantic_extractor: SemanticExtractor | None = None,
         semantic_reviewer: SemanticReviewer | None = None,
+        identity_proposer: IdentityProposer | None = None,
+        identity_reviewer: IdentityReviewer | None = None,
         graph_sink: GraphSink | None = None,
         visual_stage: VisualStage | None = None,
         pdf_transcription: PdfTranscriptionStage | None = None,
@@ -289,6 +292,19 @@ class GoalLoop:
         self._semantics = (
             SemanticStage(config, semantic_extractor, reviewer=semantic_reviewer)
             if semantic_extractor is not None
+            else None
+        )
+        if (config.identity_automation is not None) != (
+            identity_proposer is not None and identity_reviewer is not None
+        ):
+            raise ValueError("identity automation requires both separately bound native ports")
+        if config.identity_automation is None and (
+            identity_proposer is not None or identity_reviewer is not None
+        ):
+            raise ValueError("identity ports require an explicit automation policy")
+        self._identity = (
+            IdentityStage(config, identity_proposer, identity_reviewer)
+            if identity_proposer is not None and identity_reviewer is not None
             else None
         )
         if judge.model.location == "external":
@@ -332,7 +348,17 @@ class GoalLoop:
                     if self._graph_sink is not None
                     else DirectoryGraphSink(self._config.graph, run_id)
                 )
-                graph = ResearchGraph(self._config.graph, run_id, sink)
+                graph = ResearchGraph(
+                    self._config.graph,
+                    run_id,
+                    sink,
+                    identity_config=self._config
+                    if self._config.identity_automation is not None
+                    else None,
+                    identity_ledger=ledger
+                    if self._config.identity_automation is not None
+                    else None,
+                )
                 await graph.start(goal.text)
                 for seed in goal.seeds:
                     await graph.discovered(seed, graph.intent_id)
@@ -400,7 +426,17 @@ class GoalLoop:
             graph = None
             if self._config.graph is not None and self._config.graph.enabled:
                 graph_sink = self._graph_sink or DirectoryGraphSink(self._config.graph, run_id)
-                graph = ResearchGraph(self._config.graph, run_id, graph_sink)
+                graph = ResearchGraph(
+                    self._config.graph,
+                    run_id,
+                    graph_sink,
+                    identity_config=self._config
+                    if self._config.identity_automation is not None
+                    else None,
+                    identity_ledger=ledger
+                    if self._config.identity_automation is not None
+                    else None,
+                )
                 await graph.start(harvest.goal.text, expected=harvest.graph)
                 if graph.snapshot() != harvest.graph:
                     raise ValueError("graph changed after the research checkpoint; reconcile first")
@@ -436,6 +472,20 @@ class GoalLoop:
     ) -> None:
         with session.operation():
             await self._import_local(session, seeds)
+            await self._resolve_identity(session)
+
+    async def _resolve_identity(self, session: CollectionSession) -> None:
+        if self._identity is not None:
+            if session.graph is None or session.budget.config != self._config:
+                raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
+            await self._identity.run(
+                session.goal.text, session.graph, session.budget, session.ledger
+            )
+
+    async def resolve_identity(self, session: CollectionSession) -> None:
+        """Research boundary: all source tasks have finished before cross-document work."""
+        with session.operation():
+            await self._resolve_identity(session)
 
     async def _import_local(
         self, session: CollectionSession, seeds: tuple[LocalDocumentSeed, ...]
@@ -643,12 +693,16 @@ class GoalLoop:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         with session.operation():
             if self._config.execution is not None:
-                return await self._collect_parallel(
+                result = await self._collect_parallel(
                     session, scope, seeds, fetch_limit=fetch_limit, allow_grade=allow_grade
                 )
-            return await self._collect_serial(
-                session, scope, seeds, fetch_limit=fetch_limit, allow_grade=allow_grade
-            )
+            else:
+                result = await self._collect_serial(
+                    session, scope, seeds, fetch_limit=fetch_limit, allow_grade=allow_grade
+                )
+            if result not in {"failed", "budget_exhausted"}:
+                await self._resolve_identity(session)
+            return result
 
     async def _collect_completed_serial(
         self,

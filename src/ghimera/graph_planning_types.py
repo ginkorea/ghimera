@@ -1,5 +1,6 @@
 """Bounded planning projections of acknowledged source-local assertions."""
 
+from datetime import date
 from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
@@ -12,11 +13,13 @@ from ghimera.graph_types import (
     GraphEvidence,
     GraphNode,
     GraphRecord,
+    IdentityDecision,
     Name,
     Positive,
     Text,
 )
 from ghimera.identity_planning_types import IdentityPlanningConfig, IdentityPlanningView
+from ghimera.identity_resolution import IdentityResolutionView
 from ghimera.refusals import RefusalCode
 from ghimera.semantic_types import CoverageFinding
 
@@ -32,6 +35,7 @@ class GraphPlanningConfig(GraphRecord):
         "ghimera.graph-planning/2",
         "ghimera.graph-planning/3",
         "ghimera.graph-planning/4",
+        "ghimera.graph-planning/5",
     ] = Field(alias="schema")
     entity_roles: Annotated[tuple[Name, ...], Field(min_length=1)]
     relation_rules: tuple[Name, ...]
@@ -42,17 +46,20 @@ class GraphPlanningConfig(GraphRecord):
     max_context_chars: Annotated[int, Field(strict=True, ge=500)]
     max_gaps: Count = Field(default=0, exclude_if=lambda v: v == 0)
     identity: IdentityPlanningConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    resolved_as_of: date | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def unique(self) -> "GraphPlanningConfig":
         if (self.schema_version != "ghimera.graph-planning/1") != (self.max_gaps > 0):
-            raise ValueError("graph-planning/2, /3 and /4 require an explicit positive gap limit")
-        if self.schema_version != "ghimera.graph-planning/4" and (
+            raise ValueError("graph-planning/2 through /5 require an explicit positive gap limit")
+        if self.schema_version not in {"ghimera.graph-planning/4", "ghimera.graph-planning/5"} and (
             (self.schema_version == "ghimera.graph-planning/3") != (self.identity is not None)
         ):
             raise ValueError("graph-planning/3 requires its explicit identity policy")
         if self.selection == "identity_first" and self.identity is None:
             raise ValueError("identity-first selection requires an explicit identity policy")
+        if self.schema_version != "ghimera.graph-planning/5" and self.resolved_as_of is not None:
+            raise ValueError("dated resolved planning requires graph-planning/5")
         if self.identity is not None and not set(
             self.identity.alias_rules + self.identity.exclusive_relations
         ) <= set(self.relation_rules):
@@ -71,9 +78,14 @@ class GraphPlanningConfig(GraphRecord):
         "ghimera.planning-graph/2",
         "ghimera.planning-graph/3",
         "ghimera.planning-graph/4",
+        "ghimera.planning-graph/5",
     ]:
-        if self.schema_version == "ghimera.graph-planning/4":
-            return "ghimera.planning-graph/4"
+        if self.schema_version in {"ghimera.graph-planning/4", "ghimera.graph-planning/5"}:
+            return (
+                "ghimera.planning-graph/5"
+                if self.schema_version.endswith("/5")
+                else "ghimera.planning-graph/4"
+            )
         if self.identity is not None:
             return "ghimera.planning-graph/3"
         return "ghimera.planning-graph/2" if self.max_gaps else "ghimera.planning-graph/1"
@@ -159,6 +171,7 @@ class PlanningGraph(GraphRecord):
         "ghimera.planning-graph/2",
         "ghimera.planning-graph/3",
         "ghimera.planning-graph/4",
+        "ghimera.planning-graph/5",
     ] = Field(alias="schema")
     policy_digest: Digest
     population_digest: Digest
@@ -171,19 +184,29 @@ class PlanningGraph(GraphRecord):
     gaps: tuple[ResearchGap, ...] = Field(default=(), exclude_if=lambda v: not v)
     omitted_gaps: Count = Field(default=0, exclude_if=lambda v: v == 0)
     identity: IdentityPlanningView | None = Field(default=None, exclude_if=lambda v: v is None)
+    resolved: IdentityResolutionView | None = Field(default=None, exclude_if=lambda v: v is None)
+    resolution_history: tuple[IdentityDecision, ...] = Field(default=(), exclude_if=lambda v: not v)
+    omitted_resolution_decisions: Count = Field(default=0, exclude_if=lambda v: v == 0)
 
     @model_validator(mode="after")
     def closed(self) -> "PlanningGraph":
         if self.schema_version == "ghimera.planning-graph/1" and (self.gaps or self.omitted_gaps):
             raise ValueError("planning gaps require planning-graph/2")
-        if self.schema_version != "ghimera.planning-graph/4" and (
+        if self.schema_version not in {"ghimera.planning-graph/4", "ghimera.planning-graph/5"} and (
             (self.schema_version == "ghimera.planning-graph/3") != (self.identity is not None)
         ):
             raise ValueError("planning-graph/3 requires its retained identity/dispute view")
-        if self.schema_version != "ghimera.planning-graph/4" and any(
-            isinstance(gap, PlanningRefusalGap) for gap in self.gaps
-        ):
+        if self.schema_version not in {
+            "ghimera.planning-graph/4",
+            "ghimera.planning-graph/5",
+        } and any(isinstance(gap, PlanningRefusalGap) for gap in self.gaps):
             raise ValueError("failed-window gaps require planning-graph/4")
+        if (self.schema_version == "ghimera.planning-graph/5") != (self.resolved is not None):
+            raise ValueError("resolved planning requires its versioned view")
+        if self.schema_version != "ghimera.planning-graph/5" and (
+            self.resolution_history or self.omitted_resolution_decisions
+        ):
+            raise ValueError("resolution history belongs only to planning-graph/5")
         entities = {item.node.id for item in self.entities}
         sources = {item.document_id: item for item in self.sources}
         if (
@@ -204,6 +227,7 @@ class PlanningGraph(GraphRecord):
         for evidence in (
             *(item.evidence for item in self.entities),
             *(span for edge in self.relations for span in edge.evidence),
+            *(span for decision in self.resolution_history for span in decision.evidence),
         ):
             source = sources.get(evidence.document_id)
             if source is None or (source.document_sha256, source.text_sha256) != (
@@ -235,10 +259,13 @@ class PlanningGraph(GraphRecord):
             | frozenset(item.id for item in self.relations)
             | frozenset(item.id for item in self.gaps)
             | (self.identity.references if self.identity is not None else frozenset())
+            | frozenset(item.id for item in self.resolution_history)
         )
 
     @property
     def prompt_revision(self) -> str:
+        if self.schema_version == "ghimera.planning-graph/5":
+            return "ghimera-graph-planning/5"
         if self.schema_version == "ghimera.planning-graph/4":
             return GRAPH_REFUSAL_PLANNING_REVISION
         if self.identity is not None:

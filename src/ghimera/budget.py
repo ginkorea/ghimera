@@ -22,6 +22,8 @@ class RunBudget:
         self.local_inputs = 0
         self.semantic_calls = 0
         self.semantic_review_calls = 0
+        self.identity_proposal_calls = 0
+        self.identity_review_calls = 0
         self.local_input_bytes = 0
         self.encoding_calls = 0
         self.encoding_chars = 0
@@ -77,6 +79,14 @@ class RunBudget:
         self.challenge_attempts = sum(row.event == "challenge" for row in rows)
         self.local_inputs = sum(row.event == "local_input" for row in rows)
         self.local_input_bytes = sum(row.bytes_read for row in rows if row.event == "local_input")
+        self.identity_proposal_calls = sum(
+            row.model_intent is not None and row.model_intent.phase == "identity_propose"
+            for row in rows
+        )
+        self.identity_review_calls = sum(
+            row.model_intent is not None and row.model_intent.phase == "identity_review"
+            for row in rows
+        )
         if self.config.model_work is not None:
             self.semantic_calls = sum(
                 row.model_intent is not None and row.model_intent.phase == "semantic_extract"
@@ -179,6 +189,20 @@ class RunBudget:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         self.reserve_judge()
         self.semantic_calls += 1
+
+    def reserve_identity_proposal(self) -> None:
+        policy = self.config.identity_automation
+        if policy is None or self.identity_proposal_calls >= policy.max_proposal_calls:
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        self.reserve_judge()
+        self.identity_proposal_calls += 1
+
+    def reserve_identity_review(self) -> None:
+        policy = self.config.identity_automation
+        if policy is None or self.identity_review_calls >= policy.max_review_calls:
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        self.reserve_judge()
+        self.identity_review_calls += 1
 
     def reserve_encoding(self, input_chars: int) -> None:
         self.check_time()

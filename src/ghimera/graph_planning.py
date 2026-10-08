@@ -20,8 +20,10 @@ from ghimera.graph_planning_types import (
     PlanningSource,
     ResearchGap,
 )
-from ghimera.graph_types import GraphEdge, GraphRecord
+from ghimera.graph_types import GraphEdge, GraphRecord, IdentityDecision
+from ghimera.identity_automation import acknowledged_history
 from ghimera.identity_planning import build_identity_view
+from ghimera.identity_resolution import resolve_identities
 from ghimera.identity_selection import IdentitySelection, SelectionUnit
 from ghimera.model_citations import citation_id
 from ghimera.models import Document, LedgerRow
@@ -36,6 +38,7 @@ class Population(GraphRecord):
     relations: tuple[GraphEdge, ...]
     sources: tuple[PlanningSource, ...]
     gaps: tuple[ResearchGap, ...] = Field(default=(), exclude_if=lambda v: not v)
+    decisions: tuple[IdentityDecision, ...] = Field(default=(), exclude_if=lambda v: not v)
 
 
 def policy_of(config: GhimeraConfig) -> GraphPlanningConfig | None:
@@ -81,7 +84,10 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
     gaps: dict[str, ResearchGap] = {}
     for row in rows:
         failed = row.semantic_refusal
-        if failed is not None and policy.schema_version == "ghimera.graph-planning/4":
+        if failed is not None and policy.schema_version in {
+            "ghimera.graph-planning/4",
+            "ghimera.graph-planning/5",
+        }:
             if row.refusal is None:
                 raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
             source = PlanningSource(
@@ -170,14 +176,22 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
         relations=tuple(relations.values()),
         sources=tuple(sources.values()),
         gaps=tuple(gaps.values()),
+        decisions=acknowledged_history(rows)
+        if policy.schema_version == "ghimera.graph-planning/5"
+        else (),
     )
     digest = population.content_digest()
     total_chars = evidence_size(population.entities, population.relations, population.gaps)
     selector = (
         IdentitySelection(
-            policy.identity, tuple(item.node for item in population.entities), population.relations
+            policy.identity if policy.selection == "identity_first" else None,
+            tuple(item.node for item in population.entities),
+            population.relations,
+            population.decisions,
         )
-        if policy.selection == "identity_first" and policy.identity is not None
+        if policy.selection == "identity_first"
+        and policy.identity is not None
+        or policy.schema_version == "ghimera.graph-planning/5"
         else None
     )
     by_edge = {edge.id: edge for edge in population.relations}
@@ -194,6 +208,14 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
             span.document_id for edge in edges for span in edge.evidence
         }
         used.update(gap.source.document_id for gap in visible_gaps)
+        included = {item.node.id for item in selected}
+        history = (
+            population.decisions
+            if all(set(d.members) <= included for d in population.decisions)
+            else ()
+        )
+        if history:
+            used.update(e.document_id for d in history for e in d.evidence)
         return PlanningGraph(
             schema=policy.view_schema,
             policy_digest=policy.content_digest(),
@@ -211,6 +233,13 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
             )
             if policy.identity is not None
             else None,
+            resolved=resolve_identities(
+                tuple(item.node for item in selected), history, as_of=policy.resolved_as_of
+            )
+            if policy.schema_version == "ghimera.graph-planning/5"
+            else None,
+            resolution_history=history,
+            omitted_resolution_decisions=len(population.decisions) - len(history),
         )
 
     def fits(candidate: PlanningGraph) -> bool:
@@ -218,6 +247,7 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
             len(candidate.entities) <= policy.max_entities
             and len(candidate.relations) <= policy.max_relations
             and evidence_size(candidate.entities, candidate.relations, candidate.gaps)
+            + sum(len(e.quote) for d in candidate.resolution_history for e in d.evidence)
             <= policy.max_evidence_chars
             and len(candidate.model_dump_json()) <= policy.max_context_chars
             and len(candidate.gaps) <= policy.max_gaps
@@ -288,6 +318,7 @@ def validate_context(
         or len(context.relations) > policy.max_relations
         or len(context.gaps) > policy.max_gaps
         or evidence_size(context.entities, context.relations, context.gaps)
+        + sum(len(e.quote) for d in context.resolution_history for e in d.evidence)
         > policy.max_evidence_chars
         or len(context.model_dump_json()) > policy.max_context_chars
         or any(entity.node.role not in policy.entity_roles for entity in context.entities)
@@ -296,6 +327,12 @@ def validate_context(
         raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
     if policy.identity is not None and context.identity != build_identity_view(
         policy.identity, tuple(item.node for item in context.entities), context.relations
+    ):
+        raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+    if context.resolved is not None and context.resolved != resolve_identities(
+        tuple(item.node for item in context.entities),
+        context.resolution_history,
+        as_of=policy.resolved_as_of,
     ):
         raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
     docs: dict[str, tuple[Document, ...]] = {}
@@ -314,6 +351,7 @@ def validate_context(
     for span in (
         *(entity.evidence for entity in context.entities),
         *(span for edge in context.relations for span in edge.evidence),
+        *(span for decision in context.resolution_history for span in decision.evidence),
     ):
         if not any(
             span.matches_reading(

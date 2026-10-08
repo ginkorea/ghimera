@@ -29,8 +29,15 @@ from ghimera.human_browser_types import (
     BrowserSourceEvidence,
     validate_browser_body,
 )
+from ghimera.identity_automation_types import (
+    IdentityHistory,
+    IdentityObservation,
+    IdentityProposal,
+    IdentityProposalRequest,
+    IdentityReview,
+)
 from ghimera.local_input_types import LocalInputEvidence
-from ghimera.model_types import ModelCallEvidence
+from ghimera.model_types import IdentityCallEvidence, ModelCallEvidence
 from ghimera.model_work_types import ModelAcknowledgement, ModelIntent, ModelReplay
 from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.page_transcription_types import PageTranscriptionCall, ReviewedPageTranscription
@@ -714,6 +721,10 @@ class LedgerRow(Record):
         "local_input",
         "semantic",
         "semantic_review",
+        "identity_propose",
+        "identity_review",
+        "identity_resolution",
+        "identity_history",
         "visual",
         "visual_model",
         "transcription_model",
@@ -736,7 +747,7 @@ class LedgerRow(Record):
     search_response_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
-    model_call: ModelCallEvidence | None = None
+    model_call: IdentityCallEvidence | ModelCallEvidence | None = None
     model_intent: ModelIntent | None = Field(default=None, exclude_if=lambda v: v is None)
     model_ack: ModelAcknowledgement | None = Field(default=None, exclude_if=lambda v: v is None)
     model_replay: ModelReplay | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -777,6 +788,15 @@ class LedgerRow(Record):
         default=None, exclude_if=lambda v: v is None
     )
     planning_graph: PlanningGraph | None = Field(default=None, exclude_if=lambda v: v is None)
+    identity_request: IdentityProposalRequest | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    identity_proposal: IdentityProposal | None = Field(default=None, exclude_if=lambda v: v is None)
+    identity_review: IdentityReview | None = Field(default=None, exclude_if=lambda v: v is None)
+    identity_observation: IdentityObservation | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    identity_history: IdentityHistory | None = Field(default=None, exclude_if=lambda v: v is None)
     human_browser: BrowserSourceEvidence | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
@@ -909,6 +929,26 @@ class LedgerRow(Record):
                 raise ValueError("failed browser assistance requires its terminal refusal")
             if self.refusal is None and self.human_browser is None:
                 raise ValueError("successful browser route cannot discard capture evidence")
+        if self.event in {"identity_propose", "identity_review"}:
+            result = (
+                self.identity_proposal if self.event == "identity_propose" else self.identity_review
+            )
+            if self.identity_request is None or (result is None) == (self.refusal is None):
+                raise ValueError(
+                    "identity call requires its exact request and observed result or refusal"
+                )
+            if result is not None and self.model_call != result.model_call:
+                raise ValueError("identity call evidence must be the original observed call")
+        elif (
+            self.identity_request is not None
+            or self.identity_review is not None
+            or self.identity_proposal is not None
+        ):
+            raise ValueError("identity model results belong to their native call observations")
+        if (self.event == "identity_resolution") != (self.identity_observation is not None):
+            raise ValueError("identity resolution requires its graph acknowledgement observation")
+        if (self.event == "identity_history") != (self.identity_history is not None):
+            raise ValueError("identity history requires its native graph checkpoint observation")
         if self.event == "semantic_review":
             if (self.semantic_review is None) == (self.refusal is None):
                 raise ValueError("semantic review requires its assessment or refusal")
@@ -1221,22 +1261,29 @@ class Harvest(Record):
             raise ValueError("challenge attempts exceed their configured run budget")
         if self.receipt.bytes_read != sum(row.bytes_read for row in self.ledger):
             raise ValueError("byte spend does not match ledger")
-        if self.receipt.judge_calls != sum(
-            row.event
-            in {
-                "verdict",
-                "grade",
-                "plan",
-                "assessment",
-                "answer",
-                "review",
-                "semantic",
-                "semantic_review",
-                "visual_model",
-                "transcription_model",
-            }
-            for row in self.ledger
-        ):
+        observed_model_spend = (
+            sum(row.model_intent is not None for row in self.ledger)
+            if self.receipt.effective_config.model_work is not None
+            else sum(
+                row.event
+                in {
+                    "verdict",
+                    "grade",
+                    "plan",
+                    "assessment",
+                    "answer",
+                    "review",
+                    "semantic",
+                    "semantic_review",
+                    "identity_propose",
+                    "identity_review",
+                    "visual_model",
+                    "transcription_model",
+                }
+                for row in self.ledger
+            )
+        )
+        if self.receipt.judge_calls != observed_model_spend:
             raise ValueError("judge spend does not match ledger")
         if self.receipt.accepted_documents != len(self.documents):
             raise ValueError("accepted count does not match harvest")
@@ -1419,6 +1466,9 @@ class Harvest(Record):
         try:
             validate_harvest(self)
             validate_planning_rows(self.receipt.effective_config, self.ledger)
+            from ghimera.identity_automation import validate_identity_rows
+
+            validate_identity_rows(self.receipt.effective_config, self.ledger, self.graph)
         except GhimeraRefused:
             raise ValueError("semantic source projection cannot be revalidated") from None
         return self

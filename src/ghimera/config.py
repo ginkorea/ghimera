@@ -21,6 +21,7 @@ from ghimera.execution_config import ExecutionConfig
 from ghimera.extraction_config import ExtractionConfig
 from ghimera.graph_types import GraphConfig
 from ghimera.human_browser_types import HumanBrowserConfig
+from ghimera.identity_automation_types import IdentityAutomationConfig
 from ghimera.journal_config import JournalConfig
 from ghimera.local_input_types import LocalInputConfig
 from ghimera.mcp_lead_config import McpLeadConfig
@@ -172,6 +173,9 @@ class GhimeraConfig(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     semantics: SemanticConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    identity_automation: IdentityAutomationConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     continuation: ContinuationConfig | None = Field(default=None, exclude_if=lambda v: v is None)
     research_recovery: ResearchRecoveryConfig | None = Field(
         default=None, exclude_if=lambda v: v is None
@@ -198,6 +202,46 @@ class GhimeraConfig(BaseModel):
                 >= self.source_work.max_store_bytes
             ):
                 raise ValueError("source capsule must fit within native source-work capacity")
+        automation = self.identity_automation
+        if automation is not None:
+            if (
+                self.graph is None
+                or not self.graph.enabled
+                or self.graph.identity_resolution is None
+                or self.semantics is None
+                or self.models is None
+                or self.journal is None
+                or self.model_work is None
+                or self.model_work.results is None
+                or not set(automation.roles) <= set(self.graph.identity_resolution.roles)
+                or not set(automation.roles) <= set(self.semantics.entity_roles)
+            ):
+                raise ValueError(
+                    "identity automation requires bounded source semantics, graph resolution "
+                    "and retained native model work"
+                )
+            proposer = self.models.service(automation.proposer_role)
+            reviewer = self.models.service(automation.reviewer_role)
+            if automation.require_distinct_models and (
+                (proposer.model_id, proposer.revision) == (reviewer.model_id, reviewer.revision)
+                or (proposer.endpoint, proposer.served_model)
+                == (reviewer.endpoint, reviewer.served_model)
+            ):
+                raise ValueError(
+                    "identity review requires its explicitly distinct configured model"
+                )
+        planning = self.research.graph_context if self.research is not None else None
+        if planning is not None and planning.schema_version == "ghimera.graph-planning/5":
+            if (
+                automation is None
+                or planning.resolved_as_of != automation.as_of
+                or self.graph is None
+                or self.graph.identity_resolution is None
+                or not set(self.graph.identity_resolution.roles) <= set(planning.entity_roles)
+            ):
+                raise ValueError(
+                    "resolved planning requires the exact identity automation temporal policy"
+                )
         if self.research_recovery is not None and (
             self.journal is None
             or self.research is None
@@ -279,7 +323,8 @@ class GhimeraConfig(BaseModel):
                 and self.research is not None
                 and (
                     self.research.graph_context is None
-                    or self.research.graph_context.schema_version != "ghimera.graph-planning/4"
+                    or self.research.graph_context.schema_version
+                    not in {"ghimera.graph-planning/4", "ghimera.graph-planning/5"}
                 )
             ):
                 raise ValueError("failure continuation requires explicit graph-planning/4 gaps")

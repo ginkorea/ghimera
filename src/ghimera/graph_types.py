@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.human_browser_types import BrowserSourceEvidence
 from ghimera.local_input_types import LocalInputEvidence
+from ghimera.model_types import IdentityCallEvidence
 from ghimera.source_refresh_types import SourceRefreshUse
 from ghimera.transport_types import TransportEvidence
 from ghimera.visual_types import ImageRegion
@@ -607,6 +608,56 @@ class GraphIdentityDecision(GraphRecord):
         return self
 
 
+class GraphModelIdentityDecision(GraphRecord):
+    """A separately model-reviewed decision, never a human approval claim."""
+
+    schema_version: Literal["ghimera.identity-decision/2"] = Field(alias="schema")
+    id: Annotated[str, Field(pattern=r"^resolution:[0-9a-f]{64}$")]
+    operation: Literal["merge", "split", "retract"]
+    members: tuple[Text, ...]
+    retracts: tuple[Text, ...]
+    evidence: Annotated[tuple[GraphEvidence, ...], Field(min_length=1)]
+    authority: Text
+    revision: Text
+    reason: Text
+    basis: Literal["model_reviewed"]
+    valid_from: date | None
+    valid_to: date | None
+    population_digest: Digest
+    proposal_digest: Digest
+    review_digest: Digest
+    proposal_call: IdentityCallEvidence
+    review_call: IdentityCallEvidence
+
+    @model_validator(mode="after")
+    def coherent(self) -> "GraphModelIdentityDecision":
+        if (
+            len(set(self.members)) != len(self.members)
+            or len(set(self.retracts)) != len(self.retracts)
+            or len({e.content_digest() for e in self.evidence}) != len(self.evidence)
+            or (self.operation != "retract" and len(self.members) < 2)
+            or (self.operation == "retract" and (self.members or not self.retracts))
+            or self.operation == "retract"
+            and (self.valid_from is not None or self.valid_to is not None)
+            or self.valid_from is not None
+            and self.valid_to is not None
+            and self.valid_from > self.valid_to
+            or not all(value.strip() for value in (self.authority, self.revision, self.reason))
+            or self.proposal_call.task != "identity_propose"
+            or self.review_call.task != "identity_review"
+            or self.proposal_call.outcome != "success"
+            or self.review_call.outcome != "success"
+            or self.authority != self.review_call.service.model_id
+        ):
+            raise ValueError(
+                "model-reviewed identity requires its actual separate successful calls"
+            )
+        return self
+
+
+IdentityDecision = GraphIdentityDecision | GraphModelIdentityDecision
+
+
 class GraphEdge(GraphRecord):
     id: Annotated[str, Field(pattern=r"^edge:[0-9a-f]{64}$")]
     rule: Name
@@ -642,9 +693,7 @@ class GraphBatch(GraphRecord):
     previous_digest: Digest | None
     nodes: tuple[GraphNode, ...]
     edges: tuple[GraphEdge, ...]
-    identity_decisions: tuple[GraphIdentityDecision, ...] = Field(
-        default=(), exclude_if=lambda v: not v
-    )
+    identity_decisions: tuple[IdentityDecision, ...] = Field(default=(), exclude_if=lambda v: not v)
 
     @model_validator(mode="after")
     def nonempty(self) -> "GraphBatch":
@@ -667,6 +716,4 @@ class GraphSnapshot(GraphRecord):
     nodes: tuple[GraphNode, ...]
     edges: tuple[GraphEdge, ...]
     checkpoint: GraphCheckpoint | None
-    identity_decisions: tuple[GraphIdentityDecision, ...] = Field(
-        default=(), exclude_if=lambda v: not v
-    )
+    identity_decisions: tuple[IdentityDecision, ...] = Field(default=(), exclude_if=lambda v: not v)

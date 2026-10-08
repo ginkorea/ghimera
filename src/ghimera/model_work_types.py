@@ -22,6 +22,8 @@ ModelPhase = Literal[
     "semantic_review",
     "visual_model",
     "transcription_model",
+    "identity_propose",
+    "identity_review",
 ]
 
 

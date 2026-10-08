@@ -7,7 +7,7 @@ The caller remains the owner of admission under the serialized context limits.
 
 from dataclasses import dataclass
 
-from ghimera.graph_types import GraphEdge, GraphNode
+from ghimera.graph_types import GraphEdge, GraphNode, IdentityDecision
 from ghimera.identity_planning import build_identity_view
 from ghimera.identity_planning_types import IdentityPlanningConfig
 
@@ -21,14 +21,25 @@ class SelectionUnit:
 class IdentitySelection:
     def __init__(
         self,
-        policy: IdentityPlanningConfig,
+        policy: IdentityPlanningConfig | None,
         nodes: tuple[GraphNode, ...],
         edges: tuple[GraphEdge, ...],
+        decisions: tuple[IdentityDecision, ...] = (),
     ) -> None:
-        self._view = build_identity_view(policy, nodes, edges)
+        self._view = build_identity_view(policy, nodes, edges) if policy is not None else None
         self._edges = {edge.id: edge for edge in edges}
         self._ranks = {node.id: rank for rank, node in enumerate(nodes)}
-        self._groups = {node: group for group in self._view.groups for node in group.node_ids}
+        self._groups = (
+            {node: group for group in self._view.groups for node in group.node_ids}
+            if self._view is not None
+            else {}
+        )
+        # History is a complete replay bundle, including reversed decisions.
+        self._resolution_members = tuple(
+            dict.fromkeys(member for decision in decisions for member in decision.members)
+        )
+        if not set(self._resolution_members) <= self._ranks.keys():
+            raise ValueError("resolved planning history requires its entire original population")
 
     def close(self, unit: SelectionUnit) -> SelectionUnit:
         """Keep endpoints, whole bounded candidates and their original alias claims."""
@@ -37,22 +48,33 @@ class IdentitySelection:
         for identity in edges:
             edge = self._edges[identity]
             nodes.update(dict.fromkeys((edge.source, edge.target)))
-        for identity in tuple(nodes):
-            group = self._groups.get(identity)
-            if group is not None:
-                nodes.update(dict.fromkeys(group.node_ids))
-                edges.update(dict.fromkeys(group.alias_relation_ids))
+        changed = True
+        while changed:
+            before = (len(nodes), len(edges))
+            if set(nodes) & set(self._resolution_members):
+                nodes.update(dict.fromkeys(self._resolution_members))
+            for identity in tuple(nodes):
+                group = self._groups.get(identity)
+                if group is not None:
+                    nodes.update(dict.fromkeys(group.node_ids))
+                    edges.update(dict.fromkeys(group.alias_relation_ids))
+            changed = before != (len(nodes), len(edges))
         return SelectionUnit(tuple(nodes), tuple(edges))
 
     def questions(self) -> tuple[SelectionUnit, ...]:
         """Smallest complete bundles first; ties prefer the newest observed member."""
-        units = [
-            SelectionUnit(group.node_ids, group.alias_relation_ids) for group in self._view.groups
-        ]
-        units.extend(
-            self.close(SelectionUnit((), (dispute.left_relation_id, dispute.right_relation_id)))
-            for dispute in self._view.disputes
+        units = (
+            [SelectionUnit(group.node_ids, group.alias_relation_ids) for group in self._view.groups]
+            if self._view is not None
+            else []
         )
+        if self._resolution_members:
+            units.append(self.close(SelectionUnit(self._resolution_members, ())))
+        if self._view is not None:
+            units.extend(
+                self.close(SelectionUnit((), (dispute.left_relation_id, dispute.right_relation_id)))
+                for dispute in self._view.disputes
+            )
         return tuple(
             sorted(
                 set(units),

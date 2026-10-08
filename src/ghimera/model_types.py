@@ -17,7 +17,7 @@ from ghimera.model_config import ModelServiceConfig
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Count = Annotated[int, Field(strict=True, ge=0)]
-ModelTask = Literal[
+LegacyModelTask = Literal[
     "plan",
     "assessment",
     "answer",
@@ -27,6 +27,38 @@ ModelTask = Literal[
     "semantic_extract",
     "semantic_review",
 ]
+ModelTask = Literal[
+    "plan",
+    "assessment",
+    "answer",
+    "review",
+    "verdict",
+    "grade",
+    "semantic_extract",
+    "semantic_review",
+    "identity_propose",
+    "identity_review",
+]
+
+
+class _LegacyTaskSchema:
+    """Freeze historical client evidence; identity calls have their own full schema."""
+
+    def __get_pydantic_json_schema__(
+        self, core_schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
+        schema = handler(core_schema)
+        schema["enum"] = [
+            "plan",
+            "assessment",
+            "answer",
+            "review",
+            "verdict",
+            "grade",
+            "semantic_extract",
+            "semantic_review",
+        ]
+        return schema
 
 
 class TokenUsage(BaseModel):
@@ -107,7 +139,7 @@ class ModelCallEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.model-call/1"] = Field(alias="schema")
     service: Annotated[ModelServiceConfig, _ClientEvidenceServiceSchema()]
-    task: ModelTask
+    task: Annotated[ModelTask, _LegacyTaskSchema()]
     prompt_revision: str
     request_sha256: Digest
     response_sha256: Digest
@@ -133,3 +165,10 @@ class ModelCallEvidence(BaseModel):
     @property
     def total_tokens(self) -> int | None:
         return self.usage.total_tokens if self.usage is not None else None
+
+
+class IdentityCallEvidence(ModelCallEvidence):
+    """Truthful isolated schema for opt-in identity tasks, not legacy prompts."""
+
+    service: ModelServiceConfig
+    task: Literal["identity_propose", "identity_review"]

@@ -369,6 +369,9 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
 
         validate_rows(header.config, tuple(rows))
         validate_planning_rows(header.config, tuple(rows))
+        from ghimera.identity_automation import validate_identity_rows
+
+        validate_identity_rows(header.config, tuple(rows))
         summary_path = path / "summary.json"
         if summary_path.exists() or summary_path.is_symlink():
             summary = JournalSummary.model_validate_json(
@@ -408,6 +411,8 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
                             "review",
                             "semantic",
                             "semantic_review",
+                            "identity_propose",
+                            "identity_review",
                             "transcription_model",
                         }
                         for row in rows

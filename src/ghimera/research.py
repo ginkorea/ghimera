@@ -1223,6 +1223,8 @@ class ResearchLoop:
                     isinstance(saved, SourceCompletionSnapshot) and number == saved.round_number
                 )
                 if not resuming_assessment and not resuming_source:
+                    if saved is None or saved.phase != "plan":
+                        await self._collector.resolve_identity(session)
                     planning = (
                         saved.model_request
                         if (

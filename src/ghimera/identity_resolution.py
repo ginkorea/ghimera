@@ -14,9 +14,9 @@ from pydantic import Field
 from ghimera.graph_types import (
     Count,
     GraphEdge,
-    GraphIdentityDecision,
     GraphNode,
     GraphRecord,
+    IdentityDecision,
     IdentityResolutionConfig,
     Text,
 )
@@ -38,9 +38,9 @@ class IdentityResolutionView(GraphRecord):
 
 
 def active_decisions(
-    decisions: tuple[GraphIdentityDecision, ...],
-) -> tuple[GraphIdentityDecision, ...]:
-    active: dict[str, GraphIdentityDecision] = {}
+    decisions: tuple[IdentityDecision, ...],
+) -> tuple[IdentityDecision, ...]:
+    active: dict[str, IdentityDecision] = {}
     seen: set[str] = set()
     for decision in decisions:
         if decision.id in seen:
@@ -55,7 +55,7 @@ def active_decisions(
     return tuple(active.values())
 
 
-def _eligible(decision: GraphIdentityDecision, as_of: date | None) -> bool:
+def _eligible(decision: IdentityDecision, as_of: date | None) -> bool:
     if as_of is None:
         return decision.valid_from is None and decision.valid_to is None
     return (decision.valid_from is None or as_of >= decision.valid_from) and (
@@ -65,7 +65,7 @@ def _eligible(decision: GraphIdentityDecision, as_of: date | None) -> bool:
 
 def resolve_identities(
     nodes: tuple[GraphNode, ...],
-    decisions: tuple[GraphIdentityDecision, ...],
+    decisions: tuple[IdentityDecision, ...],
     *,
     as_of: date | None = None,
 ) -> IdentityResolutionView:
@@ -121,8 +121,8 @@ def validate_decisions(
     policy: IdentityResolutionConfig | None,
     nodes: tuple[GraphNode, ...],
     edges: tuple[GraphEdge, ...],
-    previous: tuple[GraphIdentityDecision, ...],
-    added: tuple[GraphIdentityDecision, ...],
+    previous: tuple[IdentityDecision, ...],
+    added: tuple[IdentityDecision, ...],
 ) -> None:
     if not added:
         return
@@ -131,7 +131,7 @@ def validate_decisions(
     by_id = {node.id: node for node in nodes}
     history = list(previous)
     for decision in added:
-        GraphIdentityDecision.model_validate_json(decision.model_dump_json())
+        type(decision).model_validate_json(decision.model_dump_json())
         expected = (
             "resolution:"
             + decision.model_copy(update={"id": "resolution:" + "0" * 64}).content_digest()
