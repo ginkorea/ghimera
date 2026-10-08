@@ -5,13 +5,16 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.model_config import EmbeddingServiceConfig
+from ghimera.run_encoding_types import RunEncodingRecoveryConfig
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
 
 
 class ScoringConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["chimera.scoring/1", "ghimera.scoring/2"] = Field(alias="schema")
+    schema_version: Literal["chimera.scoring/1", "ghimera.scoring/2", "ghimera.scoring/3"] = Field(
+        alias="schema"
+    )
     encoder: EmbeddingServiceConfig
     query_encoder: EmbeddingServiceConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
@@ -31,9 +34,21 @@ class ScoringConfig(BaseModel):
     max_reference_chunks: Positive
     max_anchor_chars: Positive
     keyword_weight: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+    run_encoding_recovery: RunEncodingRecoveryConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def coherent(self) -> "ScoringConfig":
+        if self.schema_version == "ghimera.scoring/3":
+            if self.run_encoding_recovery is None:
+                raise ValueError("scoring/3 requires explicit run-bound encoding recovery")
+            if self.reference_source == "intent" and self.query_encoder is None:
+                raise ValueError("scoring/3 intent mode requires an explicit query encoder")
+        elif "run_encoding_recovery" in self.model_fields_set:
+            raise ValueError("legacy scoring profiles forbid run encoding recovery, even null")
+        if self.query_encoder is not None and self.reference_source != "intent":
+            raise ValueError("a query encoder requires intent reference mode")
         if self.schema_version == "chimera.scoring/1" and self.query_encoder is not None:
             raise ValueError("a distinct query encoder requires scoring/2")
         if self.schema_version == "ghimera.scoring/2" and (

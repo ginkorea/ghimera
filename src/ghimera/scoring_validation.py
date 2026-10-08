@@ -21,12 +21,26 @@ def validate_reference_rows(
         }
         for row in rows:
             call = row.encoding_call
+            original = (
+                rows[row.run_encoding_sequence].run_encoding_intent
+                if row.run_encoding_sequence is not None and row.run_encoding_sequence < len(rows)
+                else None
+            )
             if (
                 call is not None
                 and call.service == policy.intent_encoder
                 and (
                     row.url is not None
-                    or (call.outcome == "success" and row.sequence not in query_sequences)
+                    or (
+                        call.outcome == "success"
+                        and row.sequence not in query_sequences
+                        and not (
+                            policy.run_encoding_recovery is not None
+                            and row.run_encoding_ack is not None
+                            and original is not None
+                            and original.purpose == "intent"
+                        )
+                    )
                 )
             ):
                 raise ValueError("successful query encoding must prepare the original intent")

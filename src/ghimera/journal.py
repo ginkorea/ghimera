@@ -213,6 +213,23 @@ class DirectoryLedgerSink:
         return self._header.config
 
     @property
+    def header(self) -> JournalHeader:
+        with self._lock:
+            self._active()
+            return self._header
+
+    def check_capacity(self, record_bytes: tuple[int, ...]) -> None:
+        """Preflight native record capacity; this does not acknowledge remote work."""
+        with self._lock:
+            self._active()
+            if (
+                any(size <= 0 or size > self._policy.max_record_bytes for size in record_bytes)
+                or len(self._rows) + len(record_bytes) > self._policy.max_records
+                or self._size + sum(record_bytes) > self._policy.max_journal_bytes
+            ):
+                raise _refuse()
+
+    @property
     def committed_rows(self) -> tuple[LedgerRow, ...]:
         with self._lock:
             self._active()
@@ -381,6 +398,9 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
         from ghimera.research_reranking import validate_rerank_rows
 
         validate_rerank_rows(header.config, tuple(rows))
+        from ghimera.run_encoding import validate_run_encoding_rows
+
+        encoding_spend = validate_run_encoding_rows(header.config, tuple(rows), header=header)
         summary_path = path / "summary.json"
         if summary_path.exists() or summary_path.is_symlink():
             summary = JournalSummary.model_validate_json(
@@ -392,7 +412,6 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
                 (row.url, row.retained_source) for row in retained
             ) != tuple((item.url, item.origin) for item in summary.retained_documents):
                 raise _refuse()
-            encoding = tuple(row.encoding_call for row in rows if row.encoding_call is not None)
             if (
                 incomplete
                 or summary.run_id != run_id
@@ -403,8 +422,7 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
                 or receipt.judge != header.judge
                 or receipt.fetches != count_fetch_attempts(header.config, tuple(rows))
                 or receipt.bytes_read != sum(row.bytes_read for row in rows)
-                or receipt.encoding_calls != len(encoding)
-                or receipt.encoding_chars != sum(call.input_chars for call in encoding)
+                or (receipt.encoding_calls, receipt.encoding_chars) != encoding_spend
                 or receipt.judge_calls
                 != (
                     sum(row.model_intent is not None for row in rows)

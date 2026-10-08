@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from ghimera.config import GhimeraConfig
 from ghimera.graph_types import GraphRetainedOrigin
@@ -14,7 +14,7 @@ Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 RunId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
 
 
-def canonical(record: Record) -> bytes:
+def canonical(record: BaseModel) -> bytes:
     return json.dumps(
         record.model_dump(mode="json", by_alias=True),
         ensure_ascii=False,
@@ -24,7 +24,7 @@ def canonical(record: Record) -> bytes:
     ).encode()
 
 
-def digest(record: Record) -> str:
+def digest(record: BaseModel) -> str:
     return hashlib.sha256(canonical(record)).hexdigest()
 
 
@@ -98,6 +98,9 @@ class JournalReport(Record):
         if tuple(row.sequence for row in self.rows) != tuple(range(len(self.rows))):
             raise ValueError("journal rows must be contiguous")
         validate_reference_rows(self.header.config, self.header.goal.text, self.rows)
+        from ghimera.run_encoding import validate_run_encoding_rows
+
+        validate_run_encoding_rows(self.header.config, self.rows, header=self.header)
         validate_model_rows(
             self.header.config.model_work, self.header.config.judge_budget, self.rows
         )

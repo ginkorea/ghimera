@@ -53,6 +53,11 @@ from ghimera.query_work_types import QueryAcknowledgement, QueryReservation
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_reranking_types import RerankReservation
+from ghimera.run_encoding_types import (
+    RunEncodingAcknowledgement,
+    RunEncodingIntent,
+    RunEncodingReplay,
+)
 from ghimera.scoring_types import SimilarityEvidence
 from ghimera.semantic_selection_types import SemanticSelection
 from ghimera.semantic_types import (
@@ -756,6 +761,8 @@ class LedgerRow(Record):
                 "query_intent",
                 "query_ack",
                 "source_acquisition",
+                "run_encoding_intent",
+                "run_encoding_replay",
             ]
         ]
     )
@@ -806,6 +813,18 @@ class LedgerRow(Record):
     content_drift: ContentDrift | None = None
     rendered: RenderResult | None = None
     encoding_call: EncodingCall | None = None
+    run_encoding_intent: SkipJsonSchema[RunEncodingIntent | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    run_encoding_ack: SkipJsonSchema[RunEncodingAcknowledgement | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    run_encoding_sequence: SkipJsonSchema[NonNegative | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    run_encoding_replay: SkipJsonSchema[RunEncodingReplay | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     similarity: SimilarityEvidence | None = None
     scoring_source: SkipJsonSchema[ScoringSourceBinding | None] = Field(
         default=None, exclude_if=lambda value: value is None
@@ -1176,6 +1195,30 @@ class LedgerRow(Record):
             raise ValueError("reference event URL must match its target")
         if (self.event == "encoding") != (self.encoding_call is not None):
             raise ValueError("encoding events require their explicit call evidence")
+        if (self.event == "run_encoding_intent") != (self.run_encoding_intent is not None):
+            raise ValueError("run encoding intents require their original typed reservation")
+        if (self.event == "run_encoding_replay") != (self.run_encoding_replay is not None):
+            raise ValueError("run encoding replay requires original intent and ACK identity")
+        if self.event in {"run_encoding_intent", "run_encoding_replay"} and (
+            self.bytes_read != 0
+            or self.status is not None
+            or self.refusal is not None
+            or self.model_call is not None
+            or self.model_intent is not None
+            or self.model_ack is not None
+            or self.model_replay is not None
+            or self.model is None
+        ):
+            raise ValueError("run encoding intent/replay is not HTTP, graph or judge evidence")
+        if self.run_encoding_sequence is not None and self.event != "encoding":
+            raise ValueError("run encoding result links belong to original encoding observations")
+        if self.run_encoding_ack is not None and (
+            self.event != "encoding"
+            or self.refusal is not None
+            or self.encoding_call != self.run_encoding_ack.result.call
+            or self.run_encoding_sequence != self.run_encoding_ack.original_intent_sequence
+        ):
+            raise ValueError("retained run vectors require their successful original encoding call")
         if (self.event == "scoring") != (self.similarity is not None):
             raise ValueError("scoring events require their native similarity evidence")
         if self.encoding_call is not None:
@@ -1442,9 +1485,12 @@ class Harvest(Record):
         if self.receipt.accepted_documents != len(self.documents):
             raise ValueError("accepted count does not match harvest")
         encoding = tuple(row.encoding_call for row in self.ledger if row.encoding_call is not None)
-        if self.receipt.encoding_calls != len(encoding) or self.receipt.encoding_chars != sum(
-            call.input_chars for call in encoding
-        ):
+        from ghimera.run_encoding import validate_run_encoding_rows
+
+        usage = validate_run_encoding_rows(
+            self.receipt.effective_config, self.ledger, goal_text=self.goal.text
+        )
+        if (self.receipt.encoding_calls, self.receipt.encoding_chars) != usage:
             raise ValueError("encoding spend does not match ledger")
         scoring_policy = self.receipt.effective_config.scoring
         if encoding and (

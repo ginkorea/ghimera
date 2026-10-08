@@ -118,8 +118,10 @@ def validate_scored_context(
 
 
 def validate_scoring_readings(config: "GhimeraConfig", rows: tuple["LedgerRow", ...]) -> None:
-    enabled = config.document_judgment is not None or (
-        config.semantics is not None and config.semantics.window_selection is not None
+    enabled = (
+        config.document_judgment is not None
+        or (config.semantics is not None and config.semantics.window_selection is not None)
+        or (config.scoring is not None and config.scoring.run_encoding_recovery is not None)
     )
     for row in rows:
         if row.scoring_reading is not None:

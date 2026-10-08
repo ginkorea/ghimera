@@ -189,6 +189,12 @@ class GhimeraConfig(BaseModel):
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
+        if (
+            self.scoring is not None
+            and self.scoring.run_encoding_recovery is not None
+            and self.journal is None
+        ):
+            raise ValueError("run encoding recovery requires the native configured run journal")
         judgment = self.document_judgment
         if judgment is not None:
             if (

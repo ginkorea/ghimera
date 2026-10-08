@@ -1,9 +1,12 @@
 """Run-owned append-only ledger; immutable snapshots rather than exposed lists."""
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from ghimera.config import GhimeraConfig
 from ghimera.models import Harvest, LedgerRow
+
+if TYPE_CHECKING:
+    from ghimera.journal_types import JournalHeader
 
 
 class LedgerSink(Protocol):
@@ -32,6 +35,14 @@ class ReplayLedgerSink(DurableLedgerSink, Protocol):
 
     @property
     def committed_rows(self) -> tuple[LedgerRow, ...]: ...
+
+
+@runtime_checkable
+class RunLedgerSink(ReplayLedgerSink, Protocol):
+    @property
+    def header(self) -> "JournalHeader": ...
+
+    def check_capacity(self, record_bytes: tuple[int, ...]) -> None: ...
 
 
 class Ledger:
@@ -77,3 +88,17 @@ class Ledger:
             and self._sink.effective_config == config
             and self._sink.committed_rows == self.snapshot()
         )
+
+    def run_header(self, config: GhimeraConfig) -> "JournalHeader":
+        if not isinstance(self._sink, RunLedgerSink) or not self.has_replay_binding(config):
+            raise ValueError("run encoding requires its real native journal header and prefix")
+        header = self._sink.header
+        if header.config != config:
+            raise ValueError("native run header changed its effective recipe")
+        return header
+
+    def check_capacity(self, config: GhimeraConfig, record_bytes: tuple[int, ...]) -> None:
+        self.run_header(config)
+        if not isinstance(self._sink, RunLedgerSink):
+            raise ValueError("run encoding requires native bounded journal capacity")
+        self._sink.check_capacity(record_bytes)

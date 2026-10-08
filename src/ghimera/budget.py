@@ -32,6 +32,8 @@ class RunBudget:
         self.local_input_bytes = 0
         self.encoding_calls = 0
         self.encoding_chars = 0
+        self.encoding_lock = asyncio.Lock()
+        self.encoding_score_lock = asyncio.Lock()
         self.rerank_calls = 0
         self.rerank_pairs = 0
         self.rerank_chars = 0
@@ -73,6 +75,11 @@ class RunBudget:
         from ghimera.research_reranking import validate_rerank_rows
 
         rerank_usage = validate_rerank_rows(self.config, rows)
+        from ghimera.run_encoding import encoding_usage
+
+        restored_encoding = encoding_usage(self.config, rows)
+        if restored_encoding != (receipt.encoding_calls, receipt.encoding_chars):
+            raise ValueError("restored encoding receipt must preserve all original charged intents")
         admitted_unknown: tuple[int, ...] = ()
         if admission is not None:
             recovery = self.config.research_recovery
@@ -119,7 +126,7 @@ class RunBudget:
         self.fetches, self.bytes_read = receipt.fetches, receipt.bytes_read
         self.judge_calls = receipt.judge_calls
         self.rerank_calls, self.rerank_pairs, self.rerank_chars = rerank_usage
-        self.encoding_calls, self.encoding_chars = receipt.encoding_calls, receipt.encoding_chars
+        self.encoding_calls, self.encoding_chars = restored_encoding
         self.search_calls = search_calls
         self.challenge_attempts = sum(row.event == "challenge" for row in rows)
         self.local_inputs = sum(row.event == "local_input" for row in rows)

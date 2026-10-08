@@ -25,6 +25,8 @@ from ghimera.ledger import Ledger
 from ghimera.models import Extracted, Goal, LedgerRow, LinkCandidate
 from ghimera.ports import EvidenceEncoder
 from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused, RefusalCode
+from ghimera.run_encoding import BatchPlan, RunEncodingWork, encoding_batches
+from ghimera.run_encoding_types import RunEncodingDecision, RunEncodingScope
 from ghimera.scoring import Scorer
 from ghimera.scoring_config import ScoringConfig
 from ghimera.scoring_types import LinkSimilarity, SimilarityEvidence, WindowSimilarity
@@ -78,6 +80,7 @@ class EmbeddingScorer(Scorer):
         references: EmbeddingReferences | None = None,
         *,
         query_encoder: EvidenceEncoder | None = None,
+        encoding_decisions: tuple[RunEncodingDecision, ...] | None = None,
     ) -> None:
         if encoder.model.location != "self_hosted":
             raise ValueError("semantic scoring requires the explicitly self-hosted encoder")
@@ -114,6 +117,9 @@ class EmbeddingScorer(Scorer):
             raise ValueError("shelf vectors must match the pinned encoder, dimensions and prefix")
         self._policy, self._encoder, self._references = policy, encoder, references
         self._query_encoder = query_encoder or encoder
+        if encoding_decisions is not None and policy.run_encoding_recovery is None:
+            raise ValueError("explicit vector replay requires scoring/3 run encoding recovery")
+        self._encoding_decisions = encoding_decisions
         self._sessions: WeakKeyDictionary[RunBudget, _IntentSession] = WeakKeyDictionary()
 
     def validate_config(self, config: GhimeraConfig) -> None:
@@ -140,7 +146,7 @@ class EmbeddingScorer(Scorer):
         return similarities[index], index
 
     async def _references_for(
-        self, goal: Goal, budget: RunBudget, ledger: Ledger
+        self, goal: Goal, budget: RunBudget, ledger: Ledger, work: RunEncodingWork | None = None
     ) -> EmbeddingReferences:
         if self._references is not None:
             return self._references
@@ -175,7 +181,13 @@ class EmbeddingScorer(Scorer):
                 session.references = prepared.references
                 return session.references
             vectors = await self._encode(
-                (goal.text,), budget, ledger, None, encoder=self._query_encoder
+                (goal.text,),
+                budget,
+                ledger,
+                None,
+                encoder=self._query_encoder,
+                work=work,
+                purpose="intent",
             )
             service = self._policy.intent_encoder
             references = EmbeddingReferences(
@@ -194,7 +206,11 @@ class EmbeddingScorer(Scorer):
             )
             # One intent is one encoder input/batch. Capture the actual completed
             # call, not a sequence reserved before other tasks could append rows.
-            encoded = ledger.snapshot()[-1]
+            encoded = ledger.snapshot()[
+                work.last_encoding_sequence
+                if work is not None and work.last_encoding_sequence is not None
+                else -1
+            ]
             if encoded.encoding_call is None:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             evidence = IntentReferenceEvidence(
@@ -226,8 +242,16 @@ class EmbeddingScorer(Scorer):
         url: str | None,
         *,
         encoder: EvidenceEncoder | None = None,
+        work: RunEncodingWork | None = None,
+        purpose: str = "source",
     ) -> tuple[tuple[float, ...], ...]:
         encoder = encoder or self._encoder
+        if work is not None:
+            if purpose not in {"intent", "source"}:
+                raise ValueError("unknown run encoding purpose")
+            return await work.encode_texts(
+                "intent" if purpose == "intent" else "source", encoder, texts
+            )
         service = encoder.config
         output: list[tuple[float, ...]] = []
         pending: list[str] = []
@@ -324,32 +348,68 @@ class EmbeddingScorer(Scorer):
     async def rank(
         self, goal: Goal, document: Extracted, budget: RunBudget, ledger: Ledger
     ) -> tuple[LinkCandidate, ...]:
+        # Only opted-in score transactions serialize their ordered durable
+        # decisions. Legacy scoring and all other collection/model stages keep
+        # their existing concurrency. Cancellation releases this run-owned lock.
+        if self._policy.run_encoding_recovery is not None:
+            async with budget.encoding_score_lock:
+                return await self._rank(goal, document, budget, ledger)
+        return await self._rank(goal, document, budget, ledger)
+
+    async def _rank(
+        self, goal: Goal, document: Extracted, budget: RunBudget, ledger: Ledger
+    ) -> tuple[LinkCandidate, ...]:
         self.validate_config(budget.config)
         policy = self._policy
         config = budget.config
+        if policy.run_encoding_recovery is not None:
+            if ledger.run_header(config).goal != goal:
+                raise ValueError("run encoding requires the exact original journal goal")
         native_reading = (
             native_scoring_reading(ledger.snapshot(), document)
             if config.document_judgment is not None
             or (config.semantics is not None and config.semantics.window_selection is not None)
+            or policy.run_encoding_recovery is not None
             else None
         )
         source_binding = None
         if native_reading is not None:
-            reading_row = LedgerRow(
-                sequence=ledger.next_sequence,
-                event="scoring_source",
-                url=native_reading.source_url,
-                scoring_reading=native_reading,
-                reason="private_native_reading_before_encoding_not_accepted_content",
+            replay = next(
+                (
+                    decision
+                    for decision in self._encoding_decisions or ()
+                    if decision.mode == "replay"
+                ),
+                None,
             )
-            validate_scoring_readings(config, ledger.snapshot() + (reading_row,))
-            ledger.append(reading_row)
-            source_binding = scoring_source_binding(ledger.snapshot(), document)
+            if replay is not None:
+                sequence = replay.original_intent_sequence
+                if sequence is None or sequence >= ledger.next_sequence:
+                    raise ValueError("vector replay requires the original native reservation")
+                intent = ledger.snapshot()[sequence].run_encoding_intent
+                if intent is None:
+                    raise ValueError("vector replay requires the original run encoding intent")
+                source_binding = intent.scope.source
+                reading_sequence = source_binding.reading_sequence
+                if (
+                    reading_sequence >= ledger.next_sequence
+                    or ledger.snapshot()[reading_sequence].scoring_reading != native_reading
+                ):
+                    raise ValueError("vector replay changed its original native parser/reading")
+            else:
+                reading_row = LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="scoring_source",
+                    url=native_reading.source_url,
+                    scoring_reading=native_reading,
+                    reason="private_native_reading_before_encoding_not_accepted_content",
+                )
+                validate_scoring_readings(config, ledger.snapshot() + (reading_row,))
+                ledger.append(reading_row)
+                source_binding = scoring_source_binding(ledger.snapshot(), document)
         spans = selected_windows(document.text, goal, policy)
         if not spans:
             raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED)
-        references = await self._references_for(goal, budget, ledger)
-        reference_vectors = tuple(unit_vector(chunk.vector) for chunk in references.chunks)
         links = tuple(
             sorted(document.links, key=lambda link: keyword_score(goal, link), reverse=True)[
                 : policy.max_links
@@ -360,7 +420,38 @@ class EmbeddingScorer(Scorer):
         link_texts = tuple(
             link.url + "\n" + link.anchor[: policy.max_anchor_chars] for link in links
         )
-        vectors = await self._encode(windows + link_texts, budget, ledger, document.canonical_url)
+        work = None
+        if policy.run_encoding_recovery is not None:
+            if source_binding is None:
+                raise ValueError("run encoding requires the original source/parser binding")
+            scope = RunEncodingScope(
+                goal_text=goal.text,
+                document_sha256=hashlib.sha256(document.model_dump_json().encode()).hexdigest(),
+                canonical_url=document.canonical_url,
+                source=source_binding,
+                windows=spans,
+                link_inputs=link_texts,
+            )
+            plan: list[BatchPlan] = []
+            if self._references is None and not any(
+                row.intent_reference is not None for row in ledger.snapshot()
+            ):
+                plan.extend(
+                    ("intent", policy.intent_encoder, batch, start)
+                    for start, batch in encoding_batches(policy.intent_encoder, (goal.text,))
+                )
+            plan.extend(
+                ("source", policy.encoder, batch, start)
+                for start, batch in encoding_batches(policy.encoder, windows + link_texts)
+            )
+            work = RunEncodingWork(budget, ledger, scope, tuple(plan), self._encoding_decisions)
+        references = await self._references_for(goal, budget, ledger, work)
+        reference_vectors = tuple(unit_vector(chunk.vector) for chunk in references.chunks)
+        vectors = await self._encode(
+            windows + link_texts, budget, ledger, document.canonical_url, work=work
+        )
+        if work is not None and work.position != len(work.plan):
+            raise ValueError("run encoding did not consume its exact admitted decision schedule")
         observations = []
         for (start, end), text, vector in zip(spans, windows, vectors[: len(windows)], strict=True):
             cosine, index = self._cosine(vector, reference_vectors)
