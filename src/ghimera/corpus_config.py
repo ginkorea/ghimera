@@ -12,6 +12,16 @@ from ghimera.model_config import EmbeddingServiceConfig
 Positive = Annotated[int, Field(strict=True, gt=0)]
 
 
+class EncodingRecoveryConfig(BaseModel):
+    """Lifetime invocation allowance; reopening or failure never resets it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.encoding-recovery/1"] = Field(alias="schema")
+    max_calls: Positive
+    max_input_chars: Positive
+    max_stored_bytes: Positive
+
+
 class CorpusConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["ghimera.corpus/1"] = Field(alias="schema")
@@ -38,6 +48,9 @@ class CorpusConfig(BaseModel):
     hnsw_search: Positive
     database_timeout_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
     operation_timeout_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    encoding_recovery: EncodingRecoveryConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("directory")
     @classmethod
@@ -71,7 +84,10 @@ class CorpusConfig(BaseModel):
     @property
     def identity(self) -> str:
         # Relocation is not a new model/recipe; every other effective choice is.
-        return hashlib.sha256(self.model_dump_json(exclude={"directory"}).encode()).hexdigest()
+        excluded = {"directory"}
+        if self.encoding_recovery is None:
+            excluded.add("encoding_recovery")
+        return hashlib.sha256(self.model_dump_json(exclude=excluded).encode()).hexdigest()
 
     def same_passage_space(self, service: EmbeddingServiceConfig) -> bool:
         current = self.encoder

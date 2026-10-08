@@ -5,6 +5,7 @@ import hashlib
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from typing import Literal
 
 from ghimera.corpus_config import CorpusConfig
 from ghimera.corpus_index import NativePassageIndex
@@ -17,7 +18,14 @@ from ghimera.corpus_types import (
     CorpusReceipt,
     PassageKind,
 )
-from ghimera.embedding_types import EncodingBatch, EncodingCall
+from ghimera.embedding_types import (
+    EncodingBatch,
+    EncodingCall,
+    EncodingIntent,
+    EncodingRecoveryEvidence,
+    EncodingRecoveryState,
+    encoding_request,
+)
 from ghimera.models import Document, Harvest
 from ghimera.owned_worker import off_loop
 from ghimera.ports import EvidenceEncoder
@@ -137,6 +145,11 @@ class EvidenceCorpus:
         with self._operation():
             pass
 
+    def encoding_recovery_state(self) -> EncodingRecoveryState | None:
+        """Persistent admission totals, including unresolved work, never provider usage."""
+        with self._operation():
+            return self._storage.encoding_recovery_state()
+
     def document(self, document_id: str) -> Document:
         with self._operation():
             return self._storage.document(document_id)
@@ -171,12 +184,35 @@ class EvidenceCorpus:
         texts: tuple[str, ...],
         encoder: EvidenceEncoder,
         operation: str,
-        purpose: str,
+        purpose: Literal["passage", "query"],
         observer: Callable[[EncodingCall], None] | None = None,
-    ) -> tuple[EncodingBatch, int]:
+        *,
+        generation: int | None = None,
+    ) -> tuple[EncodingBatch, int, EncodingRecoveryEvidence | None]:
         service = encoder.config
         expected = tuple(digest((service.text_prefix + text).encode()) for text in texts)
         size = sum(len(service.text_prefix) + len(text) for text in texts)
+        intent = None
+        if self.config.encoding_recovery is not None:
+            intent = EncodingIntent(
+                schema="ghimera.encoding-intent/1",
+                corpus_id=self._storage.identity,
+                generation=self._storage.generation() if generation is None else generation,
+                purpose=purpose,
+                service=service,
+                texts=texts,
+                request_sha256=digest(encoding_request(service, texts)),
+            )
+            reused = self._storage.reserve_encoding(intent)
+            if reused is not None:
+                # A local recovery is not another model call; do not report new spend.
+                return *reused, EncodingRecoveryEvidence(
+                    schema="ghimera.encoding-recovery-evidence/1",
+                    invocation_sha256=intent.identity,
+                    original_call_id=reused[1],
+                    generation=intent.generation,
+                    reused=True,
+                )
         started = asyncio.get_running_loop().time()
         call: EncodingCall | None = None
         successful = False
@@ -187,6 +223,9 @@ class EvidenceCorpus:
             batch = EncodingBatch.model_validate(batch.model_dump())
             if call.service != service or call.input_sha256 != expected or call.input_chars != size:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            if intent is not None:
+                intent.validate_call(call)
+                identity = self._storage.acknowledge_encoding(operation, intent, batch)
             successful = True
         except (EncodingFailure, EncodingCancelled) as exc:
             call = exc.call
@@ -216,11 +255,25 @@ class EvidenceCorpus:
                 call = call.model_copy(update={"outcome": "refused"})
             call = EncodingCall.model_validate(call.model_dump())
             try:
-                identity = self._storage.audit(operation, purpose, call)
+                if not successful or intent is None:
+                    identity = self._storage.audit(operation, purpose, call)
+                if intent is not None and not successful:
+                    self._storage.refuse_encoding(intent, call)
             finally:
                 if observer is not None:
                     observer(call)
-        return batch, identity
+        evidence = (
+            None
+            if intent is None
+            else EncodingRecoveryEvidence(
+                schema="ghimera.encoding-recovery-evidence/1",
+                invocation_sha256=intent.identity,
+                original_call_id=identity,
+                generation=intent.generation,
+                reused=False,
+            )
+        )
+        return batch, identity, evidence
 
     def _batches(
         self, passages: tuple[CorpusPassage, ...]
@@ -294,13 +347,16 @@ class EvidenceCorpus:
             )
             vectors: list[tuple[CorpusPassage, tuple[float, ...], int, int]] = []
             calls: list[EncodingCall] = []
+            recovery: list[EncodingRecoveryEvidence] = []
             try:
                 async with asyncio.timeout(self.config.operation_timeout_seconds):
                     for pending in batches:
-                        batch, call_id = await self._encode(
+                        batch, call_id, evidence = await self._encode(
                             tuple(p.text for p in pending), self._encoder, operation, "passage"
                         )
                         calls.append(batch.call)
+                        if evidence is not None:
+                            recovery.append(evidence)
                         for position, (passage, vector) in enumerate(
                             zip(pending, batch.vectors, strict=True)
                         ):
@@ -325,6 +381,7 @@ class EvidenceCorpus:
                 total_documents=count_docs + len(documents),
                 total_passages=count_chunks + len(passages),
                 encoding_calls=tuple(calls),
+                encoding_recovery=tuple(recovery),
             )
 
     async def _snapshot(self) -> tuple[int, tuple[int, ...], NativePassageIndex]:
@@ -399,8 +456,13 @@ class EvidenceCorpus:
 
                         lexical = await off_loop(lexical_snapshot)
                         lexical.admit_query(text)
-                    batch, _ = await self._encode(
-                        (text,), self._query_encoder, operation, "query", encoding_observer
+                    batch, _, evidence = await self._encode(
+                        (text,),
+                        self._query_encoder,
+                        operation,
+                        "query",
+                        encoding_observer,
+                        generation=generation,
                     )
                     hits: list[CorpusHit] = []
                     neighbors = await off_loop(
@@ -444,6 +506,7 @@ class EvidenceCorpus:
                         generation=generation,
                         query_sha256=query_hash,
                         encoding_call=batch.call,
+                        encoding_recovery=evidence,
                         hits=tuple(hits),
                         retrieval=ranking,
                     )

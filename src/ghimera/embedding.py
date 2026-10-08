@@ -2,12 +2,17 @@
 
 import asyncio
 import hashlib
-import json
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
-from ghimera.embedding_types import EmbeddingUsage, EncodingBatch, EncodingCall, Vector
+from ghimera.embedding_types import (
+    EmbeddingUsage,
+    EncodingBatch,
+    EncodingCall,
+    Vector,
+    encoding_request,
+)
 from ghimera.model_config import EmbeddingServiceConfig
 from ghimera.model_http import (
     ModelHttpPort,
@@ -105,16 +110,7 @@ class SelfHostedEncoder:
                 or any(len(text) > service.max_text_chars for text in inputs)
             ):
                 raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
-            request: dict[str, str | list[str] | int] = {
-                "model": service.served_model,
-                "input": list(inputs),
-                "encoding_format": "float",
-            }
-            if service.request_dimensions:
-                request["dimensions"] = service.dimensions
-            body = json.dumps(
-                request, ensure_ascii=False, allow_nan=False, separators=(",", ":")
-            ).encode()
+            body = encoding_request(service, texts)
             if len(body) > service.max_request_bytes:
                 raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
             response = await self._http.post(body)

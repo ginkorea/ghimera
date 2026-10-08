@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ghimera.embedding_types import EncodingCall
+from ghimera.embedding_types import EncodingCall, EncodingRecoveryEvidence
 from ghimera.models import Document
 from ghimera.retrieval import RetrievalEvidence
 from ghimera.visual_types import ImageRegion
@@ -120,6 +120,9 @@ class CorpusReceipt(CorpusRecord):
     total_documents: Count
     total_passages: Count
     encoding_calls: tuple[EncodingCall, ...]
+    encoding_recovery: tuple[EncodingRecoveryEvidence, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
 
     @model_validator(mode="after")
     def reconciled(self) -> "CorpusReceipt":
@@ -128,6 +131,7 @@ class CorpusReceipt(CorpusRecord):
             or self.added_passages > self.total_passages
             or any(call.outcome != "success" for call in self.encoding_calls)
             or sum(len(call.input_sha256) for call in self.encoding_calls) != self.added_passages
+            or (self.encoding_recovery and len(self.encoding_recovery) != len(self.encoding_calls))
         ):
             raise ValueError("corpus receipt must reconcile its successful passage encodings")
         return self
@@ -146,6 +150,9 @@ class CorpusQuery(CorpusRecord):
     generation: Count
     query_sha256: Digest
     encoding_call: EncodingCall
+    encoding_recovery: EncodingRecoveryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     hits: tuple[CorpusHit, ...]
     approximate: Literal[True] = True
     retrieval: RetrievalEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -156,6 +163,10 @@ class CorpusQuery(CorpusRecord):
             self.encoding_call.outcome != "success"
             or len(self.encoding_call.input_sha256) != 1
             or len({hit.passage_id for hit in self.hits}) != len(self.hits)
+            or (
+                self.encoding_recovery is not None
+                and self.encoding_recovery.generation != self.generation
+            )
         ):
             raise ValueError("corpus query requires one successful encoding and distinct hits")
         if self.retrieval is not None:

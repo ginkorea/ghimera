@@ -11,7 +11,13 @@ from pydantic import TypeAdapter
 
 from ghimera.corpus_config import CorpusConfig
 from ghimera.corpus_types import BoundCorpusDocument, CorpusPassage
-from ghimera.embedding_types import EncodingCall, Vector
+from ghimera.embedding_types import (
+    EncodingBatch,
+    EncodingCall,
+    EncodingIntent,
+    EncodingRecoveryState,
+    Vector,
+)
 from ghimera.models import Document
 from ghimera.private_database import PrivateDatabase
 
@@ -51,6 +57,7 @@ class CorpusStorage:
                     or vector_bytes > config.max_vector_bytes
                 ):
                     raise ValueError("existing corpus exceeds the newly configured capacity")
+            self._initialize_recovery()
         except BaseException:
             self.close()
             raise
@@ -96,6 +103,148 @@ class CorpusStorage:
 
     def close(self) -> None:
         self._private.close()
+
+    def _initialize_recovery(self) -> None:
+        exists = self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='encoding_invocations'"
+        ).fetchone()
+        if self.config.encoding_recovery is None:
+            if exists is not None:
+                raise ValueError(
+                    "durable encoding recovery cannot be disabled on an enrolled corpus"
+                )
+            return
+        with self.transaction():
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS encoding_invocations("
+                "id TEXT PRIMARY KEY, intent BLOB NOT NULL, input_chars INTEGER NOT NULL,"
+                "status TEXT NOT NULL, reserved_bytes INTEGER NOT NULL, result BLOB,"
+                "result_sha TEXT, call_id INTEGER REFERENCES calls(id))"
+            )
+        self.encoding_recovery_state()
+
+    def encoding_recovery_state(self) -> EncodingRecoveryState | None:
+        policy = self.config.encoding_recovery
+        if policy is None:
+            return None
+        calls, chars, size, acknowledged, unresolved = self.db.execute(
+            "SELECT COUNT(*),COALESCE(SUM(input_chars),0),COALESCE(SUM(reserved_bytes),0),"
+            "COALESCE(SUM(status='acknowledged'),0),COALESCE(SUM(status='unknown'),0)"
+            " FROM encoding_invocations"
+        ).fetchone()
+        state = EncodingRecoveryState(
+            schema="ghimera.encoding-recovery-state/1",
+            reserved_calls=int(calls),
+            reserved_input_chars=int(chars),
+            stored_bytes=int(size),
+            acknowledged=int(acknowledged),
+            unresolved=int(unresolved),
+        )
+        if (
+            state.reserved_calls > policy.max_calls
+            or state.reserved_input_chars > policy.max_input_chars
+            or state.stored_bytes > policy.max_stored_bytes
+        ):
+            raise ValueError(
+                "persisted encoding reservations exceed the configured recovery allowance"
+            )
+        return state
+
+    def reserve_encoding(self, intent: EncodingIntent) -> tuple[EncodingBatch, int] | None:
+        """Commit an unknown reservation before contact, or return a validated local ACK."""
+        policy = self.config.encoding_recovery
+        if policy is None:
+            raise ValueError("encoding recovery is not configured")
+        intent = EncodingIntent.model_validate(intent.model_dump())
+        if intent.corpus_id != self.identity:
+            raise ValueError("encoding intent belongs to another corpus")
+        payload = intent.model_dump_json().encode()
+        with self.transaction():
+            row = self.db.execute(
+                "SELECT intent,status,result,result_sha,call_id FROM encoding_invocations"
+                " WHERE id=?",
+                (intent.identity,),
+            ).fetchone()
+            if row is not None:
+                if row[0] != payload:
+                    raise ValueError("stored encoding intent changed")
+                if row[1] != "acknowledged":
+                    raise ValueError(
+                        "encoding invocation requires reconciliation; automatic replay refused"
+                    )
+                return self._acknowledged_encoding(intent, row[2], row[3], row[4])
+            state = self.encoding_recovery_state()
+            if state is None:
+                raise ValueError("encoding recovery is not configured")
+            # Reserve input plus the entire bounded result before invoking any adapter.
+            # Finite IEEE-double JSON components can expand from short integer wire
+            # literals. Thirty-two bytes covers a signed round-trippable double
+            # plus its separator; this is a serialization invariant, not tuning.
+            result_bound = max(
+                intent.service.max_response_bytes,
+                intent.service.dimensions * len(intent.texts) * 32,
+            )
+            result_bound += len(intent.service.model_dump_json().encode()) + 2048
+            result_bound += 70 * intent.service.max_batch_texts
+            reserved = len(payload) + result_bound
+            if (
+                state.reserved_calls + 1 > policy.max_calls
+                or state.reserved_input_chars + intent.input_chars > policy.max_input_chars
+                or state.stored_bytes + reserved > policy.max_stored_bytes
+            ):
+                raise ValueError("durable encoding allowance exhausted before contact")
+            self.db.execute(
+                "INSERT INTO encoding_invocations VALUES(?,?,?,'unknown',?,NULL,NULL,NULL)",
+                (intent.identity, payload, intent.input_chars, reserved),
+            )
+        return None
+
+    def _acknowledged_encoding(
+        self, intent: EncodingIntent, result: object, sha: object, call_id: object
+    ) -> tuple[EncodingBatch, int]:
+        if not isinstance(result, bytes) or digest(result) != sha or type(call_id) is not int:
+            raise ValueError("stored encoding acknowledgement changed or is incomplete")
+        batch = EncodingBatch.model_validate_json(result)
+        intent.validate_call(batch.call)
+        row = self.db.execute("SELECT payload FROM calls WHERE id=?", (call_id,)).fetchone()
+        if row is None or EncodingCall.model_validate_json(row[0]) != batch.call:
+            raise ValueError("encoding acknowledgement lost its original audit lineage")
+        return batch, call_id
+
+    def acknowledge_encoding(
+        self, operation: str, intent: EncodingIntent, batch: EncodingBatch
+    ) -> int:
+        """Persist observed vectors and audit atomically before returning them to the caller."""
+        batch = EncodingBatch.model_validate(batch.model_dump())
+        intent.validate_call(batch.call)
+        result = batch.model_dump_json().encode()
+        with self.transaction():
+            row = self.db.execute(
+                "SELECT intent,reserved_bytes FROM encoding_invocations"
+                " WHERE id=? AND status='unknown'",
+                (intent.identity,),
+            ).fetchone()
+            if row is None or row[0] != intent.model_dump_json().encode():
+                raise ValueError("encoding result has no exact pre-contact intent")
+            size = len(row[0]) + len(result)
+            if size > int(row[1]):
+                raise ValueError("encoding result exceeds its pre-contact storage reservation")
+            call_id = self._audit(operation, intent.purpose, batch.call)
+            self.db.execute(
+                "UPDATE encoding_invocations SET status='acknowledged',reserved_bytes=?,"
+                "result=?,result_sha=?,call_id=? WHERE id=?",
+                (size, result, digest(result), call_id, intent.identity),
+            )
+        return call_id
+
+    def refuse_encoding(self, intent: EncodingIntent, call: EncodingCall) -> None:
+        # Observation of failure does not prove that the server did no work.
+        # Keep the reservation charged, and never turn it into a retry allowance.
+        with self.transaction():
+            self.db.execute(
+                "UPDATE encoding_invocations SET status=? WHERE id=? AND status='unknown'",
+                (call.outcome if call.telemetry == "observed" else "unknown", intent.identity),
+            )
 
     def counts(self) -> tuple[int, int, int, int]:
         self.check()
@@ -188,28 +337,31 @@ class CorpusStorage:
 
     def audit(self, operation: str, purpose: str, call: EncodingCall) -> int:
         self.check()
-        data = call.model_dump_json().encode()
         with self.transaction():
-            row = self.db.execute(
-                "SELECT reserved_entries,reserved_bytes FROM operations"
-                " WHERE id=? AND status='pending'",
-                (operation,),
-            ).fetchone()
-            if row is None or int(row[0]) < 1 or int(row[1]) < len(data):
-                raise ValueError("encoding audit exceeds its pre-call reservation")
-            cursor = self.db.execute(
-                "INSERT INTO calls(operation,purpose,payload) VALUES(?,?,?)",
-                (operation, purpose, data),
-            )
-            self.db.execute(
-                "UPDATE operations SET reserved_entries=reserved_entries-1,"
-                "reserved_bytes=reserved_bytes-? WHERE id=?",
-                (len(data), operation),
-            )
-            identity = cursor.lastrowid
-            if identity is None:
-                raise ValueError("encoding audit was not acknowledged")
-            return identity
+            return self._audit(operation, purpose, call)
+
+    def _audit(self, operation: str, purpose: str, call: EncodingCall) -> int:
+        data = call.model_dump_json().encode()
+        row = self.db.execute(
+            "SELECT reserved_entries,reserved_bytes FROM operations"
+            " WHERE id=? AND status='pending'",
+            (operation,),
+        ).fetchone()
+        if row is None or int(row[0]) < 1 or int(row[1]) < len(data):
+            raise ValueError("encoding audit exceeds its pre-call reservation")
+        cursor = self.db.execute(
+            "INSERT INTO calls(operation,purpose,payload) VALUES(?,?,?)",
+            (operation, purpose, data),
+        )
+        self.db.execute(
+            "UPDATE operations SET reserved_entries=reserved_entries-1,"
+            "reserved_bytes=reserved_bytes-? WHERE id=?",
+            (len(data), operation),
+        )
+        identity = cursor.lastrowid
+        if identity is None:
+            raise ValueError("encoding audit was not acknowledged")
+        return identity
 
     def terminal(self, operation: str, status: str) -> None:
         with self.db:
@@ -296,7 +448,7 @@ class CorpusStorage:
                 )
                 ids.append(int(identity))
             source: BoundCorpusDocument | None = None
-            for passage_id in ids:
+            for passage_id, stored_vector in zip(ids, vectors, strict=True):
                 passage = self._passage(passage_id)
                 if source is None or source.identity != passage.document_id:
                     source = BoundCorpusDocument(self.document(passage.document_id))
@@ -319,6 +471,23 @@ class CorpusStorage:
                     != digest((self.config.encoder.text_prefix + passage.text).encode())
                 ):
                     raise ValueError("vector's native input does not match its encoding call")
+                if self.config.encoding_recovery is not None:
+                    recovery = self.db.execute(
+                        "SELECT intent,result,result_sha,call_id FROM encoding_invocations"
+                        " WHERE call_id=(SELECT encoding_id FROM chunks WHERE id=?)"
+                        " AND status='acknowledged'",
+                        (passage_id,),
+                    ).fetchone()
+                    # Vectors created before opting in retain their original legacy audit.
+                    if recovery is not None:
+                        intent = EncodingIntent.model_validate_json(recovery[0])
+                        batch, _ = self._acknowledged_encoding(
+                            intent, recovery[1], recovery[2], recovery[3]
+                        )
+                        if stored_vector != batch.vectors[position]:
+                            raise ValueError(
+                                "stored vector differs from its exact acknowledged result"
+                            )
             return generation, tuple(ids), tuple(vectors)
         finally:
             self.db.rollback()

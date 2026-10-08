@@ -1,0 +1,8 @@
+# Optional section to add to a reviewed examples/corpus.toml recipe.
+# This example opens no store and contacts no model. Capacity is an operator choice.
+# The allowance is lifetime per native corpus, including failed/unknown invocations.
+[encoding_recovery]
+schema = "ghimera.encoding-recovery/1"
+max_calls = 100
+max_input_chars = 2000000
+max_stored_bytes = 67108864

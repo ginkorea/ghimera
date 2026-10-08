@@ -1,6 +1,7 @@
 """Audited embedding batches and version-bound shelf reference vectors."""
 
 import hashlib
+import json
 import math
 from typing import Annotated, Literal
 
@@ -11,6 +12,90 @@ from ghimera.model_config import EmbeddingServiceConfig
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Count = Annotated[int, Field(strict=True, ge=0)]
 Vector = Annotated[tuple[Annotated[float, Field(allow_inf_nan=False)], ...], Field(min_length=1)]
+
+
+def encoding_request(service: EmbeddingServiceConfig, texts: tuple[str, ...]) -> bytes:
+    """The canonical native wire request, shared with durable invocation admission."""
+    inputs = tuple(service.text_prefix + text for text in texts)
+    request: dict[str, str | list[str] | int] = {
+        "model": service.served_model,
+        "input": list(inputs),
+        "encoding_format": "float",
+    }
+    if service.request_dimensions:
+        request["dimensions"] = service.dimensions
+    return json.dumps(request, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
+
+
+class EncodingIntent(BaseModel):
+    """Exact pre-contact inputs; unknown intent is never evidence of a remote ACK."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.encoding-intent/1"] = Field(alias="schema")
+    corpus_id: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+    generation: Count
+    purpose: Literal["passage", "query"]
+    service: EmbeddingServiceConfig
+    texts: Annotated[tuple[str, ...], Field(min_length=1)]
+    request_sha256: Digest
+
+    @model_validator(mode="after")
+    def exact_request(self) -> "EncodingIntent":
+        inputs = tuple(self.service.text_prefix + text for text in self.texts)
+        request = encoding_request(self.service, self.texts)
+        if (
+            any(not text.strip() for text in self.texts)
+            or len(inputs) > self.service.max_batch_texts
+            or sum(map(len, inputs)) > self.service.max_input_chars
+            or any(len(text) > self.service.max_text_chars for text in inputs)
+            or len(request) > self.service.max_request_bytes
+        ):
+            raise ValueError("encoding intent exceeds the configured input allowance")
+        if hashlib.sha256(request).hexdigest() != self.request_sha256:
+            raise ValueError("encoding intent does not bind the exact request")
+        return self
+
+    @property
+    def identity(self) -> str:
+        return hashlib.sha256(self.model_dump_json().encode()).hexdigest()
+
+    @property
+    def input_chars(self) -> int:
+        return sum(len(self.service.text_prefix) + len(text) for text in self.texts)
+
+    def validate_call(self, call: "EncodingCall") -> None:
+        if (
+            call.service != self.service
+            or call.request_sha256 != self.request_sha256
+            or call.input_sha256
+            != tuple(
+                hashlib.sha256((self.service.text_prefix + text).encode()).hexdigest()
+                for text in self.texts
+            )
+            or call.input_chars != self.input_chars
+        ):
+            raise ValueError("encoding acknowledgement does not match its reserved intent")
+
+
+class EncodingRecoveryState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.encoding-recovery-state/1"] = Field(alias="schema")
+    reserved_calls: Count
+    reserved_input_chars: Count
+    stored_bytes: Count
+    acknowledged: Count
+    unresolved: Count
+
+
+class EncodingRecoveryEvidence(BaseModel):
+    """Original audit lineage and whether this operation reused its acknowledged vectors."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.encoding-recovery-evidence/1"] = Field(alias="schema")
+    invocation_sha256: Digest
+    original_call_id: Annotated[int, Field(strict=True, gt=0)]
+    generation: Count
+    reused: bool
 
 
 def unit_vector(vector: tuple[float, ...]) -> tuple[float, ...]:
