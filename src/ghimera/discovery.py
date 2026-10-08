@@ -60,8 +60,12 @@ class BoundSearch(GroundedSearch):
         rerank_decision: RerankDecision | None,
         query_work: QueryWork | None = None,
     ) -> SearchResponse:
-        response = await self._adapter.request_for_run(
-            request, budget, ledger, rerank_decision, query_work
+        response = (
+            await self._adapter.request_for_run(request, budget, ledger, rerank_decision)
+            if query_work is None
+            else await self._adapter.request_for_run(
+                request, budget, ledger, rerank_decision, query_work
+            )
         )
         return self._filter(request, response)
 

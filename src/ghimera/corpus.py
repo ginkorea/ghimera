@@ -587,8 +587,13 @@ class EvidenceCorpus:
                 reservation.corpus.encoding_invocation_sha256
             )
             if query is not None and (
-                query.encoding_call != batch.call
+                query.corpus_id != reservation.corpus.corpus_id
+                or query.config_sha256 != reservation.corpus.configuration.identity
+                or query.generation != reservation.corpus.generation
+                or query.query_sha256 != digest(text.encode())
+                or query.encoding_call != batch.call
                 or query.encoding_recovery is None
+                or query.encoding_recovery.generation != reservation.corpus.generation
                 or query.encoding_recovery.original_call_id != call_id
                 or query.encoding_recovery.invocation_sha256
                 != reservation.corpus.encoding_invocation_sha256

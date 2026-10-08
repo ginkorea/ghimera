@@ -146,8 +146,12 @@ class GroundedSearch(ABC):
         try:
             try:
                 async with asyncio.timeout(request.timeout_seconds):
-                    response = await self.request_for_run(
-                        request, budget, ledger, rerank_decision, query_work
+                    response = (
+                        await self.request_for_run(request, budget, ledger, rerank_decision)
+                        if query_work is None
+                        else await self.request_for_run(
+                            request, budget, ledger, rerank_decision, query_work
+                        )
                     )
                 size = min(len(response.raw), allowance)
                 if len(response.raw) > allowance or len(response.hits) > request.limit:

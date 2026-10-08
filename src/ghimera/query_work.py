@@ -318,6 +318,15 @@ def validate_query_rows(config: "GhimeraConfig", rows: tuple["LedgerRow", ...]) 
                         from ghimera.corpus_search_wire import CorpusSearchWire
 
                         wire = CorpusSearchWire.model_validate_json(response.raw)
+                        if (
+                            wire.query.corpus_id != original.corpus.corpus_id
+                            or wire.query.config_sha256 != original.corpus.configuration.identity
+                            or wire.query.generation != original.corpus.generation
+                            or wire.query_text != request.query.text
+                        ):
+                            raise ValueError(
+                                "discovery ACK changed its original corpus/query/generation"
+                            )
                         if wire.query.reranking is not None:
                             validate_run_evidence(
                                 config,
