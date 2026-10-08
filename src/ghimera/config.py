@@ -346,6 +346,20 @@ class GhimeraConfig(BaseModel):
                 raise ValueError("graph planning relations require all endpoint roles")
         if self.semantics is not None:
             graph, models, semantic = self.graph, self.models, self.semantics
+            if semantic.window_selection is not None and (
+                self.scoring is None or self.scoring.reference_source != "intent"
+            ):
+                raise ValueError("intent-ranked semantics requires native intent scoring")
+            if (
+                semantic.window_selection is not None
+                and self.research is not None
+                and (
+                    self.research.graph_context is None or self.research.graph_context.max_gaps == 0
+                )
+            ):
+                raise ValueError(
+                    "ranked semantic research requires explicit planning omission gaps"
+                )
             if (
                 semantic.failure is not None
                 and self.research is not None

@@ -6,6 +6,7 @@ from typing import Literal
 from ghimera.config import GhimeraConfig
 from ghimera.models import Document, LedgerRow
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.semantic_selection_types import SemanticSelectionRef
 from ghimera.semantic_types import SemanticProposal, SemanticRefusal
 
 
@@ -28,6 +29,7 @@ def failed_window(
     *,
     allow_continue: bool,
     record_terminal: bool = False,
+    selection: SemanticSelectionRef | None = None,
 ) -> SemanticRefusal | None:
     policy = config.semantics
     if policy is None or (policy.failure is None and not record_terminal):
@@ -56,4 +58,5 @@ def failed_window(
         proposal=proposal,
         review_sequences=reviews,
         continued=continued,
+        selection=selection,
     )

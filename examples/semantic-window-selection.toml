@@ -1,0 +1,8 @@
+# Optional nested policy: embed as [semantics.window_selection] in a complete
+# validated run recipe. Omit it to preserve sequential prefix extraction.
+# Requires scoring.reference_source = "intent" and source-bound native scoring.
+# Outer semantics.window_chars/max_windows_per_document still apply unchanged.
+schema = "ghimera.semantic-window-selection/1"
+strategy = "intent_ranked"
+max_selected_chars = 6000
+padding_chars = 600

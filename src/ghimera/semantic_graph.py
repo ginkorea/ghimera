@@ -26,6 +26,17 @@ from ghimera.models import Document, Harvest, LedgerRow, ModelIdentity
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from ghimera.semantic_batching import assemble_review, review_selections
 from ghimera.semantic_recovery import SemanticRecoveryStopped, failed_window
+from ghimera.semantic_selection import (
+    make_selection,
+    validate_attempt,
+)
+from ghimera.semantic_selection import (
+    validate_rows as validate_selection_rows,
+)
+from ghimera.semantic_selection import (
+    validate_source as validate_selection_source,
+)
+from ghimera.semantic_selection_types import SemanticSelection, SemanticSelectionRef
 from ghimera.semantic_types import (
     BatchedSemanticReview,
     ExclusionReason,
@@ -125,16 +136,30 @@ def project(
     omitted: int,
     intent: str,
     review: SemanticReview | None = None,
+    selection: SemanticSelection | None = None,
+    selection_ref: SemanticSelectionRef | None = None,
 ) -> SemanticWindow:
     proposal = SemanticProposal.model_validate(proposal.model_dump())
     policy, graph_policy, call = config.semantics, config.graph, proposal.model_call
-    if (
-        policy is None
-        or graph_policy is None
-        or call is None
-        or omitted not in {0, len(document.extracted.text) - end}
-    ):
+    if policy is None or graph_policy is None or call is None:
         raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+    if policy.window_selection is None:
+        if (
+            selection is not None
+            or selection_ref is not None
+            or omitted not in {0, len(document.extracted.text) - end}
+        ):
+            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+    else:
+        if selection is None or selection_ref is None or selection.graph_document_id != document_id:
+            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+        try:
+            validate_selection_source(selection, document, policy)
+            validate_attempt(
+                selection, selection_ref, selection_ref.window_index, start, end, omitted
+            )
+        except ValueError:
+            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED) from None
     if (policy.verification is not None) != (review is not None):
         raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
     if review is not None:
@@ -264,6 +289,7 @@ def project(
         start=start,
         end=end,
         omitted_chars=omitted,
+        selection=selection_ref,
         proposal=proposal,
         entities=tuple(entities),
         nodes=tuple(nodes.values()),
@@ -329,18 +355,72 @@ class SemanticStage:
         ):
             raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
         text = document.extracted.text
-        for number, start in enumerate(range(0, len(text), policy.window_chars)):
-            if number >= policy.max_windows_per_document:
-                break
-            end = min(start + policy.window_chars, len(text))
-            last = number + 1 == policy.max_windows_per_document or end == len(text)
+        plan: SemanticSelection | None = None
+        if policy.window_selection is not None:
+            # Never restart an existing partial plan or replay an unknown call.
+            if any(
+                row.semantic_selection is not None
+                and row.semantic_selection.graph_document_id == document_id
+                for row in ledger.snapshot()
+            ):
+                raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+            try:
+                plan = make_selection(
+                    self._config, document, document_id, intent, ledger.snapshot()
+                )
+            except ValueError:
+                raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED) from None
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="semantic_selection",
+                    url=document.url,
+                    semantic_selection=plan,
+                    reason="intent_ranked_native_window_selection",
+                )
+            )
+            spans = tuple((w.start, w.end) for w in plan.context.windows)
+        else:
+            spans = tuple(
+                (start, min(start + policy.window_chars, len(text)))
+                for start in range(
+                    0,
+                    min(len(text), policy.window_chars * policy.max_windows_per_document),
+                    policy.window_chars,
+                )
+            )
+        for number, (start, end) in enumerate(spans):
+            last = number + 1 == len(spans)
+            omitted = (
+                (plan.context.omitted_chars if plan is not None else len(text) - end) if last else 0
+            )
+            selection_ref = (
+                SemanticSelectionRef(
+                    selection_sha256=plan.content_digest(),
+                    window_index=number,
+                )
+                if plan is not None
+                else None
+            )
             invocation = ModelInvocation(
                 budget,
                 ledger,
                 phase="semantic_extract",
                 model=self._extractor.model,
                 url=document.url,
-                request=port_input(budget, document, policy, intent=intent, start=start, end=end),
+                request=port_input(
+                    budget,
+                    document,
+                    policy,
+                    *(
+                        (plan, selection_ref)
+                        if plan is not None and selection_ref is not None
+                        else ()
+                    ),
+                    intent=intent,
+                    start=start,
+                    end=end,
+                ),
                 reserve=budget.reserve_semantic,
             )
             call: ModelCallEvidence | None = None
@@ -348,6 +428,41 @@ class SemanticStage:
             phase: Literal["extract", "review", "projection"] = "extract"
             first_review_sequence = ledger.next_sequence
             committed = False
+
+            def cancelled_window(
+                start: int,
+                end: int,
+                omitted: int,
+                phase: Literal["extract", "review", "projection"],
+                proposal: SemanticProposal | None,
+                first_review_sequence: int,
+                selection_ref: SemanticSelectionRef | None,
+            ) -> SemanticRefusal | None:
+                if plan is None:
+                    return None
+                return failed_window(
+                    self._config,
+                    document,
+                    document_id,
+                    start,
+                    end,
+                    omitted,
+                    phase,
+                    proposal,
+                    tuple(
+                        row.sequence
+                        for row in ledger.snapshot()
+                        if row.event == "semantic_review"
+                        and row.sequence >= first_review_sequence
+                        and row.url == document.url
+                    ),
+                    ledger.snapshot(),
+                    RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+                    allow_continue=False,
+                    record_terminal=True,
+                    selection=selection_ref,
+                )
+
             try:
                 async with asyncio.timeout(budget.remaining_seconds):
                     extracted = await invocation.invoke(
@@ -362,7 +477,16 @@ class SemanticStage:
                 proposal = validated
                 phase = "review"
                 review = await self._review(
-                    intent, document, start, end, policy, proposal, budget, ledger
+                    intent,
+                    document,
+                    start,
+                    end,
+                    policy,
+                    proposal,
+                    budget,
+                    ledger,
+                    plan,
+                    selection_ref,
                 )
                 phase = "projection"
                 observation = project(
@@ -373,9 +497,11 @@ class SemanticStage:
                     proposal,
                     start,
                     end,
-                    len(text) - end if last else 0,
+                    omitted,
                     intent,
                     review,
+                    plan,
+                    selection_ref,
                 )
                 pending = asyncio.create_task(
                     graph.append(nodes=observation.nodes, edges=observation.edges)
@@ -402,13 +528,31 @@ class SemanticStage:
                     raise asyncio.CancelledError
             except ModelCancelled as exc:
                 self._failure(
-                    ledger, document.url, RefusalCode.SEMANTIC_EXTRACTION_FAILED, exc.model_call
+                    ledger,
+                    document.url,
+                    RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+                    exc.model_call,
+                    cancelled_window(
+                        start, end, omitted, phase, proposal, first_review_sequence, selection_ref
+                    ),
                 )
                 raise
             except asyncio.CancelledError:
                 if not committed:
                     self._failure(
-                        ledger, document.url, RefusalCode.SEMANTIC_EXTRACTION_FAILED, call
+                        ledger,
+                        document.url,
+                        RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+                        call,
+                        cancelled_window(
+                            start,
+                            end,
+                            omitted,
+                            phase,
+                            proposal,
+                            first_review_sequence,
+                            selection_ref,
+                        ),
                     )
                 raise
             except (GhimeraRefused, TimeoutError, ValidationError) as exc:
@@ -427,7 +571,7 @@ class SemanticStage:
                     document_id,
                     start,
                     end,
-                    len(text) - end if last else 0,
+                    omitted,
                     phase,
                     proposal,
                     tuple(
@@ -440,7 +584,8 @@ class SemanticStage:
                     ledger.snapshot(),
                     code,
                     allow_continue=not committed,
-                    record_terminal=record_terminal_refusal,
+                    record_terminal=record_terminal_refusal or plan is not None,
+                    selection=selection_ref,
                 )
                 self._failure(ledger, document.url, code, call, refusal)
                 if refusal is not None and refusal.continued:
@@ -459,6 +604,8 @@ class SemanticStage:
         proposal: SemanticProposal,
         budget: RunBudget,
         ledger: Ledger,
+        native_selection: SemanticSelection | None = None,
+        native_selection_ref: SemanticSelectionRef | None = None,
     ) -> SemanticReview | None:
         if self._reviewer is None:
             return None
@@ -480,7 +627,17 @@ class SemanticStage:
             parts: list[ReviewPart] = []
             for selection in selections:
                 review = await self._review_once(
-                    intent, document, start, end, policy, proposal, budget, ledger, selection
+                    intent,
+                    document,
+                    start,
+                    end,
+                    policy,
+                    proposal,
+                    budget,
+                    ledger,
+                    selection,
+                    native_selection,
+                    native_selection_ref,
                 )
                 if not isinstance(review, GroundedSemanticReview):
                     raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
@@ -491,7 +648,16 @@ class SemanticStage:
                 intent, document, start, end, policy, proposal
             )
         return await self._review_once(
-            intent, document, start, end, policy, proposal, budget, ledger
+            intent,
+            document,
+            start,
+            end,
+            policy,
+            proposal,
+            budget,
+            ledger,
+            native_selection=native_selection,
+            native_selection_ref=native_selection_ref,
         )
 
     async def _review_once(
@@ -505,6 +671,8 @@ class SemanticStage:
         budget: RunBudget,
         ledger: Ledger,
         selection: ReviewSelection | None = None,
+        native_selection: SemanticSelection | None = None,
+        native_selection_ref: SemanticSelectionRef | None = None,
     ) -> SemanticReview:
         if self._reviewer is None:
             raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
@@ -531,6 +699,11 @@ class SemanticStage:
                 policy,
                 proposal,
                 *((selection,) if selection is not None else ()),
+                *(
+                    (native_selection, native_selection_ref)
+                    if native_selection is not None and native_selection_ref is not None
+                    else ()
+                ),
                 intent=intent,
                 start=start,
                 end=end,
@@ -610,6 +783,7 @@ class SemanticStage:
 
 
 def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple[LedgerRow, ...]:
+    validate_selection_rows(config, ledger)
     rows = tuple(row for row in ledger if row.event == "semantic")
     reviews = tuple(row for row in ledger if row.event == "semantic_review")
     policy = config.semantics
@@ -743,6 +917,7 @@ def validate_harvest(harvest: Harvest) -> None:
     config, snapshot = harvest.receipt.effective_config, harvest.graph
     policy = config.semantics
     rows = validate_rows(config, harvest.ledger)
+    selections = validate_selection_rows(config, harvest.ledger)
     marked = (
         tuple(edge for edge in snapshot.edges if edge.claim_status is not None) if snapshot else ()
     )
@@ -785,6 +960,28 @@ def validate_harvest(harvest: Harvest) -> None:
             )
         )
 
+    for selection_row in harvest.ledger:
+        selection = selection_row.semantic_selection
+        if selection is None:
+            continue
+        node = nodes.get(selection.graph_document_id)
+        matches = readings(node) if node is not None else ()
+        if not matches or node is None or node.role != "document":
+            raise ValueError("semantic selection requires its admitted original graph source")
+        selected_document = matches[0]
+        validate_selection_source(selection, selected_document, policy)
+        expected_selection = make_selection(
+            config,
+            selected_document,
+            node.id,
+            harvest.goal.text,
+            harvest.ledger[: selection_row.sequence],
+        )
+        if expected_selection != selection:
+            raise ValueError(
+                "semantic selection must replay exactly from its earlier original source"
+            )
+
     for row in rows:
         observation = row.semantic_window or row.semantic_refusal
         if observation is None:
@@ -813,14 +1010,19 @@ def validate_harvest(harvest: Harvest) -> None:
             or observation.text_sha256
             != hashlib.sha256(document.extracted.text.encode()).hexdigest()
             or counts[key] > policy.max_windows_per_document
-            or observation.start != (counts[key] - 1) * policy.window_chars
-            or observation.end
-            != min(observation.start + policy.window_chars, len(document.extracted.text))
-            or observation.omitted_chars
-            != (
-                len(document.extracted.text) - observation.end
-                if counts[key] == policy.max_windows_per_document
-                else 0
+            or (
+                policy.window_selection is None
+                and (
+                    observation.start != (counts[key] - 1) * policy.window_chars
+                    or observation.end
+                    != min(observation.start + policy.window_chars, len(document.extracted.text))
+                    or observation.omitted_chars
+                    != (
+                        len(document.extracted.text) - observation.end
+                        if counts[key] == policy.max_windows_per_document
+                        else 0
+                    )
+                )
             )
         ):
             raise ValueError(
@@ -848,6 +1050,8 @@ def validate_harvest(harvest: Harvest) -> None:
             observation.omitted_chars,
             harvest.goal.text,
             observation.review,
+            selections.get(key),
+            observation.selection,
         )
         if (
             expected != observation
@@ -870,7 +1074,12 @@ def validate_harvest(harvest: Harvest) -> None:
         )
         retained_nodes = tuple(node for node in matching_nodes if node.retained_source is not None)
         for node in retained_nodes:
-            if counts.get(node.id, 0) != expected_count and not any(
+            node_expected = (
+                len(selections[node.id].context.windows)
+                if node.id in selections
+                else expected_count
+            )
+            if counts.get(node.id, 0) != node_expected and not any(
                 row.refusal is not None
                 and (
                     (
@@ -884,7 +1093,15 @@ def validate_harvest(harvest: Harvest) -> None:
                 raise ValueError(
                     "retained graph originals require their own semantic coverage or refusal"
                 )
-        if not any(counts.get(node.id, 0) == expected_count for node in matching_nodes) and not any(
+        if not any(
+            counts.get(node.id, 0)
+            == (
+                len(selections[node.id].context.windows)
+                if node.id in selections
+                else expected_count
+            )
+            for node in matching_nodes
+        ) and not any(
             row.url == document.url
             and row.refusal is not None
             and row.event in {"semantic", "refusal"}

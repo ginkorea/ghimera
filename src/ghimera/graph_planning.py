@@ -17,6 +17,7 @@ from ghimera.graph_planning_types import (
     PlanningGap,
     PlanningGraph,
     PlanningRefusalGap,
+    PlanningSelectionGap,
     PlanningSource,
     ResearchGap,
 )
@@ -29,6 +30,8 @@ from ghimera.model_citations import citation_id
 from ghimera.models import Document, LedgerRow
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.semantic_grounding import validate_coverage_findings
+from ghimera.semantic_selection import validate_rows as validate_selection_rows
+from ghimera.semantic_selection import validate_source
 from ghimera.semantic_types import BatchedSemanticReview, GroundedSemanticReview, OmittedMention
 from ghimera.visual_evidence import graph_visual_readings
 
@@ -61,6 +64,7 @@ def evidence_size(
     return (
         sum(len(entity.evidence.quote) for entity in entities)
         + sum(len(span.quote) for edge in relations for span in edge.evidence)
+        + sum(gap.selection.context.selected_chars for gap in gaps if gap.selection is not None)
         + sum(
             len(finding.surface)
             if isinstance(finding, OmittedMention)
@@ -78,11 +82,31 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
     policy = policy_of(config)
     if policy is None:
         return None
+    selections = validate_selection_rows(config, rows)
     entities: dict[str, PlanningEntity] = {}
     relations: dict[str, GraphEdge] = {}
     sources: dict[str, PlanningSource] = {}
     gaps: dict[str, ResearchGap] = {}
     for row in rows:
+        selected_plan = row.semantic_selection
+        if selected_plan is not None and selected_plan.context.omitted_chars and policy.max_gaps:
+            source = PlanningSource(
+                document_id=selected_plan.graph_document_id,
+                source_url=selected_plan.context.source_url,
+                document_sha256=selected_plan.context.source_sha256,
+                text_sha256=selected_plan.context.text_sha256,
+            )
+            sources[source.document_id] = source
+            identity = "gap:" + selected_plan.content_digest()
+            gaps[identity] = PlanningSelectionGap(
+                kind="semantic_selection",
+                id=identity,
+                source=source,
+                start=0,
+                end=selected_plan.context.total_chars,
+                omitted_chars=selected_plan.context.omitted_chars,
+                selection=selected_plan,
+            )
         failed = row.semantic_refusal
         if failed is not None and policy.schema_version in {
             "ghimera.graph-planning/4",
@@ -114,6 +138,7 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
                 else None,
                 review_sequences=failed.review_sequences,
                 continued=failed.continued,
+                selection=selections.get(failed.graph_document_id),
             )
         window = row.semantic_window
         if window is None:
@@ -157,6 +182,7 @@ def build_context(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> Plannin
                 review_request_sha256=review.model_call.request_sha256,
                 review_model_id=review.model_call.service.model_id,
                 review_model_revision=review.model_call.service.revision,
+                selection=selections.get(window.graph_document_id),
             )
         admitted = {node.id for node in window.nodes}
         for entity in window.entities:
@@ -368,11 +394,30 @@ def validate_context(
     for gap in context.gaps:
         document = docs[gap.source.document_id][0]
         text = document.extracted.text
-        if not 0 <= gap.start < gap.end <= len(text) or gap.omitted_chars not in {
-            0,
-            len(text) - gap.end,
-        }:
+        if not 0 <= gap.start < gap.end <= len(text):
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+        if gap.selection is None:
+            if gap.omitted_chars not in {0, len(text) - gap.end}:
+                raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+        else:
+            if (
+                config.semantics is None
+                or gap.source.document_id != gap.selection.graph_document_id
+            ):
+                raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+            try:
+                validate_source(gap.selection, document, config.semantics)
+            except ValueError:
+                raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT) from None
+            if not isinstance(gap, PlanningSelectionGap):
+                windows = gap.selection.context.windows
+                matches = tuple(
+                    i for i, w in enumerate(windows) if (w.start, w.end) == (gap.start, gap.end)
+                )
+                if len(matches) != 1 or gap.omitted_chars != (
+                    gap.selection.context.omitted_chars if matches[0] + 1 == len(windows) else 0
+                ):
+                    raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
         if isinstance(gap, PlanningRefusalGap):
             semantics = config.semantics
             if (

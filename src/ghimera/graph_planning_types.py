@@ -4,6 +4,7 @@ from datetime import date
 from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from ghimera.graph_types import (
     Confidence,
@@ -21,6 +22,7 @@ from ghimera.graph_types import (
 from ghimera.identity_planning_types import IdentityPlanningConfig, IdentityPlanningView
 from ghimera.identity_resolution import IdentityResolutionView
 from ghimera.refusals import RefusalCode
+from ghimera.semantic_selection_types import SemanticSelection
 from ghimera.semantic_types import CoverageFinding
 
 GRAPH_PLANNING_REVISION = "ghimera-graph-planning/1"
@@ -121,6 +123,9 @@ class PlanningGap(GraphRecord):
     review_request_sha256: Digest
     review_model_id: Text
     review_model_revision: Text
+    selection: SkipJsonSchema[SemanticSelection | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def bounded(self) -> "PlanningGap":
@@ -145,6 +150,9 @@ class PlanningRefusalGap(GraphRecord):
     proposal_digest: Digest | None
     review_sequences: tuple[Count, ...]
     continued: bool
+    selection: SkipJsonSchema[SemanticSelection | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def bounded(self) -> "PlanningRefusalGap":
@@ -162,7 +170,33 @@ class PlanningRefusalGap(GraphRecord):
         return self
 
 
-ResearchGap = PlanningGap | PlanningRefusalGap
+class PlanningSelectionGap(GraphRecord):
+    """Client-observed unselected source coverage, never a model coverage verdict."""
+
+    kind: Literal["semantic_selection"]
+    id: Annotated[str, Field(pattern=r"^gap:[0-9a-f]{64}$")]
+    source: PlanningSource
+    start: Count
+    end: Positive
+    omitted_chars: Positive
+    selection: SemanticSelection
+
+    @model_validator(mode="after")
+    def native_coverage(self) -> "PlanningSelectionGap":
+        context = self.selection.context
+        if (
+            self.source.document_id != self.selection.graph_document_id
+            or (self.source.source_url, self.source.document_sha256, self.source.text_sha256)
+            != (context.source_url, context.source_sha256, context.text_sha256)
+            or (self.start, self.end, self.omitted_chars)
+            != (0, context.total_chars, context.omitted_chars)
+            or self.id != "gap:" + self.selection.content_digest()
+        ):
+            raise ValueError("selection gap must bind exact unique unselected original coverage")
+        return self
+
+
+ResearchGap = PlanningGap | PlanningRefusalGap | SkipJsonSchema[PlanningSelectionGap]
 
 
 class PlanningGraph(GraphRecord):

@@ -20,6 +20,7 @@ from ghimera.graph_types import (
     Text,
 )
 from ghimera.model_types import ModelCallEvidence
+from ghimera.semantic_selection_types import SemanticSelectionRef, SemanticWindowSelectionConfig
 
 CitationId = Annotated[str, Field(pattern=r"^cite:[0-9a-f]{64}$")]
 MentionKey = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]*$")]
@@ -159,6 +160,9 @@ class SemanticConfig(GraphRecord):
         default=None, exclude_if=lambda v: v is None
     )
     failure: SemanticFailurePolicy | None = Field(default=None, exclude_if=lambda v: v is None)
+    window_selection: SemanticWindowSelectionConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def distinct(self) -> "SemanticConfig":
@@ -265,6 +269,9 @@ class SemanticRefusal(GraphRecord):
     proposal: SemanticProposal | None = Field(default=None, exclude_if=lambda v: v is None)
     review_sequences: tuple[Count, ...]
     continued: bool
+    selection: SkipJsonSchema[SemanticSelectionRef | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def bounded(self) -> "SemanticRefusal":
@@ -729,6 +736,9 @@ class SemanticWindow(GraphRecord):
     end: Positive
     omitted_chars: Count
     proposal: SemanticProposal
+    selection: SkipJsonSchema[SemanticSelectionRef | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     entities: tuple[SemanticEntity, ...]
     nodes: tuple[GraphNode, ...]
     edges: tuple[GraphEdge, ...]

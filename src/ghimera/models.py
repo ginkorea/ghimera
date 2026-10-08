@@ -52,6 +52,7 @@ from ghimera.page_transcription_types import PageTranscriptionCall, ReviewedPage
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.scoring_types import SimilarityEvidence
+from ghimera.semantic_selection_types import SemanticSelection
 from ghimera.semantic_types import (
     FactorizedSemanticReview,
     GroundedSemanticReview,
@@ -743,9 +744,9 @@ class LedgerRow(Record):
             "model_ack",
             "model_replay",
         ]
-        | SkipJsonSchema[Literal["model_attempt"]]
-        | SkipJsonSchema[Literal["judgment_context"]]
-        | SkipJsonSchema[Literal["scoring_source"]]
+        | SkipJsonSchema[
+            Literal["model_attempt", "judgment_context", "scoring_source", "semantic_selection"]
+        ]
     )
     url: str | None = None
     route: str | None = None
@@ -796,6 +797,9 @@ class LedgerRow(Record):
         default=None, exclude_if=lambda value: value is None
     )
     document_judgment: SkipJsonSchema[DocumentJudgmentEvidence | None] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    semantic_selection: SkipJsonSchema[SemanticSelection | None] = Field(
         default=None, exclude_if=lambda value: value is None
     )
     intent_reference: IntentReferenceEvidence | None = Field(
@@ -1025,6 +1029,27 @@ class LedgerRow(Record):
                 raise ValueError("semantic ledger metadata must match its window and call")
         elif self.semantic_window is not None:
             raise ValueError("semantic projections belong to their call observation")
+        if (self.event == "semantic_selection") != (self.semantic_selection is not None):
+            raise ValueError("semantic selection requires its native pre-contact plan event")
+        if self.semantic_selection is not None and (
+            self.url != self.semantic_selection.context.source_url
+            or self.model_call is not None
+            or self.model is not None
+            or self.refusal is not None
+            or self.model_intent is not None
+            or self.model_ack is not None
+            or self.semantic_window is not None
+            or self.semantic_refusal is not None
+        ):
+            raise ValueError(
+                "native semantic selection claims no model result or graph acknowledgement"
+            )
+        if self.scoring_source is not None and self.event != "scoring":
+            raise ValueError("native scoring source binding belongs to its scoring observation")
+        if (self.event == "scoring_source") != (self.scoring_reading is not None) or (
+            self.scoring_reading is not None and self.url != self.scoring_reading.source_url
+        ):
+            raise ValueError("native scorer reading requires its exact pre-contact source event")
         if self.semantic_refusal is not None and (
             self.event != "semantic"
             or self.refusal is None
