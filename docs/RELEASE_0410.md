@@ -40,8 +40,14 @@ listener passed. Read-only native launch-flag verification and an uncached
 Tor Project probe reported `IsTor=true`. The public source page round-tripped
 through native page/ledger evidence; no model calls or credentials were used.
 This proves browser transport/source retention, not anonymity or research
-quality. A bounded attempt against the Tor Project's published onion support
-service failed with `fetch_failed`; actual onion investigation remains open.
+quality. The first bounded attempt against the Tor Project's published onion
+support service failed with `fetch_failed`. A subsequent bounded diagnostic
+completed actual native capture: 76,071 bytes, SHA-256
+`630d607dcd8fc141b8a21c3bb37e9aafd8dc8946b953895c478a31eb03acb50b`,
+exact retained-page readback and five ledger rows. It used the exact declared
+HTTP onion origin over Tor, never direct routing or relaxed public TLS.
+This establishes real onion transport/source retention, not semantic research
+completion, source trustworthiness or model-driven investigation quality.
 
 Publication requires an unused version, passing checks, exact artifact hashes,
 an immutable new tag on the official repository, successful PyPI upload and
