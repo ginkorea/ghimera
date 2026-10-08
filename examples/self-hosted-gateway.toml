@@ -1,0 +1,60 @@
+# Nonactive standalone model/embedding fragments, not an operational grant.
+# Replace the .invalid hostname, global example pins and model selections with
+# the exact approved origin, its real resolved addresses and served identities.
+# Never map that hostname to a private fixture address or disable TLS checks.
+# Credentials are supplied separately as SecretStr; none belong in this file.
+[model]
+schema = "chimera.model-service/3"
+endpoint = "https://inference.example.invalid/v1/chat/completions"
+approved_addresses = ["8.8.8.8", "2001:4860:4860::8888"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "bearer"
+model_id = "operator-approved-self-hosted-model"
+revision = "operator-pinned-revision"
+served_model = "operator-served-model"
+timeout_seconds = 30.0
+max_request_bytes = 1048576
+max_response_bytes = 1048576
+max_header_bytes = 16384
+require_usage = true
+max_input_chars = 65536
+max_output_tokens = 1024
+temperature = 0.0
+top_p = 1.0
+response_format = "json_schema"
+[model.gateway]
+schema = "ghimera.self-hosted-gateway/1"
+origin = "https://inference.example.invalid"
+[model.context]
+schema = "chimera.evidence-context/1"
+max_documents = 8
+max_chars = 16000
+window_chars = 2000
+max_windows_per_document = 4
+overlap_chars = 100
+
+[embedding]
+schema = "chimera.embedding-service/2"
+endpoint = "https://inference.example.invalid/v1/embeddings"
+approved_addresses = ["8.8.8.8", "2001:4860:4860::8888"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "bearer"
+model_id = "operator-approved-self-hosted-encoder"
+revision = "operator-pinned-revision"
+served_model = "operator-served-encoder"
+timeout_seconds = 30.0
+max_request_bytes = 1048576
+max_response_bytes = 1048576
+max_header_bytes = 16384
+require_usage = true
+max_input_chars = 65536
+dimensions = 1024
+request_dimensions = false
+max_batch_texts = 32
+max_text_chars = 4000
+text_prefix = ""
+[embedding.gateway]
+schema = "ghimera.self-hosted-gateway/1"
+origin = "https://inference.example.invalid"

@@ -6,6 +6,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from ghimera.model_gateway_config import SelfHostedGatewayConfig, validate_model_gateway
+
 Positive = Annotated[int, Field(strict=True, gt=0)]
 Text = Annotated[str, Field(min_length=1)]
 
@@ -42,9 +44,15 @@ class PrivateModelService(BaseModel):
     max_header_bytes: Positive
     require_usage: bool
     max_input_chars: Positive
+    gateway: SelfHostedGatewayConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def private_service(self) -> "PrivateModelService":
+        if self.gateway is not None:
+            validate_model_gateway(self, self.gateway)
+            if not all(text.strip() for text in (self.model_id, self.revision, self.served_model)):
+                raise ValueError("model identity and revision must be nonblank")
+            return self
         parsed = urlsplit(self.endpoint)
         try:
             port = parsed.port
@@ -112,9 +120,9 @@ class LocalGenerationConfig(BaseModel):
 
 
 class ModelServiceConfig(PrivateModelService):
-    schema_version: Literal["chimera.model-service/1", "chimera.model-service/2"] = Field(
-        alias="schema"
-    )
+    schema_version: Literal[
+        "chimera.model-service/1", "chimera.model-service/2", "chimera.model-service/3"
+    ] = Field(alias="schema")
     max_output_tokens: Positive
     temperature: Annotated[float, Field(ge=0, le=2, allow_inf_nan=False)]
     top_p: Annotated[float, Field(gt=0, le=1, allow_inf_nan=False)]
@@ -131,13 +139,21 @@ class ModelServiceConfig(PrivateModelService):
     def completion_endpoint(self) -> "ModelServiceConfig":
         if not urlsplit(self.endpoint).path.endswith("/chat/completions"):
             raise ValueError("configure an exact completion endpoint")
-        if (self.schema_version == "chimera.model-service/2") != (self.generation is not None):
+        if self.schema_version != "chimera.model-service/3" and (
+            (self.schema_version == "chimera.model-service/2") != (self.generation is not None)
+        ):
             raise ValueError("explicit generation controls require model-service/2 and its recipe")
+        if (self.schema_version == "chimera.model-service/3") != (self.gateway is not None):
+            raise ValueError(
+                "public self-hosted gateway requires model-service/3 and exact approval"
+            )
         return self
 
 
 class EmbeddingServiceConfig(PrivateModelService):
-    schema_version: Literal["chimera.embedding-service/1"] = Field(alias="schema")
+    schema_version: Literal["chimera.embedding-service/1", "chimera.embedding-service/2"] = Field(
+        alias="schema"
+    )
     dimensions: Positive
     request_dimensions: bool
     max_batch_texts: Positive
@@ -150,6 +166,10 @@ class EmbeddingServiceConfig(PrivateModelService):
             raise ValueError("configure an exact embeddings endpoint")
         if len(self.text_prefix) >= self.max_text_chars:
             raise ValueError("embedding prefix must leave room for native input")
+        if (self.schema_version == "chimera.embedding-service/2") != (self.gateway is not None):
+            raise ValueError(
+                "public encoder gateway requires embedding-service/2 and exact approval"
+            )
         return self
 
 

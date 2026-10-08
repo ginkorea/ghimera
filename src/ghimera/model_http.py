@@ -6,7 +6,8 @@ from typing import Protocol
 
 from pydantic import SecretStr
 
-from ghimera.model_config import PrivateModelService
+from ghimera.model_config import EmbeddingServiceConfig, ModelServiceConfig, PrivateModelService
+from ghimera.model_gateway_config import validate_model_gateway
 from ghimera.private_json import JsonResponse, JsonWireCancelled, JsonWireFailure, PinnedJsonHttp
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.transport import Resolver
@@ -38,6 +39,24 @@ class ModelHttpPort(Protocol):
     async def post(self, body: bytes) -> ModelHttpResponse: ...
 
 
+class _PinnedModelJsonHttp(PinnedJsonHttp[PrivateModelService]):
+    """Model control specializes admission; generic JSON consumers remain private."""
+
+    def _validate_policy(self, config: PrivateModelService) -> None:
+        # Recheck the concrete versioned boundary even for model_copy instances.
+        type(config).model_validate(config.model_dump())
+        if config.gateway is None:
+            super()._validate_policy(config)
+        elif isinstance(config, (ModelServiceConfig, EmbeddingServiceConfig)):
+            validate_model_gateway(config, config.gateway)
+        else:
+            raise ValueError("gateway admission requires a versioned model or embedding service")
+
+    @property
+    def _protocols(self) -> str:
+        return "https" if self.config.gateway is not None else super()._protocols
+
+
 class PinnedModelHttp:
     def __init__(
         self,
@@ -46,7 +65,7 @@ class PinnedModelHttp:
         credential: SecretStr | None = None,
         resolver: Resolver | None = None,
     ) -> None:
-        self._http = PinnedJsonHttp(config, credential=credential, resolver=resolver)
+        self._http = _PinnedModelJsonHttp(config, credential=credential, resolver=resolver)
 
     @property
     def config(self) -> PrivateModelService:
@@ -55,6 +74,12 @@ class PinnedModelHttp:
     async def post(self, body: bytes) -> ModelHttpResponse:
         try:
             response = await self._http.post(body)
+            if (
+                self.config.gateway is not None
+                and response.status is not None
+                and (300 <= response.status < 400)
+            ):
+                raise ModelWireFailure(_model_response(response))
             return _model_response(response)
         except JsonWireFailure as exc:
             raise ModelWireFailure(_model_response(exc.response)) from None

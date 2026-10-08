@@ -47,7 +47,7 @@ class PinnedJsonHttp(Generic[PolicyT]):
         credential: SecretStr | None = None,
         resolver: Resolver | None = None,
     ) -> None:
-        validate_private_json(config)
+        self._validate_policy(config)
         if (config.authorization != "none") != (credential is not None):
             raise ValueError("private credential must match the configured authorization mode")
         if credential is not None:
@@ -65,6 +65,13 @@ class PinnedJsonHttp(Generic[PolicyT]):
     @property
     def config(self) -> PolicyT:
         return self._config
+
+    def _validate_policy(self, config: PolicyT) -> None:
+        validate_private_json(config)
+
+    @property
+    def _protocols(self) -> str:
+        return "http,https"
 
     async def _destination(self) -> Destination:
         parsed = urlsplit(self.config.endpoint)
@@ -136,7 +143,7 @@ class PinnedJsonHttp(Generic[PolicyT]):
                 curl.setopt(CurlOpt.NOPROXY, "")
                 curl.setopt(CurlOpt.NETRC, 0)
                 curl.setopt(CurlOpt.FOLLOWLOCATION, 0)
-                curl.setopt(CurlOpt.PROTOCOLS_STR, "http,https")
+                curl.setopt(CurlOpt.PROTOCOLS_STR, self._protocols)
                 curl.setopt(CurlOpt.SSL_VERIFYPEER, 1)
                 curl.setopt(CurlOpt.SSL_VERIFYHOST, 2)
                 curl.setopt(CurlOpt.TIMEOUT_MS, max(1, int(timeout * 1000)))
