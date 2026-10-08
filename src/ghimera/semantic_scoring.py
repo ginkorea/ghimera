@@ -330,7 +330,7 @@ class EmbeddingScorer(Scorer):
         native_reading = (
             native_scoring_reading(ledger.snapshot(), document)
             if config.document_judgment is not None
-            or getattr(config.semantics, "window_selection", None) is not None
+            or (config.semantics is not None and config.semantics.window_selection is not None)
             else None
         )
         source_binding = None
