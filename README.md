@@ -15,6 +15,10 @@ uncertainty. See [research recovery](docs/RESEARCH_RECOVERY.md),
 [service recovery](docs/SERVICE_RECOVERY.md) and
 [encoding recovery](docs/ENCODING_RECOVERY.md). Candidate release acceptance
 is not implied by the published 0.4.10 checks below.
+An independently selected [completed-source boundary](docs/SOURCE_COMPLETION_RECOVERY.md)
+can also resume serial research after an atomic native source acknowledgement,
+preserving its original source queue, round cursor and spend. It does not adopt
+mid-source or concurrent interruptions, and never retries an unknown call.
 
 It combines configured hybrid corpus retrieval, source API/reference expansion,
 guarded browser pagination and explicit Tor-browser route proof; native-layout

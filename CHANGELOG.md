@@ -8,6 +8,10 @@
 - Extend native corpus encoding accounting with explicit caller-attributed
   unknown-outcome decisions. One separately charged replacement attempt may
   be authorized; the original uncertain attempt remains visible and charged.
+- Add explicitly selected completed-source recovery through native Collector,
+  command and service owners. Atomic source/control acknowledgement preserves
+  original frontier, deduplication, reference history, round cursor and spend.
+  This mode is serial only; ordinary concurrent collection is unchanged.
 - Add explicit same-origin model-gateway configuration, including configured
   shared-address scope, without changing legacy model-facing schema identities.
 - Candidate source, installed-artifact and live quality acceptance remain

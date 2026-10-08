@@ -149,7 +149,7 @@ is inspected separately from schema-valid fixture replies.
 |---|---|---|---|
 | I01 | Configurable pacing, nonnegative jitter, origin cooldown and `Retry-After` | Source-complete; included in combined 825-pass gate | Deterministic scheduler and real HTTP checks; robots/global floors preserved; cooled origin cannot monopolize global slots |
 | I02 | Concurrent fetch/extract/encode/review stages | Configured concurrency published in 0.4.1; combined 927-pass gate and public artifact readback recorded in RELEASE_041.md | Slow-stage, actual loopback libcurl, byte-reservation, cancellation and interleaved semantic-review witnesses; see CONCURRENT_COLLECTION.md |
-| I03 | Durable operation frontier and uncertain-call reconciliation | Native source frontier and round checkpoints published through 0.4.7; model accounting in 0.4.9 and retained-return replay in 0.4.10. The unpublished 0.4.11 candidate adds exact research-model boundary adoption, persistent encoding reservations/returns, explicit native command/service recovery and caller-attributed encoding reconciliation. Completed-source adoption is a separate candidate under review. Arbitrary source/discovery/graph interruption and research-model unknown-outcome decisions remain open | Crash before/after each source/model/graph acknowledgement resumes without lost or duplicate evidence and preserves actual spend; model-phase and completed-source adoption are subsets, not whole-session recovery |
+| I03 | Durable operation frontier and uncertain-call reconciliation | Native source frontier and round checkpoints published through 0.4.7; model accounting in 0.4.9 and retained-return replay in 0.4.10. The unpublished 0.4.11 candidate adds exact research-model boundary adoption, persistent encoding reservations/returns, explicit native command/service recovery, caller-attributed encoding reconciliation and opt-in atomic completed-source adoption. Arbitrary source/discovery/graph interruption, concurrent adoption and research-model unknown-outcome decisions remain open | Crash before/after each source/model/graph acknowledgement resumes without lost or duplicate evidence and preserves actual spend; model-phase and completed-source adoption are subsets, not whole-session recovery |
 | I04 | Durable original/chunk/vector store and query interface | Native corpus and collector handoff published in 0.4.1; configured service corpus/query and archive-only handoff retries published in 0.4.10. Representative scale and off-host durability remain unaccepted | Fresh-process native passage retrieval, exact chunk/source/model bindings, index generation isolation and rebuild; handoff failure/retry without refetching; see EVIDENCE_CORPUS.md and RELEASE_0410.md |
 | I05 | Evidence context retrieval/reranking and multilingual discovery | Corpus discovery and retained-reader reuse published through 0.4.6; explicit hybrid lexical/vector union and reciprocal-rank fusion published in 0.4.10. Representative multilingual discovery, retrieval and omission quality remain open | Real cross-language intent finds retained native evidence, with measurable omissions and independent review; fusion is not a trained semantic reranker |
 | I06 | Reliable semantic organization extraction | Built, real Chinese quality acceptance failed | Real organization PDF plus discovered sources yields inspected supported relationships and explicit coverage gaps |
@@ -258,6 +258,14 @@ original remaining allowance. The original unknown remains recorded and charged;
 this is not a verified human approval or a server-side status observation.
 See [encoding recovery](ENCODING_RECOVERY.md). It does not authorize retries of
 unknown research-model, source or graph work.
+The explicit source-completion policy saves full native collection control in
+the existing source transaction only after a completed web source. Exact command
+and service adoption retain pending frontier, native graph, reference/dedup state,
+runtime/request pins, original round quantum and wall-clock downtime. This
+policy rejects concurrent execution rather than silently making it serial.
+Mid-source, discovery, retained-reader and unacknowledged graph cuts remain held;
+see [completed-source recovery](SOURCE_COMPLETION_RECOVERY.md). Controlled
+fresh-process witnesses establish durability, not remote site or model quality.
 Explicit command recovery is implemented through command /4 and execution /2;
 it verifies the same original request/recipe and reserved output before invoking
 the native recovery owner. The command's original native result archive remains
