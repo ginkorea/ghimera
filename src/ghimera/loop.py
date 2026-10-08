@@ -6,7 +6,7 @@ import heapq
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
@@ -47,19 +47,29 @@ from ghimera.scoring import Scorer
 from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, SemanticStage
 from ghimera.semantic_recovery import SemanticRecoveryStopped
 from ghimera.session_state import SessionState
+from ghimera.source_work_types import SourceRequest
 from ghimera.visual_stage import VisualStage
 from ghimera.visual_types import ImageEvidence
 
 CollectionStop = StopReason | Literal["round_limit"]
+
+if TYPE_CHECKING:
+    from ghimera.source_work import SourceWorkStore
 
 
 class CollectionSession:
     """One run's state, reused by research rounds without resetting its budget."""
 
     def __init__(
-        self, goal: Goal, budget: RunBudget, ledger: Ledger, graph: ResearchGraph | None
+        self,
+        goal: Goal,
+        budget: RunBudget,
+        ledger: Ledger,
+        graph: ResearchGraph | None,
+        source_work: "SourceWorkStore | None" = None,
     ) -> None:
         self.goal, self.budget, self.ledger, self.graph = goal, budget, ledger, graph
+        self.source_work = source_work
         self._documents: dict[str, Document] = {}
         self._retained_sources: dict[str, RetainedOriginal] = {}
         self._frontier: list[tuple[float, str, int]] = []
@@ -81,6 +91,17 @@ class CollectionSession:
     @property
     def documents(self) -> tuple[Document, ...]:
         return tuple(self._documents.values())
+
+    def close(self) -> None:
+        """Release this run's persistence owners even after cancelled collection."""
+        if self._operating:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        self._closed = True
+        try:
+            if self.source_work is not None:
+                self.source_work.close()
+        finally:
+            self.ledger.close()
 
     @property
     def evidence_documents(self) -> tuple[Document, ...]:
@@ -110,6 +131,8 @@ class CollectionSession:
     def checkpoint_state(self) -> SessionState:
         if self._closed or self._operating or not self.budget.quiescent:
             raise ValueError("checkpoint requires a quiescent live collection session")
+        if self.source_work is not None:
+            self.source_work.assert_quiescent()
         return SessionState(
             frontier=tuple(self._frontier),
             visited=tuple(sorted(self._visited)),
@@ -237,20 +260,33 @@ class GoalLoop:
             ledger = Ledger(sink=DirectoryLedgerSink(self._config, run_id, goal, self._judge.model))
         else:
             ledger = Ledger()
-        graph = None
-        if self._config.graph is not None and self._config.graph.enabled:
-            if run_id is None:
-                raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
-            sink = (
-                self._graph_sink
-                if self._graph_sink is not None
-                else DirectoryGraphSink(self._config.graph, run_id)
-            )
-            graph = ResearchGraph(self._config.graph, run_id, sink)
-            await graph.start(goal.text)
-            for seed in goal.seeds:
-                await graph.discovered(seed, graph.intent_id)
-        return CollectionSession(goal, budget, ledger, graph)
+        source_work = None
+        try:
+            if self._config.source_work is not None:
+                from ghimera.source_work import SourceWorkStore
+
+                if run_id is None:
+                    raise ValueError("source work requires an explicit run identity")
+                source_work = SourceWorkStore.open(self._config, run_id, goal, self._judge.model)
+            graph = None
+            if self._config.graph is not None and self._config.graph.enabled:
+                if run_id is None:
+                    raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
+                sink = (
+                    self._graph_sink
+                    if self._graph_sink is not None
+                    else DirectoryGraphSink(self._config.graph, run_id)
+                )
+                graph = ResearchGraph(self._config.graph, run_id, sink)
+                await graph.start(goal.text)
+                for seed in goal.seeds:
+                    await graph.discovered(seed, graph.intent_id)
+            return CollectionSession(goal, budget, ledger, graph, source_work)
+        except BaseException:
+            if source_work is not None:
+                source_work.close()
+            ledger.close()
+            raise
 
     async def restore(
         self,
@@ -273,7 +309,12 @@ class GoalLoop:
             self._config, run_id, harvest.goal, self._judge.model, resume_rows=harvest.ledger
         )
         ledger = Ledger(sink=sink, restored_rows=harvest.ledger)
+        source_work = None
         try:
+            if self._config.source_work is not None:
+                from ghimera.source_work import SourceWorkStore
+
+                source_work = SourceWorkStore.resume(self._config, run_id, len(harvest.ledger))
             budget = RunBudget(self._config, self._clock)
             budget.restore(harvest.receipt, harvest.ledger, search_calls, downtime_seconds)
             graph = None
@@ -283,19 +324,24 @@ class GoalLoop:
                 await graph.start(harvest.goal.text, expected=harvest.graph)
                 if graph.snapshot() != harvest.graph:
                     raise ValueError("graph changed after the research checkpoint; reconcile first")
-            session = CollectionSession(harvest.goal, budget, ledger, graph)
+            session = CollectionSession(harvest.goal, budget, ledger, graph, source_work)
             session.restore_state(state, harvest)
             return session
         except BaseException:
+            if source_work is not None:
+                source_work.close()
             ledger.close()
             raise
 
     async def run(self, goal: Goal, scope: Scope, *, run_id: str | None = None) -> Harvest:
         session = await self.open(goal, run_id=run_id)
-        stop = await self.collect(session, scope, goal.seeds)
-        if stop == "round_limit":
-            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-        return self.finish(session, stop)
+        try:
+            stop = await self.collect(session, scope, goal.seeds)
+            if stop == "round_limit":
+                raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            return self.finish(session, stop)
+        finally:
+            session.close()
 
     async def import_local(
         self, session: CollectionSession, seeds: tuple[LocalDocumentSeed, ...]
@@ -465,17 +511,35 @@ class GoalLoop:
         self, session: CollectionSession, scope: Scope, url: str, depth: int
     ) -> CollectionStop | None:
         budget, ledger = session.budget, session.ledger
+        work, token = session.source_work, None
         try:
             budget.check_time()
             active_scope = session._reference_scopes.get(url, scope)
             parent_hops = session._reference_hops.get(url, 0)
             if depth > active_scope.max_depth or not active_scope.permits(url):
                 raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+            if work is not None:
+                token = work.begin(
+                    SourceRequest(
+                        url=url,
+                        scope=active_scope,
+                        depth=depth,
+                        reference_hops=parent_hops,
+                        reference_origin=session.reference_origin(url),
+                    ),
+                    ledger.next_sequence,
+                )
             page = await self._fetcher.fetch(url, active_scope, budget, ledger)
+            if work is not None and token is not None:
+                work.acquired(token, page)
             if parent_hops:
                 session._reference_hops[page.final_url] = parent_hops
                 session._reference_origins[page.final_url] = session._reference_origins[url]
-            await self._process_page(session, page, url, depth, active_scope, parent_hops)
+            if work is not None and token is not None:
+                work.processing(token)
+            result = await self._process_page(session, page, url, depth, active_scope, parent_hops)
+            if work is not None and token is not None:
+                work.processed(token, result, ledger.next_sequence)
         except asyncio.CancelledError:
             ledger.append(
                 LedgerRow(
@@ -486,6 +550,10 @@ class GoalLoop:
                     reason="source_processing_cancelled",
                 )
             )
+            if work is not None and token is not None:
+                work.refused(
+                    token, "source_processing_cancelled", ledger.next_sequence, cancelled=True
+                )
             raise
         except (GhimeraRefused, TimeoutError) as exc:
             if isinstance(exc, ExtractionFailure):
@@ -502,6 +570,8 @@ class GoalLoop:
                     reason=code.value,
                 )
             )
+            if work is not None and token is not None:
+                work.refused(token, code.value, ledger.next_sequence)
             if code == RefusalCode.BUDGET_EXHAUSTED:
                 return "budget_exhausted"
             if isinstance(exc, SemanticRecoveryStopped) or code in {
@@ -693,10 +763,11 @@ class GoalLoop:
         depth: int,
         active_scope: Scope | None,
         parent_hops: int,
-    ) -> None:
+    ) -> Document | None:
         """One extraction/scoring/verdict/identity owner for web and local snapshots."""
         goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
         documents, frontier, visited = session._documents, session._frontier, session._visited
+        candidate = None
         extraction_started = self._clock()
         async with session._slots.slot("extraction"), asyncio.timeout(budget.remaining_seconds):
             try:
@@ -898,6 +969,7 @@ class GoalLoop:
                     session._reference_origins.setdefault(
                         link.url, session._reference_origins.get(url, url)
                     )
+        return candidate
 
     async def _document_verdict(
         self, session: CollectionSession, extracted: Extracted, url: str, second_look: bool
@@ -1132,11 +1204,15 @@ class GoalLoop:
     def finish(self, session: CollectionSession, stop: StopReason) -> Harvest:
         if session._closed or session._operating or session.budget.config != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        if session.source_work is not None:
+            session.source_work.assert_quiescent()
         session._closed = True
         ledger = session.ledger
         ledger.append(LedgerRow(sequence=ledger.next_sequence, event="stop", reason=stop))
         harvest = self.snapshot(session, stop)
         ledger.finish(harvest)
+        if session.source_work is not None:
+            session.source_work.close()
         return harvest
 
     def _extraction_revision(self, extracted: Extracted) -> str:

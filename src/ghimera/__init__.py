@@ -41,6 +41,7 @@ from ghimera.persistent_collector import (
 from ghimera.research_reuse import ResearchRetrievalReport
 from ghimera.research_reuse_config import ResearchReuseConfig
 from ghimera.source_feed_config import SourceFeedConfig
+from ghimera.source_work_config import SourceWorkConfig
 
 __all__ = [
     "GhimeraConfig",
@@ -64,6 +65,7 @@ __all__ = [
     "ResearchReuseConfig",
     "ResearchRetrievalReport",
     "SourceFeedConfig",
+    "SourceWorkConfig",
     "CorpusLeadSearch",
     "CorpusSearchConfig",
     "PersistentCollector",

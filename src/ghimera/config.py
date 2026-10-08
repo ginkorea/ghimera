@@ -33,6 +33,7 @@ from ghimera.search_config import SearxConfig
 from ghimera.semantic_types import SemanticConfig
 from ghimera.source_feed_config import SourceFeedConfig
 from ghimera.source_session_types import SourceSessionPolicy, validate_sessions
+from ghimera.source_work_config import SourceWorkConfig
 from ghimera.transport_types import TransportConfig
 from ghimera.visual_config import VisualConfig
 
@@ -166,9 +167,12 @@ class GhimeraConfig(BaseModel):
     )
     semantics: SemanticConfig | None = Field(default=None, exclude_if=lambda v: v is None)
     continuation: ContinuationConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    source_work: SourceWorkConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
+        if self.source_work is not None and self.journal is None:
+            raise ValueError("source work requires the existing durable run journal")
         if self.pdf_transcription is not None and (
             self.document_extraction is None
             or "application/pdf" not in self.document_extraction.supported_content_types

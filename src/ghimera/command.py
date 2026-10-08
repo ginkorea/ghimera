@@ -27,6 +27,7 @@ from ghimera.result_archive import (
     bounded_file,
 )
 from ghimera.source_sessions import SourceCredentials
+from ghimera.source_work import SourceWorkFailure
 from ghimera.terminal_assistance import TerminalAssistanceConfig, TerminalHumanAssistant
 from ghimera.transport import Resolver
 
@@ -318,6 +319,9 @@ def main(argv: list[str] | None = None) -> int:
             tomllib.loads(bounded_file(args.job, args.max_job_bytes).decode())
         )
         receipt = asyncio.run(execute(options))
+    except SourceWorkFailure:
+        sys.stderr.write("command_source_work_failed\n")
+        return 2
     except GhimeraRefused as exc:
         sys.stderr.write("command_refused:" + exc.code.value + "\n")
         return 2

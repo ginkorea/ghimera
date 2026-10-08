@@ -505,7 +505,7 @@ class ResearchLoop:
                 request, session, run_id=run_id, suspend_after_rounds=suspend_after_rounds
             )
         finally:
-            session.ledger.close()
+            session.close()
 
     async def resume(
         self,
@@ -552,7 +552,7 @@ class ResearchLoop:
                 suspend_after_rounds=suspend_after_rounds,
             )
         finally:
-            session.ledger.close()
+            session.close()
 
     @staticmethod
     def _documents(
