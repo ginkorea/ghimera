@@ -719,6 +719,16 @@ class ResearchLoop:
         finally:
             session.close()
 
+    def recovery_models(self) -> ResearchRecoveryModels:
+        """Return the currently bound collaborators without invoking any of them."""
+        return ResearchRecoveryModels(
+            planner=self._planner.model,
+            analyst=self._analyst.model,
+            reviewer=self._reviewer.model,
+            search_provider=self._search.identity[0],
+            search_revision=self._search.identity[1],
+        )
+
     async def recover(self, run_id: str, *, snapshot_sha256: str) -> ResearchResult:
         """Adopt one acknowledged model return at its saved native phase.
 
@@ -730,13 +740,7 @@ class ResearchLoop:
             raise ValueError("model-boundary recovery requires explicit configured policy")
         recovery = ResearchRecoveryStore(self._config, run_id, policy).read(
             snapshot_sha256,
-            expected_models=ResearchRecoveryModels(
-                planner=self._planner.model,
-                analyst=self._analyst.model,
-                reviewer=self._reviewer.model,
-                search_provider=self._search.identity[0],
-                search_revision=self._search.identity[1],
-            ),
+            expected_models=self.recovery_models(),
         )
         saved = recovery.snapshot
         downtime = time.time() - saved.saved_at

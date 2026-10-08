@@ -35,6 +35,7 @@ from ghimera.pdf_transcription import PdfTranscriptionStage
 from ghimera.ports import Extractor
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research import ResearchLoop
+from ghimera.research_recovery_types import ResearchRecoveryModels
 from ghimera.research_types import ResearchRequest, ResearchResult
 from ghimera.search import GroundedSearch
 from ghimera.searxng import SearxHtmlSearch, SearxSearch
@@ -363,6 +364,10 @@ class Collector:
         return await self._research.resume(
             run_id, checkpoint_sha256=checkpoint_sha256, suspend_after_rounds=suspend_after_rounds
         )
+
+    def recovery_models(self) -> ResearchRecoveryModels:
+        """Expose native collaborator identities for inert service admission."""
+        return self._research.recovery_models()
 
     async def recover(self, run_id: str, *, snapshot_sha256: str) -> ResearchResult:
         """Adopt an exact native model boundary; never retry an unknown contact."""

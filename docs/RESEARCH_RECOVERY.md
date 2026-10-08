@@ -44,6 +44,12 @@ readback = store.read(
 )
 ```
 
+`Collector.recovery_models()` and `ResearchLoop.recovery_models()` expose the
+currently bound planner, analyst, reviewer and search identities without making
+any collaborator call. A service can pass that owning identity record to
+`read(..., expected_models=...)`; it must not substitute model names inferred
+from a stale manifest. Native recovery uses this same identity construction.
+
 The collector facade exposes the same explicit `recover(run_id,
 snapshot_sha256=...)` method. For the native command, configure
 `ghimera.collector-command/4` with `ghimera.command-execution/2`,
