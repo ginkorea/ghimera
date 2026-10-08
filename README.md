@@ -215,8 +215,10 @@ remain explicit acceptance work.
 An explicitly composed `PersistentCollector` automatically appends completed
 collection/research evidence to that corpus and returns its acknowledgement
 beside the unchanged original result. Failed handoffs retain completed source
-work for persistence-only retry; operation-level crash recovery and an unattended
-service are still separate requirements. See the corpus documentation for usage.
+work for persistence-only retry. The configured collection service also exposes
+run/status/control and archive-only handoff retries; see
+[service usage](docs/OPERATIONS_CANDIDATE.md). Arbitrary interrupted-operation
+reconciliation remains separate from completed-result persistence.
 
 This source line can also use an explicitly bound corpus as a discovery
 provider, alone or beside configured web/MCP/onion providers. It preserves native
@@ -228,7 +230,9 @@ An explicit [delivery outbox](docs/DELIVERY_OUTBOX.md) can queue complete result
 before returning and dispatch them concurrently when its configured destination
 is available. Destination readback precedes acknowledgement and any explicit
 local-payload pruning. The included local durable destination is not off-host
-backup; remote adapters and unattended service deployment remain open.
+backup. The configured remote adapter supports guarded PUT and exact readback;
+see [remote delivery](docs/OPERATIONS_CANDIDATE.md). Off-host deployment, destination
+durability and outage/scale acceptance remain explicit operator requirements.
 
 Version 0.4.4 includes a configurable `DeliveryWorker` and
 `ghimera-delivery` command for background retries, JSONL health and optional
