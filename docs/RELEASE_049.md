@@ -1,6 +1,6 @@
 # Ghimera 0.4.9 release acceptance
 
-Status: SOURCE GATED; ARTIFACT AND INSTALLED ACCEPTANCE PENDING; NOT PUBLISHED.
+Status: PUBLISHED AND ORIGINAL ARTIFACTS VERIFIED.
 The full infrastructure PRD remains open. Prior public artifacts and tags remain
 immutable; none is rebuilt, replaced or moved by this candidate.
 
@@ -19,7 +19,7 @@ the source commit.
 These controlled native/protocol checks do not measure served-model quality,
 remote token spend, multilingual recognition, source coverage or deployment.
 
-## Required artifact and installed acceptance
+## Artifact and independent installed acceptance
 
 The release metadata changes only version/lock self-version, its assertion and
 documentation; production source and examples must remain byte-identical to the
@@ -28,7 +28,7 @@ without failures/skips, under the same Python 3.11.16 interpreter/source
 binding. The explicit offline lock check accepted the same 142 packages; only
 the project's self-version changed. Complete wheel/source-archive Git-blob
 closure, license, fresh non-editable installed imports and both command entry
-points remain required before publication.
+points passed before publication.
 
 Independent installed acceptance uses fresh child processes terminating before
 reservation, after durable intent, after controlled port contact and after
@@ -36,9 +36,45 @@ acknowledged return. Fresh native journal reads must preserve exact original
 request/result hashes, reservation counts, uncertainty and held budget restore.
 It uses injected ports, not actual remote models or test-module imports.
 
-No artifact, installed-package, tag, upload or public-byte readback acceptance
-is claimed by this pending document. Their results will be recorded after the
-actual checks, not inferred from a source gate.
+The installed four-window check passed. Before reservation, the journal held
+no invocation. After durable intent and after controlled contact, its original
+reservation remained uncertain and native budget restore refused retry. After
+acknowledged return, the request/result pins and one reservation survived a
+fresh-process native read. This is not a whole-session resume or answer replay
+test and involved zero actual model/service calls.
+
+The independently installed environment used Python 3.11.16 at
+`wheel-model-recovery-env/bin/python` in the private operator workspace; its
+import resolved that environment's own `site-packages/ghimera`, not editable
+source. Before installation, neither project import existed. Third-party
+dependency metadata matched the previously accepted environment; this is not
+complete optional-extra or served-model runtime admission. Both `ghimera` and
+`ghimera-delivery` help entry points passed.
+
+The source archive was built offline, then the wheel was built from that
+archive, with explicit Python 3.11.16 and the pinned build backend. Complete
+inspection compared all 178 wheel package members and 454 tracked source
+members against the exact release Git blobs, checked metadata/license and
+rejected untracked/missing content. Both Twine checks passed under the private
+Python 3.11.16 tooling environment.
+
+## Publication readback
+
+Release commit `a7653c035c688f7fe3b01b29ebe90059573fdca4` was atomically
+fast-forwarded to GitHub main with new annotated tag `v0.4.9`, object
+`4203c08c46008b8884bc62f006c72f4f07368812`, peeling to that same commit.
+Independent remote readback matched all three identities. Prior tags were not
+changed. Both files uploaded successfully to the official PyPI destination.
+Independent public metadata and original-file readback matched the accepted
+local bytes, with TLS verification, redirects refused and no credentials:
+
+- Wheel: 418,122 bytes; SHA-256
+  `797ddabc686e78d9748a854b279cb818789210c61aa9fb06f2311518524f48f1`.
+- Source archive: 1,185,687 bytes; SHA-256
+  `43e8271026bfca5d86821e7c9ffde6c957584a02ae7db036bee7b043f8676a30`.
+
+These immutable artifacts are not rebuilt to incorporate this later
+evidence-only documentation update.
 
 ## Remaining scope
 

@@ -169,13 +169,14 @@ those capabilities without taking ownership of source/model internals. I09 may
 run on separate hardware, and no downstream platform integration is implied by
 publishing the standalone package.
 
-I03 model-invocation recovery has an active development candidate in
+I03 model-invocation accounting is published in 0.4.9, documented in
 `MODEL_WORK.md`: pre-call native journal intent and phase-budget reservation,
 linked local termination/return evidence, and explicit uncertainty holds. This
 does not close I03: interrupted whole-session adoption, model-result replay and
 reconciliation decisions, graph uncertainty and retained-reader control state
-remain required. The candidate is not a published release or model-quality
-acceptance result.
+remain required. The exact 1,239-test gate, independent installed four-window
+crash/readback and original public artifact bytes passed; see `RELEASE_049.md`.
+Those checks do not establish model-quality or whole-session recovery acceptance.
 
 Redirect work is now an integrated development candidate: the full Collector
 accepts explicit human_browser.navigation on its caller-bound Page, reuses the

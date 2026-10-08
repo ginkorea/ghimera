@@ -1,6 +1,6 @@
 # Durable model invocation records
 
-Source-complete release candidate; not yet published or full I03 closure.
+Published in 0.4.9; full I03 closure remains open.
 
 A research request previously reserved a judge call only in memory. Its native
 journal observation was appended in the completion handler. A controlled child
@@ -72,15 +72,15 @@ completed-round continuation remains a separate capability. No remote request
 is declared unsent merely because the local process died, and no duplicate
 service invocation is claimed to have been observed by the controlled witness.
 
-## Acceptance still required
+## Acceptance and remaining limits
 
 The focused candidate checks include native journal visibility inside a port,
 controlled process termination before answer, cancellation/failure, storage
 failure before contact and after return, duplicate/misbound acknowledgements,
 policy bounds, completed research and historical disabled-policy behavior.
 Protocol fixtures do not establish served-model accuracy or multilingual OCR
-quality. The combined gate passed; independent installed-package crash/readback
-acceptance is still required before publication. Simplified Chinese OCR validation
+quality. The combined gate and independent installed-package crash/readback
+acceptance passed; exact public artifacts were verified. Simplified Chinese OCR validation
 remains open independently of this lifecycle work.
 
 Candidate measurements used `/tmp/chimera-c0-20261006/.venv/bin/python`, Python
@@ -94,3 +94,10 @@ source files. Source commit `2335afc599c27816f07d64ca91ee1133f9e585ab` retains
 tree `e863a329c75fe5c1bdc8d9733751c8d15b80d0d8`. These counts are not
 representative model quality or publication evidence. Tests used injected model ports and local
 PDF/OCR fixtures, not an external model or actual token-spend measurement.
+
+Independent installed acceptance exercised fresh process exits before reservation,
+after durable intent, after controlled port contact and after acknowledged
+return. Original pins, reservation counts and held uncertain restore survived
+native journal readback under the fresh installed Python 3.11.16 runtime. It did
+not test whole-session adoption or replay a model result. Complete release and
+artifact evidence is in [RELEASE_049.md](RELEASE_049.md).
