@@ -32,7 +32,25 @@ source provenance cannot supply the new policy.
 The journal records the chosen context and exact logical input digest before
 the native verdict intent. Only selected excerpts go to the model; full private
 text is not put in its prompt. Model-call evidence records the actual offsets,
-context digest and omissions under `ghimera-scored-document-judgment/1`.
+context digest and omissions under the explicitly selected prompt revision.
+
+`ghimera.document-judgment/1` retains its original instructions, serialized policy
+bytes and `ghimera-scored-document-judgment/1` revision. It must not contain
+`prompt_profile`, including an explicit null. There is no implicit upgrade.
+`ghimera.document-judgment/2` requires the explicit
+`prompt_profile = "contribution_relevance"` shown in the inert example, and records
+`ghimera-scored-document-judgment/2`. All source selection, provenance, limits,
+reservations and output schemas remain unchanged.
+
+The contribution profile asks the model to assess every supplied window for
+direct factual support of any part of the intent. Source admission is not answer
+completeness: other unanswered facts, including unresolved names or dates, remain
+downstream gaps. Quotes and reasons must be grounded in supplied excerpts, not
+topic names, titles or similarity scores. Demonstrably unrelated excerpts may
+be rejected; ambiguous or conflicting evidence calls for hold. Unread text cannot
+justify a whole-source negative claim. The profile does not make a client-side
+relevance decision or force acceptance; later assessment/review still determine
+answer sufficiency and citation support.
 
 The original model result and ACK are unchanged. Separate verdict evidence names
 `original_model_decision` and `client_disposition`. Only this explicit policy

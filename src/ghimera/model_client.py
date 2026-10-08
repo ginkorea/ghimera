@@ -524,6 +524,7 @@ class SelfHostedModel:
         if prompt.task == "semantic_extract" and semantic is None:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         review_revision = SEMANTIC_REVIEW_REVISION
+        judgment = self._config.document_judgment
         if prompt.task == "semantic_review":
             if semantic is None or semantic.verification is None:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -534,7 +535,9 @@ class SelfHostedModel:
                 schema="chimera.model-call/1",
                 service=service,
                 task=prompt.task,
-                prompt_revision=SCORED_JUDGMENT_REVISION
+                prompt_revision=judgment.effective_prompt_revision
+                if prompt.scored_document is not None and judgment is not None
+                else SCORED_JUDGMENT_REVISION
                 if prompt.scored_document is not None
                 else IDENTITY_PROPOSAL_REVISION
                 if prompt.task == "identity_propose"
@@ -662,6 +665,26 @@ class SelfHostedModel:
                 "citations or fabricate call telemetry. "
                 + (
                     "The scored_document contains bounded, unchanged excerpts of ONE original "
+                    "source. Judge useful source contribution, not answer completeness: accept "
+                    "when a supplied excerpt directly supports ANY factual part of the original "
+                    "intent, even if other requested facts remain unanswered. Assess every "
+                    "supplied window before deciding; quotes and reasons must be grounded in "
+                    "those excerpts, not inferred from titles, source identity or topic names. "
+                    "Similarity never establishes relevance, truth or acceptance; scores and "
+                    "source hashes are selection provenance, not evidence of a factual claim. "
+                    "Do not require a complete answer, every requested entity or all requested "
+                    "facts for source admission. Missing or unresolved names and dates remain "
+                    "downstream gaps, not grounds to reject an otherwise useful contribution. "
+                    "Reject only demonstrably unrelated excerpts; hold when uncertain about "
+                    "their factual contribution, including ambiguous or conflicting evidence. "
+                    "Omitted text is UNREAD: never claim the whole document lacks information "
+                    "from partial excerpts. Downstream assessment and review determine answer "
+                    "completeness; admitting a useful source does not establish that completeness. "
+                    "Offsets, hashes, windows and omissions remain client provenance. "
+                    if prompt.scored_document is not None
+                    and judgment is not None
+                    and judgment.prompt_profile == "contribution_relevance"
+                    else "The scored_document contains bounded, unchanged excerpts of ONE original "
                     "source, selected using observed intent similarity. Similarity is not a "
                     "truth or relevance probability. Offsets and source hashes are client "
                     "provenance. Omitted text is UNREAD: do not claim the whole document lacks "
@@ -1275,6 +1298,9 @@ class SelfHostedModel:
             or self._service != self._config.models.judge
         ):
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        from ghimera.judgment_types import DocumentJudgmentConfig
+
+        policy = DocumentJudgmentConfig.model_validate(policy.model_dump())
         validate_native_source(document, context.source_url, context.source_sha256)
         if (
             context.text_sha256 != hashlib.sha256(document.text.encode()).hexdigest()

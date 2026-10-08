@@ -21,19 +21,37 @@ class JudgmentRecord(BaseModel):
 
 
 class DocumentJudgmentConfig(JudgmentRecord):
-    schema_version: Literal["ghimera.document-judgment/1"] = Field(alias="schema")
+    schema_version: Literal["ghimera.document-judgment/1", "ghimera.document-judgment/2"] = Field(
+        alias="schema"
+    )
     selection: Literal["scored_native_windows"]
     max_windows: Positive
     first_look_max_chars: Positive
     expanded_look_max_chars: Positive
     padding_chars: Count
     incomplete_rejection: Literal["hold"]
+    prompt_profile: Literal["contribution_relevance"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def bounds(self) -> "DocumentJudgmentConfig":
         if self.first_look_max_chars > self.expanded_look_max_chars:
             raise ValueError("expanded judgment cannot reduce its declared context allowance")
+        if self.schema_version == "ghimera.document-judgment/1":
+            if "prompt_profile" in self.model_fields_set:
+                raise ValueError("legacy scored judgment does not select a prompt profile")
+        elif self.prompt_profile != "contribution_relevance":
+            raise ValueError("scored judgment /2 requires explicit contribution_relevance")
         return self
+
+    @property
+    def effective_prompt_revision(self) -> str:
+        return (
+            "ghimera-scored-document-judgment/2"
+            if self.schema_version == "ghimera.document-judgment/2"
+            else "ghimera-scored-document-judgment/1"
+        )
 
 
 class ScoringNativeReading(JudgmentRecord):

@@ -242,7 +242,7 @@ def validate_judgment_rows(
                 row.model_call != call
                 or row.reason != f"{original.decision}: {original.reason}"
                 or call.service != config.models.judge
-                or call.prompt_revision != "ghimera-scored-document-judgment/1"
+                or call.prompt_revision != policy.effective_prompt_revision
                 or call.selected_spans
                 != tuple(
                     (evidence.context.source_sha256, window.start, window.end)

@@ -2,10 +2,14 @@
 # private journal and model_work.results. These are explicit operator choices;
 # Ghimera rejects allowances exceeding the original configured judge/scorer.
 [document_judgment]
-schema = "ghimera.document-judgment/1"
+schema = "ghimera.document-judgment/2"
+prompt_profile = "contribution_relevance"
 selection = "scored_native_windows"
 max_windows = 3
 first_look_max_chars = 1500
 expanded_look_max_chars = 4000
 padding_chars = 450
 incomplete_rejection = "hold"
+
+# To retain the original /1 prompt, use ghimera.document-judgment/1 and OMIT
+# prompt_profile entirely. Neither recipe initiates work by itself.
