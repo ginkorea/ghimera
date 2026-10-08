@@ -12,7 +12,8 @@ from ghimera.budget import RunBudget
 from ghimera.ledger import Ledger
 from ghimera.model_config import ModelServiceConfig
 from ghimera.model_http import ModelHttpPort, PinnedModelHttp
-from ghimera.models import LedgerRow
+from ghimera.model_work import ModelInvocation, wire_output
+from ghimera.models import LedgerRow, ModelIdentity
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.visual_config import VisualConfig
 from ghimera.visual_types import Digest, OcrResult, VisualClaim, VisualInterpretation, VisualRecord
@@ -116,7 +117,19 @@ class LocalVisionReader:
         if len(body) > config.max_request_bytes:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         request_hash = hashlib.sha256(body).hexdigest()
-        budget.reserve_judge()
+        invocation = ModelInvocation(
+            budget,
+            ledger,
+            phase="visual_model",
+            scope="wire_request",
+            url=url,
+            model=ModelIdentity(
+                model_id=config.model_id,
+                revision=config.revision,
+                location="self_hosted",
+            ),
+            request=body,
+        )
         ledger.append(
             LedgerRow(
                 sequence=ledger.next_sequence,
@@ -126,7 +139,7 @@ class LocalVisionReader:
             )
         )
         async with asyncio_timeout(budget.remaining_seconds):
-            response = await port.post(body)
+            response = await invocation.invoke(lambda: port.post(body), wire_output)
         response_hash = hashlib.sha256(response.body).hexdigest()
         # Persist only hashes/identity; image payloads and source instructions are not logs.
         ledger.append(

@@ -25,6 +25,7 @@ from ghimera.graph_planning import build_context
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.loop import CollectionSession, GoalLoop
 from ghimera.model_types import ModelCallEvidence
+from ghimera.model_work import ModelInvocation, port_input, record_output
 from ghimera.models import (
     Document,
     Goal,
@@ -209,12 +210,18 @@ class ModelCalls:
         budget, ledger = self._session.budget, self._session.ledger
         if model.location == "external":
             raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
-        budget.reserve_judge()
+        invocation = ModelInvocation(
+            budget,
+            ledger,
+            phase=event,
+            model=model,
+            request=port_input(budget, request),
+        )
         started, code, result = budget.clock(), None, None
         model_call: ModelCallEvidence | None = None
         try:
             async with asyncio.timeout(budget.remaining_seconds):
-                result = await call(request)
+                result = await invocation.invoke(lambda: call(request), record_output)
             model_call = result.model_call
             return result
         except TimeoutError:

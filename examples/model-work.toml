@@ -1,0 +1,7 @@
+# Merge into a collection/research recipe with its explicit [journal] policy.
+# These are example bounds, not an active deployment or a model selection.
+[model_work]
+schema = "ghimera.model-work/1"
+max_input_bytes = 33554432
+max_unanswered_calls = 4
+uncertain_policy = "hold"

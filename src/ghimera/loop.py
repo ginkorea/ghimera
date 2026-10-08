@@ -27,6 +27,7 @@ from ghimera.local_inputs import (
     LocalInputLoader,
     LocalInputSnapshot,
 )
+from ghimera.model_work import ModelInvocation, port_input, record_output
 from ghimera.models import (
     Document,
     DuplicateOccurrence,
@@ -835,12 +836,22 @@ class GoalLoop:
     ) -> CollectionStop | None:
         budget, ledger = session.budget, session.ledger
         reserved = False
+
         try:
             async with session._slots.slot("judge"):
-                budget.reserve_judge()
+                invocation = ModelInvocation(
+                    budget,
+                    ledger,
+                    phase="grade",
+                    model=self._judge.model,
+                    request=port_input(budget, session.goal, *documents),
+                )
                 reserved = True
                 async with asyncio.timeout(budget.remaining_seconds):
-                    grade = await self._judge.grade(session.goal, documents)
+                    grade = await invocation.invoke(
+                        lambda: self._judge.grade(session.goal, documents),
+                        record_output,
+                    )
         except asyncio.CancelledError as exc:
             if reserved:
                 ledger.append(
@@ -1105,11 +1116,21 @@ class GoalLoop:
     ) -> Verdict:
         budget, ledger = session.budget, session.ledger
         async with session._slots.slot("judge"):
-            budget.reserve_judge()
+            invocation = ModelInvocation(
+                budget,
+                ledger,
+                phase="verdict",
+                model=self._judge.model,
+                url=url,
+                request=port_input(budget, session.goal, extracted, second_look=second_look),
+            )
             try:
                 async with asyncio.timeout(budget.remaining_seconds):
-                    verdict = await self._judge.document(
-                        session.goal, extracted, second_look=second_look
+                    verdict = await invocation.invoke(
+                        lambda: self._judge.document(
+                            session.goal, extracted, second_look=second_look
+                        ),
+                        record_output,
                     )
             except asyncio.CancelledError as exc:
                 ledger.append(

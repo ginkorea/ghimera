@@ -1,7 +1,8 @@
 """Run-owned append-only ledger; immutable snapshots rather than exposed lists."""
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
+from ghimera.config import GhimeraConfig
 from ghimera.models import Harvest, LedgerRow
 
 
@@ -11,6 +12,18 @@ class LedgerSink(Protocol):
     def finish(self, harvest: Harvest) -> None: ...
 
     def close(self) -> None: ...
+
+
+@runtime_checkable
+class DurableLedgerSink(LedgerSink, Protocol):
+    """Append acknowledges durable storage, bound to the complete original recipe.
+
+    Implementations promising this capability must not substitute memory-only
+    acknowledgement. Native DirectoryLedgerSink fsyncs the journal before return.
+    """
+
+    @property
+    def effective_config(self) -> GhimeraConfig: ...
 
 
 class Ledger:
@@ -42,6 +55,10 @@ class Ledger:
     @property
     def next_sequence(self) -> int:
         return len(self._rows)
+
+    def has_durable_binding(self, config: GhimeraConfig) -> bool:
+        """An arbitrary sink or differently configured journal is not admission."""
+        return isinstance(self._sink, DurableLedgerSink) and self._sink.effective_config == config
 
     def snapshot(self) -> tuple[LedgerRow, ...]:
         return tuple(self._rows)

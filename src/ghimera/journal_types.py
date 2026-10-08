@@ -88,6 +88,7 @@ class JournalReport(Record):
 
     @model_validator(mode="after")
     def coherent(self) -> "JournalReport":
+        from ghimera.model_work import uncertain_model_sequences
         from ghimera.scoring_validation import validate_reference_rows
 
         if (self.state == "complete") != (self.summary is not None):
@@ -97,4 +98,28 @@ class JournalReport(Record):
         if tuple(row.sequence for row in self.rows) != tuple(range(len(self.rows))):
             raise ValueError("journal rows must be contiguous")
         validate_reference_rows(self.header.config, self.header.goal.text, self.rows)
+        uncertain_model_sequences(self.rows)
+        intents = tuple(row for row in self.rows if row.model_intent is not None)
+        if intents and self.header.config.model_work is None:
+            raise ValueError("model intents require the original run's declared storage policy")
+        if intents and tuple(
+            row.model_intent.judge_reservation for row in intents if row.model_intent is not None
+        ) != tuple(range(1, len(intents) + 1)):
+            raise ValueError("model intents must retain every reserved call in order")
+        policy = self.header.config.model_work
+        if policy is not None and (
+            len(intents) > self.header.config.judge_budget
+            or any(
+                row.model_intent is not None
+                and row.model_intent.input_bytes > policy.max_input_bytes
+                for row in intents
+            )
+        ):
+            raise ValueError("model intents exceed their declared run/input budgets")
         return self
+
+    @property
+    def uncertain_model_calls(self) -> tuple[int, ...]:
+        from ghimera.model_work import uncertain_model_sequences
+
+        return uncertain_model_sequences(self.rows)

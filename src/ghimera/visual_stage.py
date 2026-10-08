@@ -2,12 +2,14 @@
 
 import asyncio
 import hashlib
+from functools import partial
 
 from ghimera.budget import RunBudget
 from ghimera.fetch import FetchLadder
 from ghimera.image_candidates import admitted, image_candidates
 from ghimera.image_ocr import ImageOcr
 from ghimera.ledger import Ledger
+from ghimera.model_work import ModelInvocation, port_input, record_output
 from ghimera.models import Extracted, Goal, LedgerRow, Page, Scope
 from ghimera.ports import Judge
 from ghimera.refusals import GhimeraRefused, ModelFailure, RefusalCode
@@ -91,16 +93,25 @@ class VisualStage:
                         accepted = interpretation is not None
                         reason = "source_bound_visual_review"
                     elif ocr.spans:
-                        budget.reserve_judge()
+                        extracted_image = Extracted(
+                            title=candidate.caption or "image OCR",
+                            text=ocr.text,
+                            language="und",
+                        )
+                        invocation = ModelInvocation(
+                            budget,
+                            ledger,
+                            phase="verdict",
+                            model=self._judge.model,
+                            url=image.final_url,
+                            request=port_input(budget, goal, extracted_image, second_look=False),
+                        )
                         try:
-                            verdict = await self._judge.document(
-                                goal,
-                                Extracted(
-                                    title=candidate.caption or "image OCR",
-                                    text=ocr.text,
-                                    language="und",
+                            verdict = await invocation.invoke(
+                                partial(
+                                    self._judge.document, goal, extracted_image, second_look=False
                                 ),
-                                second_look=False,
+                                record_output,
                             )
                         except (GhimeraRefused, TimeoutError) as exc:
                             code = (

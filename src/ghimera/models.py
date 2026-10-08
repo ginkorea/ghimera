@@ -30,6 +30,7 @@ from ghimera.human_browser_types import (
 )
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.model_types import ModelCallEvidence
+from ghimera.model_work_types import ModelAcknowledgement, ModelIntent
 from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.page_transcription_types import PageTranscriptionCall, ReviewedPageTranscription
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
@@ -712,6 +713,8 @@ class LedgerRow(Record):
         "transcription_model",
         "transcription",
         "retained_source",
+        "model_intent",
+        "model_ack",
     ]
     url: str | None = None
     route: str | None = None
@@ -727,6 +730,8 @@ class LedgerRow(Record):
         default=None, exclude_if=lambda value: value is None
     )
     model_call: ModelCallEvidence | None = None
+    model_intent: ModelIntent | None = Field(default=None, exclude_if=lambda v: v is None)
+    model_ack: ModelAcknowledgement | None = Field(default=None, exclude_if=lambda v: v is None)
     extraction: ExtractionEvidence | None = None
     extraction_attempt: HtmlExtractionAttempt | None = Field(
         default=None, exclude_if=lambda v: v is None
@@ -780,6 +785,30 @@ class LedgerRow(Record):
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if (self.event == "model_intent") != (self.model_intent is not None) or (
+            self.event == "model_ack"
+        ) != (self.model_ack is not None):
+            raise ValueError("model operation rows require their typed invocation evidence")
+        if self.event in {"model_intent", "model_ack"} and (
+            self.model is None
+            or self.bytes_read != 0
+            or self.transport is not None
+            or self.model_call is not None
+            or self.refusal is not None
+        ):
+            raise ValueError("model operation evidence is not a source read or approved result")
+        if self.model_ack is not None and self.model_ack.intent_sequence >= self.sequence:
+            raise ValueError("model acknowledgement must refer to an earlier intent")
+        if (
+            self.model_ack is not None
+            and self.model_ack.refused_call is not None
+            and (
+                self.model is None
+                or self.model_ack.refused_call.service.model_id != self.model.model_id
+                or self.model_ack.refused_call.service.revision != self.model.revision
+            )
+        ):
+            raise ValueError("a known refused completion must retain its invoked model identity")
         if self.source_refresh is not None and (
             self.event != "policy"
             or self.reason != "source_refresh_revalidated"

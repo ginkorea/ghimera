@@ -207,6 +207,11 @@ class DirectoryLedgerSink:
         if (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino):
             raise _refuse()
 
+    @property
+    def effective_config(self) -> GhimeraConfig:
+        """The native durable sink binds its original header, not caller metadata."""
+        return self._header.config
+
     def append(self, row: LedgerRow) -> None:
         with self._lock:
             try:
@@ -383,20 +388,24 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
                 or receipt.encoding_calls != len(encoding)
                 or receipt.encoding_chars != sum(call.input_chars for call in encoding)
                 or receipt.judge_calls
-                != sum(
-                    row.event
-                    in {
-                        "verdict",
-                        "grade",
-                        "plan",
-                        "assessment",
-                        "answer",
-                        "review",
-                        "semantic",
-                        "semantic_review",
-                        "transcription_model",
-                    }
-                    for row in rows
+                != (
+                    sum(row.model_intent is not None for row in rows)
+                    if header.config.model_work is not None
+                    else sum(
+                        row.event
+                        in {
+                            "verdict",
+                            "grade",
+                            "plan",
+                            "assessment",
+                            "answer",
+                            "review",
+                            "semantic",
+                            "semantic_review",
+                            "transcription_model",
+                        }
+                        for row in rows
+                    )
                 )
                 or not rows
                 or rows[-1].event != "stop"

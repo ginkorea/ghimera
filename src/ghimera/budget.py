@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Callable
 
 from ghimera.config import GhimeraConfig
+from ghimera.model_work import uncertain_model_sequences
 from ghimera.models import LedgerRow, Receipt
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
@@ -54,6 +55,8 @@ class RunBudget:
             raise ValueError(
                 "restored budget requires its original recipe and nonnegative downtime"
             )
+        if self.config.model_work is not None and uncertain_model_sequences(rows):
+            raise ValueError("uncertain model reservations require reconciliation, not retry")
         self.started -= receipt.elapsed_seconds + downtime_seconds
         self.fetches, self.bytes_read = receipt.fetches, receipt.bytes_read
         self.judge_calls = receipt.judge_calls

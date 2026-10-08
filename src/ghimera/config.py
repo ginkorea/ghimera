@@ -25,6 +25,7 @@ from ghimera.journal_config import JournalConfig
 from ghimera.local_input_types import LocalInputConfig
 from ghimera.mcp_lead_config import McpLeadConfig
 from ghimera.model_config import ModelBindingsConfig
+from ghimera.model_work_types import ModelWorkConfig
 from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.reference_config import ReferenceConfig
 from ghimera.research_config import ResearchConfig
@@ -172,9 +173,14 @@ class GhimeraConfig(BaseModel):
     semantics: SemanticConfig | None = Field(default=None, exclude_if=lambda v: v is None)
     continuation: ContinuationConfig | None = Field(default=None, exclude_if=lambda v: v is None)
     source_work: SourceWorkConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    model_work: ModelWorkConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
+        if self.model_work is not None and (
+            self.journal is None or self.model_work.max_unanswered_calls > self.judge_budget
+        ):
+            raise ValueError("model work needs a durable journal and a bound within judge budget")
         if self.source_work is not None and self.journal is None:
             raise ValueError("source work requires the existing durable run journal")
         if self.pdf_transcription is not None and (

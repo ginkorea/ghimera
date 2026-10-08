@@ -19,7 +19,8 @@ from ghimera.model_http import (
     PinnedModelHttp,
 )
 from ghimera.model_types import TokenUsage
-from ghimera.models import LedgerRow
+from ghimera.model_work import ModelInvocation, wire_output
+from ghimera.models import LedgerRow, ModelIdentity
 from ghimera.page_transcription_config import PageTranscriptionConfig
 from ghimera.page_transcription_types import (
     PageTranscriptionCall,
@@ -141,7 +142,19 @@ class LocalPageTranscriber:
         if len(request) > service.max_request_bytes:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         request_hash = hashlib.sha256(request).hexdigest()
-        budget.reserve_judge()
+        invocation = ModelInvocation(
+            budget,
+            ledger,
+            phase="transcription_model",
+            scope="wire_request",
+            url=source_url,
+            model=ModelIdentity(
+                model_id=service.model_id,
+                revision=service.revision,
+                location="self_hosted",
+            ),
+            request=request,
+        )
         ledger.append(
             LedgerRow(
                 sequence=ledger.next_sequence,
@@ -155,7 +168,7 @@ class LocalPageTranscriber:
         outcome: Literal["success", "refused", "cancelled"] = "refused"
         try:
             async with asyncio.timeout(min(service.timeout_seconds, budget.remaining_seconds)):
-                response = await port.post(request)
+                response = await invocation.invoke(lambda: port.post(request), wire_output)
             if (
                 response.status != 200
                 or response.content_type.split(";", 1)[0] != "application/json"

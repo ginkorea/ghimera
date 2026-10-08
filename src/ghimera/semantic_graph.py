@@ -8,6 +8,7 @@ merge, corroboration upgrade, model fallback or graph store lives here.
 import asyncio
 import hashlib
 import re
+from functools import partial
 from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import ValidationError
@@ -20,6 +21,7 @@ from ghimera.ledger import Ledger
 from ghimera.model_citations import citation_id
 from ghimera.model_config import ModelServiceConfig
 from ghimera.model_types import ModelCallEvidence
+from ghimera.model_work import ModelInvocation, port_input, record_output
 from ghimera.models import Document, Harvest, LedgerRow, ModelIdentity
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from ghimera.semantic_batching import assemble_review, review_selections
@@ -332,7 +334,15 @@ class SemanticStage:
                 break
             end = min(start + policy.window_chars, len(text))
             last = number + 1 == policy.max_windows_per_document or end == len(text)
-            budget.reserve_semantic()
+            invocation = ModelInvocation(
+                budget,
+                ledger,
+                phase="semantic_extract",
+                model=self._extractor.model,
+                url=document.url,
+                request=port_input(budget, document, policy, intent=intent, start=start, end=end),
+                reserve=budget.reserve_semantic,
+            )
             call: ModelCallEvidence | None = None
             proposal: SemanticProposal | None = None
             phase: Literal["extract", "review", "projection"] = "extract"
@@ -340,8 +350,11 @@ class SemanticStage:
             committed = False
             try:
                 async with asyncio.timeout(budget.remaining_seconds):
-                    extracted = await self._extractor.semantic_extract(
-                        intent, document, start, end, policy
+                    extracted = await invocation.invoke(
+                        partial(
+                            self._extractor.semantic_extract, intent, document, start, end, policy
+                        ),
+                        record_output,
                     )
                 call = extracted.model_call
                 validated = SemanticProposal.model_validate(extracted.model_dump())
@@ -495,22 +508,41 @@ class SemanticStage:
     ) -> SemanticReview:
         if self._reviewer is None:
             raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
-        budget.reserve_semantic_review()
+        reviewer = self._reviewer
+
+        async def review_call() -> SemanticReview:
+            if selection is not None:
+                if not isinstance(reviewer, PartitionedSemanticReviewer):
+                    raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+                return await reviewer.semantic_review_part(
+                    intent, document, start, end, policy, proposal, selection
+                )
+            return await reviewer.semantic_review(intent, document, start, end, policy, proposal)
+
+        invocation = ModelInvocation(
+            budget,
+            ledger,
+            phase="semantic_review",
+            model=reviewer.model,
+            url=document.url,
+            request=port_input(
+                budget,
+                document,
+                policy,
+                proposal,
+                *((selection,) if selection is not None else ()),
+                intent=intent,
+                start=start,
+                end=end,
+            ),
+            reserve=budget.reserve_semantic_review,
+        )
         call: ModelCallEvidence | None = None
         review: SemanticReview | None = None
         refusal: RefusalCode | None = None
         try:
             async with asyncio.timeout(budget.remaining_seconds):
-                if selection is not None:
-                    if not isinstance(self._reviewer, PartitionedSemanticReviewer):
-                        raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
-                    review = await self._reviewer.semantic_review_part(
-                        intent, document, start, end, policy, proposal, selection
-                    )
-                else:
-                    review = await self._reviewer.semantic_review(
-                        intent, document, start, end, policy, proposal
-                    )
+                review = await invocation.invoke(review_call, record_output)
             call = review.model_call
             review = restore_review(review)
             if selection is not None:
