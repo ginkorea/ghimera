@@ -17,7 +17,8 @@ corpus identity, generation and purpose before calling the encoder. The row is
 initially `unknown`: it proves admission, not contact, completion or usage.
 An unresolved invocation refuses automatic replay. An observed refusal or
 cancellation retains its reservation and cannot become a reusable success.
-There is no automatic remote status reconciliation or operator override API.
+There is no automatic remote status reconciliation. Explicit caller-owned
+abandonment can authorize one separately charged attempt as described below.
 
 After the adapter returns a validated successful batch, the exact vectors,
 original `EncodingCall`, result digest and audit identifier commit in one native
@@ -45,3 +46,52 @@ They terminate real child processes before acknowledgement and after durable
 acknowledgement, on append and query paths. They establish persistence,
 admission, provenance, refusal and local reuse behavior. They do not establish
 model quality, remote acceptance, deployed service behavior or a finished release.
+
+## Explicit unknown-outcome decisions
+
+For newly admitted invocations, the same native SQLite owner records the exact
+original corpus configuration before contact. The caller obtains an immutable
+`EncodingInvocationObservation` with
+`EvidenceCorpus.observe_encoding_invocation(invocation_sha256)`, then supplies a
+versioned `EncodingReconciliationDecision` bound to that complete observation
+and its digest. Its only action is `abandon_and_authorize_new_attempt`. Caller
+attribution and reason are supplied by the caller; neither is a claim of verified
+human approval or proof that the server did no work. See the non-active typed
+[example](../examples/encoding_reconciliation.py).
+
+`EvidenceCorpus.reconcile_encoding(decision)` takes the existing native writer
+lease and commits the immutable decision plus one new `unknown` invocation in
+one transaction. It retains the original unknown invocation and its call,
+character and byte reservations. The new attempt is charged separately against
+the original remaining quota, including bounded admission/decision history
+bytes. It requires the exact original corpus identity, service, inputs,
+configuration and current generation. A later policy increase is supported by
+normal corpus work, but cannot become original reconciliation authorization.
+Stale observations, changed inputs/control, absent original admission evidence,
+and exhausted original quotas refuse without model contact. Historical unknown
+rows lacking the admission record are never repaired by inferring a policy.
+
+The returned `EncodingAttemptAuthorization` is an exact decision/admission
+receipt. Supply it explicitly as `search(..., encoding_authorization=receipt)`
+or `append(..., encoding_authorizations=(receipt,))`; ordinary calls continue
+to refuse the original unknown. Native contact consumes the authorization
+durably once under the same writer lease. Recovery-enabled queries retain that
+lease through encoder contact, so a concurrent decision cannot abandon a live
+invocation. Append validates every supplied receipt before any batch contact.
+Death after the decision but before consumption allows that original receipt
+to be used once. Death after consumption leaves another charged unknown and
+refuses replay. An acknowledged new batch can be reused locally with its own
+original audit provenance; the old unknown remains unchanged and charged.
+
+An exact repeated decision recovers its historical receipt without creating
+another attempt. It does not refresh contact permission. Another decision over
+the old snapshot refuses. Further unknown attempts require their own fresh
+observations and explicit decisions within the same original quota.
+`encoding_reconciliation_history()` returns the retained ordered decision
+records. Existing encoding/model wires, legacy disabled configurations and
+acknowledgement reuse retain their contracts.
+
+This increment implements explicit native encoding reconciliation only.
+Arbitrary interrupted source, research-model, graph and service adoption remain
+separate I03 requirements. Protocol doubles and native crash tests do not
+establish remote reconciliation, model quality, deployed acceptance or release.

@@ -18,6 +18,12 @@ from ghimera.embedding_types import (
     EncodingRecoveryState,
     Vector,
 )
+from ghimera.encoding_reconciliation import (
+    EncodingAdmission,
+    EncodingAttemptAuthorization,
+    EncodingInvocationObservation,
+    EncodingReconciliationDecision,
+)
 from ghimera.models import Document
 from ghimera.private_database import PrivateDatabase
 
@@ -121,6 +127,18 @@ class CorpusStorage:
                 "status TEXT NOT NULL, reserved_bytes INTEGER NOT NULL, result BLOB,"
                 "result_sha TEXT, call_id INTEGER REFERENCES calls(id))"
             )
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS encoding_admissions("
+                "invocation TEXT PRIMARY KEY REFERENCES encoding_invocations(id),"
+                "payload BLOB NOT NULL, payload_sha TEXT NOT NULL)"
+            )
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS encoding_decisions("
+                "id TEXT PRIMARY KEY, original_invocation TEXT NOT NULL UNIQUE"
+                " REFERENCES encoding_invocations(id), attempt TEXT NOT NULL UNIQUE"
+                " REFERENCES encoding_invocations(id), payload BLOB NOT NULL,"
+                "consumed INTEGER NOT NULL CHECK(consumed IN (0,1)))"
+            )
         self.encoding_recovery_state()
 
     def encoding_recovery_state(self) -> EncodingRecoveryState | None:
@@ -132,11 +150,15 @@ class CorpusStorage:
             "COALESCE(SUM(status='acknowledged'),0),COALESCE(SUM(status='unknown'),0)"
             " FROM encoding_invocations"
         ).fetchone()
+        extra_bytes = self.db.execute(
+            "SELECT (SELECT COALESCE(SUM(length(payload)),0) FROM encoding_admissions)"
+            "+(SELECT COALESCE(SUM(length(payload)),0) FROM encoding_decisions)"
+        ).fetchone()[0]
         state = EncodingRecoveryState(
             schema="ghimera.encoding-recovery-state/1",
             reserved_calls=int(calls),
             reserved_input_chars=int(chars),
-            stored_bytes=int(size),
+            stored_bytes=int(size) + int(extra_bytes),
             acknowledged=int(acknowledged),
             unresolved=int(unresolved),
         )
@@ -173,31 +195,290 @@ class CorpusStorage:
                         "encoding invocation requires reconciliation; automatic replay refused"
                     )
                 return self._acknowledged_encoding(intent, row[2], row[3], row[4])
-            state = self.encoding_recovery_state()
-            if state is None:
-                raise ValueError("encoding recovery is not configured")
-            # Reserve input plus the entire bounded result before invoking any adapter.
-            # Finite IEEE-double JSON components can expand from short integer wire
-            # literals. Thirty-two bytes covers a signed round-trippable double
-            # plus its separator; this is a serialization invariant, not tuning.
-            result_bound = max(
-                intent.service.max_response_bytes,
-                intent.service.dimensions * len(intent.texts) * 32,
+            admission = EncodingAdmission(
+                schema="ghimera.encoding-admission/1", configuration=self.config
             )
-            result_bound += len(intent.service.model_dump_json().encode()) + 2048
-            result_bound += 70 * intent.service.max_batch_texts
-            reserved = len(payload) + result_bound
+            self._reserve_new_encoding(intent, intent.identity, admission)
+        return None
+
+    def _reserve_new_encoding(
+        self,
+        intent: EncodingIntent,
+        invocation: str,
+        admission: EncodingAdmission,
+        *,
+        decision_bytes: int = 0,
+    ) -> None:
+        policy = admission.configuration.encoding_recovery
+        state = self.encoding_recovery_state()
+        if policy is None or state is None:
+            raise ValueError("encoding recovery is not configured")
+        payload = intent.model_dump_json().encode()
+        admission_payload = admission.model_dump_json().encode()
+        # Reserve a complete finite-double result before contact, including its
+        # native admission and immutable decision evidence.
+        result_bound = max(
+            intent.service.max_response_bytes, intent.service.dimensions * len(intent.texts) * 32
+        )
+        result_bound += len(intent.service.model_dump_json().encode()) + 2048
+        result_bound += 70 * intent.service.max_batch_texts
+        reserved = len(payload) + result_bound
+        if (
+            state.reserved_calls + 1 > policy.max_calls
+            or state.reserved_input_chars + intent.input_chars > policy.max_input_chars
+            or state.stored_bytes + reserved + len(admission_payload) + decision_bytes
+            > policy.max_stored_bytes
+        ):
+            raise ValueError("durable encoding allowance exhausted before contact")
+        self.db.execute(
+            "INSERT INTO encoding_invocations VALUES(?,?,?,'unknown',?,NULL,NULL,NULL)",
+            (invocation, payload, intent.input_chars, reserved),
+        )
+        self.db.execute(
+            "INSERT INTO encoding_admissions VALUES(?,?,?)",
+            (invocation, admission_payload, admission.sha256),
+        )
+
+    def observe_encoding(self, invocation: str) -> EncodingInvocationObservation:
+        """Caller must hold the owning writer and transaction for a coherent decision input."""
+        self.check()
+        state = self.encoding_recovery_state()
+        if state is None:
+            raise ValueError("encoding recovery is not configured")
+        row = self.db.execute(
+            "SELECT intent,status,reserved_bytes,result,result_sha,call_id,input_chars"
+            " FROM encoding_invocations WHERE id=? AND length(intent)<=?",
+            (
+                invocation,
+                self.config.encoding_recovery.max_stored_bytes
+                if self.config.encoding_recovery
+                else 0,
+            ),
+        ).fetchone()
+        if row is None or not isinstance(row[0], bytes):
+            raise ValueError("encoding invocation is absent or exceeds its configured bound")
+        intent = EncodingIntent.model_validate_json(row[0])
+        if intent.corpus_id != self.identity or intent.input_chars != row[6]:
+            raise ValueError("encoding invocation lost its corpus or input binding")
+        if row[1] == "acknowledged":
+            self._acknowledged_encoding(intent, row[3], row[4], row[5])
+        elif row[3] is not None or row[4] is not None or row[5] is not None:
+            raise ValueError(
+                "unacknowledged encoding cannot claim a result or audit acknowledgement"
+            )
+        admission_row = self.db.execute(
+            "SELECT payload,payload_sha FROM encoding_admissions WHERE invocation=?", (invocation,)
+        ).fetchone()
+        admission = None
+        if admission_row is not None:
             if (
-                state.reserved_calls + 1 > policy.max_calls
-                or state.reserved_input_chars + intent.input_chars > policy.max_input_chars
-                or state.stored_bytes + reserved > policy.max_stored_bytes
+                not isinstance(admission_row[0], bytes)
+                or digest(admission_row[0]) != admission_row[1]
             ):
-                raise ValueError("durable encoding allowance exhausted before contact")
+                raise ValueError("original encoding admission changed")
+            admission = EncodingAdmission.model_validate_json(admission_row[0])
+        outgoing = self.db.execute(
+            "SELECT id FROM encoding_decisions WHERE original_invocation=?", (invocation,)
+        ).fetchone()
+        attempt = self.db.execute(
+            "SELECT id,payload,original_invocation,consumed FROM encoding_decisions"
+            " WHERE attempt=?",
+            (invocation,),
+        ).fetchone()
+        if attempt is None:
+            if invocation != intent.identity:
+                raise ValueError("encoding invocation identity does not bind its exact intent")
+        else:
+            if not isinstance(attempt[1], bytes) or digest(attempt[1]) != attempt[0]:
+                raise ValueError("encoding attempt incoming decision changed")
+            decision = EncodingReconciliationDecision.model_validate_json(attempt[1])
+            if decision.sha256 != attempt[0] or decision.observed.admission is None:
+                raise ValueError("encoding attempt has no canonical original decision admission")
+            authorization = EncodingAttemptAuthorization(
+                schema="ghimera.encoding-attempt/1",
+                original_invocation_sha256=decision.observed.invocation_sha256,
+                decision_sha256=decision.sha256,
+                admission_sha256=decision.observed.admission.sha256,
+                intent=decision.observed.intent,
+            )
+            if (
+                authorization.invocation_sha256 != invocation
+                or authorization.intent != intent
+                or authorization.original_invocation_sha256 != attempt[2]
+                or decision.observed.admission != admission
+            ):
+                raise ValueError(
+                    "encoding attempt identity does not bind its incoming decision/intent"
+                )
+        return EncodingInvocationObservation(
+            schema="ghimera.encoding-observation/1",
+            invocation_sha256=invocation,
+            intent=intent,
+            status=row[1],
+            reserved_bytes=row[2],
+            result_sha256=row[4],
+            original_call_id=row[5],
+            admission=admission,
+            outgoing_decision_sha256=None if outgoing is None else outgoing[0],
+            attempt_consumed=None if attempt is None else bool(attempt[3]),
+            current_generation=self.generation(),
+            reservations=state,
+        )
+
+    def _validate_reconciliation_context(
+        self, observed: EncodingInvocationObservation
+    ) -> EncodingAdmission:
+        admission = observed.admission
+        if admission is None:
+            raise ValueError(
+                "original encoding admission quota is unavailable; reconciliation refused"
+            )
+        if admission.configuration.identity != self.config.identity:
+            raise ValueError("encoding reconciliation configuration drift; original quota required")
+        intent = observed.intent
+        service = self.config.encoder if intent.purpose == "passage" else self.config.query_encoder
+        if (
+            intent.corpus_id != self.identity
+            or intent.service != service
+            or intent.generation != self.generation()
+        ):
+            raise ValueError("encoding reconciliation corpus/service/generation drift")
+        return admission
+
+    def reconcile_encoding(
+        self, decision: EncodingReconciliationDecision
+    ) -> EncodingAttemptAuthorization:
+        """One atomic decision and separately charged unknown; owner holds the writer lock."""
+        decision = EncodingReconciliationDecision.model_validate(decision.model_dump())
+        with self.writer(), self.transaction():
+            admission = self._validate_reconciliation_context(decision.observed)
+            authorization = EncodingAttemptAuthorization(
+                schema="ghimera.encoding-attempt/1",
+                original_invocation_sha256=decision.observed.invocation_sha256,
+                decision_sha256=decision.sha256,
+                admission_sha256=admission.sha256,
+                intent=decision.observed.intent,
+            )
+            payload = decision.model_dump_json().encode()
+            previous = self.db.execute(
+                "SELECT payload,attempt FROM encoding_decisions WHERE id=?", (decision.sha256,)
+            ).fetchone()
+            if previous is not None:
+                if previous != (payload, authorization.invocation_sha256):
+                    raise ValueError("stored encoding decision changed")
+                return authorization  # Historical receipt, never a fresh contact permission.
+            observed = self.observe_encoding(decision.observed.invocation_sha256)
+            if observed.sha256 != decision.observed_sha256:
+                raise ValueError("encoding decision is stale or its observed state changed")
+            if (
+                observed.status != "unknown"
+                or observed.outgoing_decision_sha256 is not None
+                or observed.attempt_consumed is False
+            ):
+                raise ValueError("encoding decision requires an unclaimed unknown outcome")
+            self._audit_room(entries=1, size=len(payload))
+            self._reserve_new_encoding(
+                observed.intent,
+                authorization.invocation_sha256,
+                admission,
+                decision_bytes=len(payload),
+            )
             self.db.execute(
-                "INSERT INTO encoding_invocations VALUES(?,?,?,'unknown',?,NULL,NULL,NULL)",
-                (intent.identity, payload, intent.input_chars, reserved),
+                "INSERT INTO encoding_decisions VALUES(?,?,?,?,0)",
+                (
+                    decision.sha256,
+                    observed.invocation_sha256,
+                    authorization.invocation_sha256,
+                    payload,
+                ),
+            )
+        return authorization
+
+    def claim_encoding_attempt(
+        self, authorization: EncodingAttemptAuthorization, intent: EncodingIntent
+    ) -> tuple[EncodingBatch, int] | None:
+        authorization = EncodingAttemptAuthorization.model_validate(authorization.model_dump())
+        with self.transaction():
+            observed = self._validate_encoding_attempt(authorization, intent)
+            if observed.attempt_consumed:
+                result = self.db.execute(
+                    "SELECT result,result_sha,call_id FROM encoding_invocations WHERE id=?",
+                    (authorization.invocation_sha256,),
+                ).fetchone()
+                return self._acknowledged_encoding(intent, result[0], result[1], result[2])
+            self.db.execute(
+                "UPDATE encoding_decisions SET consumed=1 WHERE id=? AND consumed=0",
+                (authorization.decision_sha256,),
             )
         return None
+
+    def validate_encoding_attempt(
+        self, authorization: EncodingAttemptAuthorization, intent: EncodingIntent
+    ) -> None:
+        """Validate all supplied append receipts before any batch contacts its encoder."""
+        authorization = EncodingAttemptAuthorization.model_validate(authorization.model_dump())
+        with self.transaction():
+            self._validate_encoding_attempt(authorization, intent)
+
+    def _validate_encoding_attempt(
+        self, authorization: EncodingAttemptAuthorization, intent: EncodingIntent
+    ) -> EncodingInvocationObservation:
+        if authorization.intent != intent:
+            raise ValueError("encoding attempt does not bind the exact requested intent")
+        row = self.db.execute(
+            "SELECT payload,attempt,consumed FROM encoding_decisions WHERE id=?",
+            (authorization.decision_sha256,),
+        ).fetchone()
+        if (
+            row is None
+            or row[1] != authorization.invocation_sha256
+            or not isinstance(row[0], bytes)
+            or digest(row[0]) != authorization.decision_sha256
+        ):
+            raise ValueError("encoding attempt has no exact durable decision")
+        decision = EncodingReconciliationDecision.model_validate_json(row[0])
+        admission = self._validate_reconciliation_context(decision.observed)
+        if (
+            authorization.original_invocation_sha256 != decision.observed.invocation_sha256
+            or authorization.intent != decision.observed.intent
+            or authorization.admission_sha256 != admission.sha256
+        ):
+            raise ValueError("encoding attempt lost its original admission or decision binding")
+        original = self.observe_encoding(authorization.original_invocation_sha256)
+        if (
+            original.intent != intent
+            or original.status != "unknown"
+            or original.admission != admission
+            or original.outgoing_decision_sha256 != authorization.decision_sha256
+        ):
+            raise ValueError("encoding attempt original unknown observation changed")
+        observed = self.observe_encoding(authorization.invocation_sha256)
+        if observed.admission != admission:
+            raise ValueError("encoding attempt original admission changed")
+        if row[2]:
+            if observed.status != "acknowledged":
+                raise ValueError(
+                    "encoding attempt was consumed; unknown/refused work cannot replay"
+                )
+        elif observed.status != "unknown" or observed.outgoing_decision_sha256 is not None:
+            raise ValueError("encoding authorization is stale")
+        return observed
+
+    def encoding_decisions(self) -> tuple[EncodingReconciliationDecision, ...]:
+        state = self.encoding_recovery_state()
+        if state is None:
+            raise ValueError("encoding recovery is not configured")
+        decisions_list: list[EncodingReconciliationDecision] = []
+        for identity, payload in self.db.execute(
+            "SELECT id,payload FROM encoding_decisions ORDER BY rowid"
+        ):
+            if not isinstance(payload, bytes) or digest(payload) != identity:
+                raise ValueError("encoding decision history changed")
+            decisions_list.append(EncodingReconciliationDecision.model_validate_json(payload))
+        decisions = tuple(decisions_list)
+        if len(decisions) > state.reserved_calls:
+            raise ValueError("encoding decision history exceeds its invocation reservations")
+        return decisions
 
     def _acknowledged_encoding(
         self, intent: EncodingIntent, result: object, sha: object, call_id: object
@@ -212,7 +493,12 @@ class CorpusStorage:
         return batch, call_id
 
     def acknowledge_encoding(
-        self, operation: str, intent: EncodingIntent, batch: EncodingBatch
+        self,
+        operation: str,
+        intent: EncodingIntent,
+        batch: EncodingBatch,
+        *,
+        invocation: str | None = None,
     ) -> int:
         """Persist observed vectors and audit atomically before returning them to the caller."""
         batch = EncodingBatch.model_validate(batch.model_dump())
@@ -222,7 +508,7 @@ class CorpusStorage:
             row = self.db.execute(
                 "SELECT intent,reserved_bytes FROM encoding_invocations"
                 " WHERE id=? AND status='unknown'",
-                (intent.identity,),
+                (intent.identity if invocation is None else invocation,),
             ).fetchone()
             if row is None or row[0] != intent.model_dump_json().encode():
                 raise ValueError("encoding result has no exact pre-contact intent")
@@ -233,17 +519,28 @@ class CorpusStorage:
             self.db.execute(
                 "UPDATE encoding_invocations SET status='acknowledged',reserved_bytes=?,"
                 "result=?,result_sha=?,call_id=? WHERE id=?",
-                (size, result, digest(result), call_id, intent.identity),
+                (
+                    size,
+                    result,
+                    digest(result),
+                    call_id,
+                    intent.identity if invocation is None else invocation,
+                ),
             )
         return call_id
 
-    def refuse_encoding(self, intent: EncodingIntent, call: EncodingCall) -> None:
+    def refuse_encoding(
+        self, intent: EncodingIntent, call: EncodingCall, *, invocation: str | None = None
+    ) -> None:
         # Observation of failure does not prove that the server did no work.
         # Keep the reservation charged, and never turn it into a retry allowance.
         with self.transaction():
             self.db.execute(
                 "UPDATE encoding_invocations SET status=? WHERE id=? AND status='unknown'",
-                (call.outcome if call.telemetry == "observed" else "unknown", intent.identity),
+                (
+                    call.outcome if call.telemetry == "observed" else "unknown",
+                    intent.identity if invocation is None else invocation,
+                ),
             )
 
     def counts(self) -> tuple[int, int, int, int]:
@@ -308,6 +605,12 @@ class CorpusStorage:
             "SELECT COUNT(*),COALESCE(SUM(reserved_entries),0),"
             "COALESCE(SUM(reserved_bytes),0) FROM operations"
         ).fetchone()
+        if self.config.encoding_recovery is not None:
+            decisions, decision_bytes = self.db.execute(
+                "SELECT COUNT(*),COALESCE(SUM(length(payload)),0) FROM encoding_decisions"
+            ).fetchone()
+            count += decisions
+            current += decision_bytes
         if (
             int(count) + int(operations) + int(pending) + entries > self.config.max_audit_entries
             or int(current) + int(reserved) + size > self.config.max_audit_bytes

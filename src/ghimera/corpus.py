@@ -26,6 +26,11 @@ from ghimera.embedding_types import (
     EncodingRecoveryState,
     encoding_request,
 )
+from ghimera.encoding_reconciliation import (
+    EncodingAttemptAuthorization,
+    EncodingInvocationObservation,
+    EncodingReconciliationDecision,
+)
 from ghimera.models import Document, Harvest
 from ghimera.owned_worker import off_loop
 from ghimera.ports import EvidenceEncoder
@@ -150,6 +155,22 @@ class EvidenceCorpus:
         with self._operation():
             return self._storage.encoding_recovery_state()
 
+    def observe_encoding_invocation(self, invocation_sha256: str) -> EncodingInvocationObservation:
+        """Read one exact decision input only when no encoding owns the writer lease."""
+        with self._operation(), self._storage.writer(), self._storage.transaction():
+            return self._storage.observe_encoding(invocation_sha256)
+
+    def reconcile_encoding(
+        self, decision: EncodingReconciliationDecision
+    ) -> EncodingAttemptAuthorization:
+        """Record caller-owned abandonment and one separately charged attempt, without contact."""
+        with self._operation():
+            return self._storage.reconcile_encoding(decision)
+
+    def encoding_reconciliation_history(self) -> tuple[EncodingReconciliationDecision, ...]:
+        with self._operation(), self._storage.writer(), self._storage.transaction():
+            return self._storage.encoding_decisions()
+
     def document(self, document_id: str) -> Document:
         with self._operation():
             return self._storage.document(document_id)
@@ -188,11 +209,49 @@ class EvidenceCorpus:
         observer: Callable[[EncodingCall], None] | None = None,
         *,
         generation: int | None = None,
+        authorization: EncodingAttemptAuthorization | None = None,
+    ) -> tuple[EncodingBatch, int, EncodingRecoveryEvidence | None]:
+        if authorization is not None and self.config.encoding_recovery is None:
+            raise ValueError("encoding attempt requires configured native recovery")
+        # Append already owns this lease. Recovery-enabled queries also retain it
+        # through contact, preventing a decision while their outcome is still live.
+        if self.config.encoding_recovery is not None and purpose == "query":
+            with self._storage.writer():
+                return await self._encode_owned(
+                    texts,
+                    encoder,
+                    operation,
+                    purpose,
+                    observer,
+                    generation=generation,
+                    authorization=authorization,
+                )
+        return await self._encode_owned(
+            texts,
+            encoder,
+            operation,
+            purpose,
+            observer,
+            generation=generation,
+            authorization=authorization,
+        )
+
+    async def _encode_owned(
+        self,
+        texts: tuple[str, ...],
+        encoder: EvidenceEncoder,
+        operation: str,
+        purpose: Literal["passage", "query"],
+        observer: Callable[[EncodingCall], None] | None = None,
+        *,
+        generation: int | None = None,
+        authorization: EncodingAttemptAuthorization | None = None,
     ) -> tuple[EncodingBatch, int, EncodingRecoveryEvidence | None]:
         service = encoder.config
         expected = tuple(digest((service.text_prefix + text).encode()) for text in texts)
         size = sum(len(service.text_prefix) + len(text) for text in texts)
         intent = None
+        invocation = None
         if self.config.encoding_recovery is not None:
             intent = EncodingIntent(
                 schema="ghimera.encoding-intent/1",
@@ -203,12 +262,19 @@ class EvidenceCorpus:
                 texts=texts,
                 request_sha256=digest(encoding_request(service, texts)),
             )
-            reused = self._storage.reserve_encoding(intent)
+            invocation = (
+                intent.identity if authorization is None else authorization.invocation_sha256
+            )
+            reused = (
+                self._storage.reserve_encoding(intent)
+                if authorization is None
+                else self._storage.claim_encoding_attempt(authorization, intent)
+            )
             if reused is not None:
                 # A local recovery is not another model call; do not report new spend.
                 return *reused, EncodingRecoveryEvidence(
                     schema="ghimera.encoding-recovery-evidence/1",
-                    invocation_sha256=intent.identity,
+                    invocation_sha256=invocation,
                     original_call_id=reused[1],
                     generation=intent.generation,
                     reused=True,
@@ -225,7 +291,9 @@ class EvidenceCorpus:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             if intent is not None:
                 intent.validate_call(call)
-                identity = self._storage.acknowledge_encoding(operation, intent, batch)
+                identity = self._storage.acknowledge_encoding(
+                    operation, intent, batch, invocation=invocation
+                )
             successful = True
         except (EncodingFailure, EncodingCancelled) as exc:
             call = exc.call
@@ -258,7 +326,7 @@ class EvidenceCorpus:
                 if not successful or intent is None:
                     identity = self._storage.audit(operation, purpose, call)
                 if intent is not None and not successful:
-                    self._storage.refuse_encoding(intent, call)
+                    self._storage.refuse_encoding(intent, call, invocation=invocation)
             finally:
                 if observer is not None:
                     observer(call)
@@ -267,7 +335,7 @@ class EvidenceCorpus:
             if intent is None
             else EncodingRecoveryEvidence(
                 schema="ghimera.encoding-recovery-evidence/1",
-                invocation_sha256=intent.identity,
+                invocation_sha256=intent.identity if invocation is None else invocation,
                 original_call_id=identity,
                 generation=intent.generation,
                 reused=False,
@@ -303,7 +371,12 @@ class EvidenceCorpus:
             raise ValueError("append exceeds its explicitly separate encoding allowance")
         return tuple(batches)
 
-    async def append(self, harvest: Harvest) -> CorpusReceipt:
+    async def append(
+        self,
+        harvest: Harvest,
+        *,
+        encoding_authorizations: tuple[EncodingAttemptAuthorization, ...] = (),
+    ) -> CorpusReceipt:
         with self._operation(), self._storage.writer():
             harvest = Harvest.model_validate(harvest.model_dump())
             count_docs, count_chunks, source_bytes, vector_bytes = self._storage.counts()
@@ -337,6 +410,39 @@ class EvidenceCorpus:
             ):
                 raise ValueError("corpus capacity exhausted before encoding")
             batches = self._batches(tuple(passages))
+            authorizations = tuple(
+                EncodingAttemptAuthorization.model_validate(item.model_dump())
+                for item in encoding_authorizations
+            )
+            if authorizations and self.config.encoding_recovery is None:
+                raise ValueError("encoding attempts require configured native recovery")
+            expected_intents = (
+                tuple(
+                    EncodingIntent(
+                        schema="ghimera.encoding-intent/1",
+                        corpus_id=self._storage.identity,
+                        generation=self._storage.generation(),
+                        purpose="passage",
+                        service=self.config.encoder,
+                        texts=tuple(p.text for p in pending),
+                        request_sha256=digest(
+                            encoding_request(self.config.encoder, tuple(p.text for p in pending))
+                        ),
+                    )
+                    for pending in batches
+                )
+                if authorizations
+                else ()
+            )
+            if len({item.intent.identity for item in authorizations}) != len(authorizations) or any(
+                item.intent not in expected_intents for item in authorizations
+            ):
+                raise ValueError(
+                    "append authorization does not bind its exact native passages/generation"
+                )
+            by_intent = {item.intent.identity: item for item in authorizations}
+            for authorization in authorizations:
+                self._storage.validate_encoding_attempt(authorization, authorization.intent)
             operation = uuid.uuid4().hex
             harvest_sha = digest(harvest.model_dump_json().encode())
             self._storage.start(
@@ -350,9 +456,15 @@ class EvidenceCorpus:
             recovery: list[EncodingRecoveryEvidence] = []
             try:
                 async with asyncio.timeout(self.config.operation_timeout_seconds):
-                    for pending in batches:
+                    for batch_position, pending in enumerate(batches):
                         batch, call_id, evidence = await self._encode(
-                            tuple(p.text for p in pending), self._encoder, operation, "passage"
+                            tuple(p.text for p in pending),
+                            self._encoder,
+                            operation,
+                            "passage",
+                            authorization=None
+                            if not authorizations
+                            else by_intent.get(expected_intents[batch_position].identity),
                         )
                         calls.append(batch.call)
                         if evidence is not None:
@@ -409,6 +521,7 @@ class EvidenceCorpus:
         languages: tuple[str, ...] = (),
         encoding_observer: Callable[[EncodingCall], None] | None = None,
         retrieval: HybridRetrievalConfig | None = None,
+        encoding_authorization: EncodingAttemptAuthorization | None = None,
     ) -> CorpusQuery:
         with self._operation():
             if (
@@ -463,6 +576,7 @@ class EvidenceCorpus:
                         "query",
                         encoding_observer,
                         generation=generation,
+                        authorization=encoding_authorization,
                     )
                     hits: list[CorpusHit] = []
                     neighbors = await off_loop(
