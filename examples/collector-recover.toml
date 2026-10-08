@@ -1,0 +1,17 @@
+# SAME recipe, run_id and output_directory as the interrupted run.
+# The original command must have reserved its output using command /2 or /3.
+# No request_path: recovery uses the pinned original request, not a replacement.
+schema = "ghimera.collector-command/4"
+config_path = "/absolute/path/collector.toml"
+output_directory = "/absolute/path/results/research-001"
+run_id = "research-001"
+max_input_bytes = 1000000
+max_result_bytes = 50000000
+# bindings_path = "/absolute/path/credential-bindings.json"
+# references_path = "/absolute/path/pinned-reference-vectors.json"
+
+[execution]
+schema = "ghimera.command-execution/2"
+operation = "recover"
+# REPLACE with SHA-256 of the original owner-private research-control.json.
+snapshot_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"

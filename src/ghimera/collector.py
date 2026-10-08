@@ -364,6 +364,10 @@ class Collector:
             run_id, checkpoint_sha256=checkpoint_sha256, suspend_after_rounds=suspend_after_rounds
         )
 
+    async def recover(self, run_id: str, *, snapshot_sha256: str) -> ResearchResult:
+        """Adopt an exact native model boundary; never retry an unknown contact."""
+        return await self._research.recover(run_id, snapshot_sha256=snapshot_sha256)
+
     def validate_request(self, request: str | ResearchRequest) -> ResearchRequest:
         """Validate an intent before a caller reserves output or launches work."""
         request = (

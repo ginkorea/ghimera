@@ -44,6 +44,21 @@ readback = store.read(
 )
 ```
 
+The collector facade exposes the same explicit `recover(run_id,
+snapshot_sha256=...)` method. For the native command, configure
+`ghimera.collector-command/4` with `ghimera.command-execution/2`,
+`operation="recover"` and the exact `snapshot_sha256`; see
+`examples/collector-recover.toml`. Run `ghimera --job /absolute/path/recover.toml
+--max-job-bytes <configured bound>` with the same recipe, run identity,
+credential bindings and reserved output directory as the interrupted command.
+No replacement request is accepted. The command reads the native control state,
+verifies the original request/recipe/output reservation before any contact,
+then delegates to the existing research recovery owner and archives the full
+result through the same original private output writer. An existing complete
+or uncertain output, wrong digest or unknown model outcome is refused, not
+overwritten. Command /1 does not reserve interrupted outputs and cannot be
+adopted by this command. Existing command /1–/3 behavior remains unchanged.
+
 `ResearchControlSnapshot` carries `request`, partial `progress: ResearchResult`,
 `session: SessionState`, admitted hosts, the current phase and round number,
 the exact native phase request and pending model input digest/size, the current
@@ -111,10 +126,10 @@ authenticate a malicious owner's rewrite and is not a multi-process database.
 This substrate deliberately refuses interruptions with later collection,
 retrieval, discovery or graph mutations. Such work needs its own acknowledged
 control boundary before it can resume safely. There is no transparent retry of
-arbitrary mid-collection work. CLI/service recovery wiring and service/model
-acceptance belong to their native owners; storage tests alone do not establish
-live recovery or model quality. CLI/service automatic restart wiring remains
-separate; the native loop API does not imply that a deployed service invokes it.
+arbitrary mid-collection work. Unattended service recovery wiring and service/model
+acceptance remain separate; storage or command fixture checks alone do not establish
+live recovery or model quality. The explicit command does not imply that a
+deployed supervisor automatically invokes it or reconciles unknown calls.
 
 ```mermaid
 classDiagram

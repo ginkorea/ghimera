@@ -20,6 +20,7 @@ from ghimera.corpus import EvidenceCorpus
 from ghimera.embedding_types import EmbeddingReferences
 from ghimera.human_browser_types import HumanAssistant
 from ghimera.refusals import GhimeraRefused
+from ghimera.research_recovery_store import ResearchRecoveryStore
 from ghimera.research_types import ResearchRequest
 from ghimera.result_archive import (
     ArchiveReceipt,
@@ -38,12 +39,17 @@ EnvName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
 
 class CommandExecution(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["ghimera.command-execution/1"] = Field(alias="schema")
-    operation: Literal["run", "resume"]
+    schema_version: Literal["ghimera.command-execution/1", "ghimera.command-execution/2"] = Field(
+        alias="schema"
+    )
+    operation: Literal["run", "resume", "recover"]
     checkpoint_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     suspend_after_rounds: Positive | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    snapshot_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
 
@@ -51,13 +57,23 @@ class CommandExecution(BaseModel):
     def checkpoint_binding(self) -> "CommandExecution":
         if (self.operation == "resume") != (self.checkpoint_sha256 is not None):
             raise ValueError("only resume requires an explicit checkpoint digest")
+        recovering = self.operation == "recover"
+        if recovering != (self.schema_version == "ghimera.command-execution/2") or recovering != (
+            self.snapshot_sha256 is not None
+        ):
+            raise ValueError("recovery requires execution /2 and its exact snapshot digest")
+        if recovering and self.suspend_after_rounds is not None:
+            raise ValueError("model-boundary recovery cannot introduce a new suspension policy")
         return self
 
 
 class CommandOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal[
-        "chimera.collector-command/1", "ghimera.collector-command/2", "ghimera.collector-command/3"
+        "chimera.collector-command/1",
+        "ghimera.collector-command/2",
+        "ghimera.collector-command/3",
+        "ghimera.collector-command/4",
     ] = Field(alias="schema")
     config_path: Path
     request_path: Path | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -74,14 +90,22 @@ class CommandOptions(BaseModel):
 
     @model_validator(mode="after")
     def paths(self) -> "CommandOptions":
-        if self.schema_version == "ghimera.collector-command/3":
+        recovering = self.execution is not None and self.execution.operation == "recover"
+        if self.schema_version == "ghimera.collector-command/4":
+            if not recovering or self.human_assistance is not None:
+                raise ValueError(
+                    "command /4 requires explicit recovery without terminal assistance"
+                )
+        elif recovering:
+            raise ValueError("model-boundary recovery requires command /4")
+        elif self.schema_version == "ghimera.collector-command/3":
             if self.human_assistance is None:
                 raise ValueError("command /3 requires explicit human assistance")
         elif self.human_assistance is not None:
             raise ValueError("human assistance requires command /3")
         elif (self.schema_version == "ghimera.collector-command/2") != (self.execution is not None):
             raise ValueError("command /2 requires an execution policy; legacy /1 forbids it")
-        resuming = self.execution is not None and self.execution.operation == "resume"
+        resuming = self.execution is not None and self.execution.operation in {"resume", "recover"}
         if resuming == (self.request_path is not None):
             raise ValueError("run needs a request file; resume uses its pinned original request")
         for path in (
@@ -245,9 +269,17 @@ async def execute(
     elif human_assistant is not None:
         raise ValueError("human assistance requires an explicit command policy")
     execution = options.execution
-    if execution is not None and config.continuation is None:
+    if execution is not None and execution.operation != "recover" and config.continuation is None:
         raise ValueError("command /2 requires the recipe's durable continuation policy")
-    if execution is not None and execution.operation == "resume":
+    if execution is not None and execution.operation == "recover":
+        if config.research_recovery is None or execution.snapshot_sha256 is None:
+            raise ValueError("recovery requires the recipe's explicit policy and snapshot digest")
+        request = (
+            ResearchRecoveryStore(config, options.run_id, config.research_recovery)
+            .read(execution.snapshot_sha256)
+            .snapshot.request
+        )
+    elif execution is not None and execution.operation == "resume":
         if execution.checkpoint_sha256 is None:
             raise ValueError("resume requires its checkpoint digest")
         request = CheckpointStore(config, options.run_id).read(execution.checkpoint_sha256).request
@@ -290,7 +322,7 @@ async def execute(
             config_sha256=hashlib.sha256(config.model_dump_json().encode()).hexdigest(),
             request_sha256=request.content_digest(),
         )
-        if execution.operation == "resume":
+        if execution.operation in {"resume", "recover"}:
             archive = ResearchResultArchive.resume(
                 options.output_directory, reservation=reservation, max_bytes=options.max_input_bytes
             )
@@ -299,7 +331,13 @@ async def execute(
                 options.output_directory, reservation=reservation, max_bytes=options.max_input_bytes
             )
     try:
-        if execution is not None and execution.operation == "resume":
+        if execution is not None and execution.operation == "recover":
+            if execution.snapshot_sha256 is None:
+                raise ValueError("recovery requires its exact snapshot digest")
+            result = await collector.recover(
+                options.run_id, snapshot_sha256=execution.snapshot_sha256
+            )
+        elif execution is not None and execution.operation == "resume":
             if execution.checkpoint_sha256 is None:
                 raise ValueError("resume requires its checkpoint digest")
             result = await collector.resume(
