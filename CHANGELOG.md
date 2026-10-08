@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.6 — 2026-10-08
+
+- Explicit RSS 2.0, Atom, sitemap/index and JSON Feed intake through the normal
+  guarded collector and bounded passive parser. Native declarations, original
+  bytes, dates/ids, links, omissions and parser policy replay through the graph,
+  journal and corpus. Linked articles still require their own scope and evidence.
+- Configured retained-original context and research reuse: reassess stored
+  native/PDF evidence for the current intent, preserve exact citations and
+  project it into the current graph with separately accounted model work.
+  Completed-round resume and acknowledged delivery retain the original capsules.
+  Old source age remains unknown; this is not automatic fresh-cache behavior.
+- Full frozen-source gate: 1,105 passed, zero failures/skips under Python 3.11.16.
+  A real public RSS source passed direct HTTPS/conditional-304 and native Tor
+  capture with identical original bytes. These checks do not establish browser
+  Tor routing, multilingual model accuracy or full infrastructure acceptance.
+  Installed-artifact and publication evidence are recorded separately in
+  [release acceptance](docs/RELEASE_046.md).
+
 ## 0.4.5 — 2026-10-07
 
 - Explicit scanned-PDF transcription recipe with bounded offline page rendering,

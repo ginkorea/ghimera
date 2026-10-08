@@ -4,7 +4,17 @@ Intent-driven web research: discover sources, collect native-language documents,
 follow evidence gaps, and return a source-cited answer—or an explicit partial
 result when the evidence or budget is insufficient.
 
-**v0.4.5 adds explicitly configured, independently reviewed scanned-PDF transcription.**
+**v0.4.6 adds source feeds and original-evidence reuse for new research.**
+
+Configured RSS, Atom, sitemap/index and JSON Feed seeds use the same scoped
+HTTP/Tor fetch, robots, pacing and native evidence path as ordinary documents.
+Their outgoing links remain separately admitted frontier work. A configured
+corpus reader can supply retained originals to current assessment, citations
+and graph expansion without refetching them or treating old judgments as new.
+Stored source age remains explicitly unknown; cross-run feed refresh and
+freshness/reranking are still separate requirements. See
+[source feeds](docs/SOURCE_FEEDS.md), [retained evidence](docs/RETAINED_EVIDENCE.md)
+and [release acceptance](docs/RELEASE_046.md).
 
 The scanned-PDF path renders retained originals into bounded pages, calls your
 explicitly selected private vision and review services, and preserves generated
@@ -186,13 +196,13 @@ Use a dedicated virtual environment:
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'ghimera==0.4.5'
+python -m pip install 'ghimera==0.4.6'
 ```
 
 Install the adapters you intend to configure:
 
 ```bash
-python -m pip install 'ghimera[html,documents,browser]==0.4.5'
+python -m pip install 'ghimera[html,documents,browser]==0.4.6'
 ```
 
 The base package contains the typed core, HTTP/Tor transport, research/search

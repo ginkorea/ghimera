@@ -1,6 +1,6 @@
 # Native source-feed collection
 
-Development candidate. RSS 2.0, Atom, Sitemap 0.9 URL sets/indexes and JSON
+Included in the 0.4.6 release candidate. RSS 2.0, Atom, Sitemap 0.9 URL sets/indexes and JSON
 Feed 1/1.1 enter through the ordinary collector's scoped fetch and extraction
 path. There is no second HTTP client, scheduler, implicit hostname allowance,
 authentication bypass, feed poller or private service. The existing fetch

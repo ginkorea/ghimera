@@ -1,8 +1,8 @@
 # Retained evidence context and research reuse
 
-Development candidate, not included in the immutable 0.4.5 artifacts. This
+Included in the 0.4.6 release candidate, not in the immutable 0.4.5 artifacts. This
 implements the direct-context boundary and configured research-loop reuse of
-I05. A separate development follow-up connects retained native/PDF originals to
+I05. The integrated follow-up connects retained native/PDF originals to
 the current evidence graph. Freshness, reranking, visual graph projection and
 representative multilingual quality acceptance still require further work.
 
@@ -164,8 +164,9 @@ checkpoint and outbox boundaries with scripted model replies. The affected
 module/importer selection passed 336 tests, no failures or skips, under
 `/tmp/chimera-c0-20261006/.venv/bin/python`, importing this isolated candidate.
 Ruff, formatting and strict mypy (164 source files) also passed. The combined
-full gate and independent installed/public-artifact acceptance remain required
-before this graph follow-up is published. None of these checks measures real
+source now passed 1,105 tests without failures/skips under that same Python
+3.11.16 interpreter; installed/public-artifact acceptance is recorded separately
+in RELEASE_046.md. None of these checks measures real
 model accuracy or proves the complete infrastructure PRD.
 
 ## Integration contract
