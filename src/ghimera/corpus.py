@@ -170,6 +170,11 @@ class EvidenceCorpus:
         with self._operation():
             pass
 
+    def admit_command(self) -> tuple[CorpusConfig, str, int]:
+        """Read original identity/generation while proving native writer availability."""
+        with self._operation(), self._storage.writer(), self._storage.transaction():
+            return self.config, self._storage.identity, self._storage.generation()
+
     def encoding_recovery_state(self) -> EncodingRecoveryState | None:
         """Persistent admission totals, including unresolved work, never provider usage."""
         with self._operation():

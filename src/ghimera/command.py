@@ -505,11 +505,23 @@ def main(argv: list[str] | None = None) -> int:
         "--max-job-bytes", required=True, type=int, help="explicit bound before parsing the job"
     )
     args = parser.parse_args(argv)
+    receipt: (
+        ArchiveReceipt | CheckpointReceipt | ModelUnknownObservation | ModelAttemptAuthorization
+    )
     try:
-        options = CommandOptions.model_validate(
-            tomllib.loads(bounded_file(args.job, args.max_job_bytes).decode())
-        )
-        receipt = asyncio.run(execute(options))
+        raw = tomllib.loads(bounded_file(args.job, args.max_job_bytes).decode())
+        if raw.get("schema") == "ghimera.collector-command/7":
+            from ghimera.command_corpus import CorpusCommandOptions, execute_corpus
+
+            corpus_receipt = asyncio.run(execute_corpus(CorpusCommandOptions.model_validate(raw)))
+            sys.stdout.write(corpus_receipt.model_dump_json() + "\n")
+            if corpus_receipt.handoff == "failed":
+                return 2
+            receipt = corpus_receipt.command
+        else:
+            options = CommandOptions.model_validate(raw)
+            receipt = asyncio.run(execute(options))
+            sys.stdout.write(receipt.model_dump_json() + "\n")
     except SourceWorkFailure:
         sys.stderr.write("command_source_work_failed\n")
         return 2
@@ -526,7 +538,6 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         sys.stderr.write("command_interrupted\n")
         return 130
-    sys.stdout.write(receipt.model_dump_json() + "\n")
     if isinstance(receipt, CheckpointReceipt):
         return 3
     if isinstance(receipt, (ModelUnknownObservation, ModelAttemptAuthorization)):

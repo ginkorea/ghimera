@@ -53,7 +53,9 @@ snapshot pin. The service route selects `ghimera.service-recovery/4` with
 `boundary = "query_return"` before submission; jobs use `/5`. Existing service
 startup/manual recovery, durable per-job adoption attempts and authenticated
 control routes remain the owners. The command factory binds a retained reader
-only from its explicit typed reader and exact borrowed corpus; the service
+only from its explicit typed reader and exact borrowed corpus. The additive
+[configured corpus command /7](COMMAND_CORPUS.md) owns that native corpus for
+standalone CLI use; the service
 uses its configured native corpus. Completion uses the original result archive,
 optional corpus append and outbox handoff. Completed archive admission refuses
 unresolved query originals as well as unresolved model/source work.

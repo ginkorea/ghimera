@@ -41,10 +41,7 @@ from ghimera.journal import (
     _read_file,
     _run_path,
     _write_all,
-    read_journal,
 )
-from ghimera.journal_types import JournalDocument, JournalRetainedDocument
-from ghimera.model_reconciliation import unreconciled_model_sequences
 from ghimera.model_reconciliation_types import (
     ModelAttemptAuthorization,
     ModelReconciliationDecision,
@@ -52,7 +49,6 @@ from ghimera.model_reconciliation_types import (
 )
 from ghimera.models import Record
 from ghimera.persistent_collector import PersistentCollection
-from ghimera.query_work import validate_query_rows
 from ghimera.research_recovery_store import ResearchRecoveryStore
 from ghimera.research_recovery_types import ResearchRecoveryModels
 from ghimera.research_types import ResearchRequest
@@ -62,7 +58,7 @@ from ghimera.result_archive import (
     ResearchResultArchive,
     bounded_file,
 )
-from ghimera.source_work import SourceWorkStore, read_source_work
+from ghimera.source_work import SourceWorkStore
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
 Phase = Literal[
@@ -970,9 +966,11 @@ class CollectionService:
                 config_sha256=job.recipe_sha256,
                 request_sha256=job.request_sha256,
             )
-            receipt, result = ResearchResultArchive.acknowledged(
+            receipt, result = await ResearchResultArchive.acknowledged_research(
                 output,
                 reservation=expected,
+                config=recipe,
+                request=request,
                 max_bytes=self.config.command.max_result_bytes,
                 max_reservation_bytes=self.config.command.max_input_bytes,
             )
@@ -992,56 +990,6 @@ class CollectionService:
                 raise ValueError(
                     "completed output differs from original intent or runtime identities"
                 )
-            report = read_journal(recipe.journal, job.run_id)
-            documents = tuple(
-                JournalDocument(
-                    url=doc.url,
-                    sha256=doc.sha256,
-                    native_text_sha256=hashlib.sha256(doc.extracted.text.encode()).hexdigest(),
-                    raw_bytes=len(doc.raw),
-                )
-                for doc in result.harvest.documents
-            )
-            retained = tuple(
-                JournalRetainedDocument(
-                    url=item.document.url,
-                    sha256=item.document.sha256,
-                    native_text_sha256=hashlib.sha256(
-                        item.document.extracted.text.encode()
-                    ).hexdigest(),
-                    raw_bytes=len(item.document.raw),
-                    origin=item.origin,
-                )
-                for item in result.harvest.retained_sources
-            )
-            if (
-                receipt.run_id != job.run_id
-                or report.state != "complete"
-                or report.incomplete_tail
-                or unreconciled_model_sequences(report.rows)
-                or validate_query_rows(recipe, report.rows)
-                or report.header.config != recipe
-                or report.header.goal != result.harvest.goal
-                or report.rows != result.harvest.ledger
-                or report.summary is None
-                or report.summary.receipt != result.harvest.receipt
-                or report.summary.documents != documents
-                or report.summary.retained_documents != retained
-            ):
-                raise ValueError("completed output lost its sealed original journal")
-            if recipe.source_work is not None:
-                sources = read_source_work(recipe, job.run_id)
-                if sources.writer_active or any(
-                    item.ledger_end is None for item in sources.operations
-                ):
-                    raise ValueError("completed output has unresolved source work")
-            if recipe.graph is not None and recipe.graph.enabled:
-                if result.harvest.graph is None:
-                    raise ValueError("completed output lost its graph")
-                graph = ResearchGraph(
-                    recipe.graph, job.run_id, DirectoryGraphSink(recipe.graph, job.run_id)
-                )
-                await graph.start(result.harvest.goal.text, expected=result.harvest.graph)
             self._admission_unchanged(job)
             self._update(job.run_id, "handoff_pending", archive=receipt)
         except asyncio.CancelledError:
