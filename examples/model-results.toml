@@ -1,0 +1,7 @@
+# Merge with examples/model-work.toml and the native journal recipe. Retained
+# answers can contain sensitive source text: keep the existing journal private.
+# These are sample bounds, not an active service or a model selection.
+[model_work.results]
+schema = "ghimera.model-results/1"
+max_result_bytes = 262144
+max_total_result_bytes = 16777216

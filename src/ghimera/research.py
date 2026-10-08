@@ -9,7 +9,7 @@ import asyncio
 import hashlib
 import time
 from collections.abc import Awaitable, Callable
-from typing import Literal, Protocol, TypeVar
+from typing import Literal, Protocol, TypeVar, overload
 from urllib.parse import urlsplit
 
 from pydantic import ValidationError
@@ -25,7 +25,8 @@ from ghimera.graph_planning import build_context
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.loop import CollectionSession, GoalLoop
 from ghimera.model_types import ModelCallEvidence
-from ghimera.model_work import ModelInvocation, port_input, record_output
+from ghimera.model_work import FatalModelWorkFailure, ModelInvocation, port_input, record_output
+from ghimera.model_work_types import ModelStoredOutput
 from ghimera.models import (
     Document,
     Goal,
@@ -195,6 +196,94 @@ class ModelCalls:
 
     def __init__(self, session: CollectionSession, policy: ResearchConfig) -> None:
         self._session, self._policy = session, policy
+
+    @overload
+    def replay(
+        self,
+        event: Literal["plan"],
+        model: ModelIdentity,
+        request: ResearchRecord,
+        *,
+        intent_sequence: int,
+    ) -> ResearchPlan: ...
+
+    @overload
+    def replay(
+        self,
+        event: Literal["assessment"],
+        model: ModelIdentity,
+        request: ResearchRecord,
+        *,
+        intent_sequence: int,
+    ) -> Assessment: ...
+
+    @overload
+    def replay(
+        self,
+        event: Literal["answer"],
+        model: ModelIdentity,
+        request: ResearchRecord,
+        *,
+        intent_sequence: int,
+    ) -> AnswerDraft: ...
+
+    @overload
+    def replay(
+        self,
+        event: Literal["review"],
+        model: ModelIdentity,
+        request: ResearchRecord,
+        *,
+        intent_sequence: int,
+    ) -> AnswerReview: ...
+
+    def replay(
+        self,
+        event: ModelEvent,
+        model: ModelIdentity,
+        request: ResearchRecord,
+        *,
+        intent_sequence: int,
+    ) -> ResearchPlan | Assessment | AnswerDraft | AnswerReview:
+        """Read an original return through its owning schema, without a service collaborator.
+
+        Callers retain their normal citation, ontology and independent-review
+        checks. A replay record acknowledges a local read, not downstream apply.
+        Explicit intent sequence distinguishes identical but separate requests.
+        """
+        if len(request.model_dump_json(exclude={"documents"})) > self._policy.max_model_input_chars:
+            raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+        invocation = ModelInvocation(
+            self._session.budget,
+            self._session.ledger,
+            phase=event,
+            model=model,
+            request=port_input(self._session.budget, request),
+            replay_intent_sequence=intent_sequence,
+        )
+
+        def decode(
+            stored: ModelStoredOutput,
+        ) -> ResearchPlan | Assessment | AnswerDraft | AnswerReview:
+            body = stored.body()
+            if event == "plan":
+                result: ResearchPlan | Assessment | AnswerDraft | AnswerReview = (
+                    ResearchPlan.model_validate_json(body)
+                )
+            elif event == "assessment":
+                result = Assessment.model_validate_json(body)
+            elif event == "answer":
+                result = AnswerDraft.model_validate_json(body)
+            else:
+                result = AnswerReview.model_validate_json(body)
+            if result.model_call is not None and (
+                result.model_call.service.model_id != model.model_id
+                or result.model_call.service.revision != model.revision
+            ):
+                raise FatalModelWorkFailure("retained research answer changed its original model")
+            return result
+
+        return invocation.replay(decode)
 
     async def invoke(
         self,

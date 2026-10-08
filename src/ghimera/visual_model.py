@@ -12,7 +12,7 @@ from ghimera.budget import RunBudget
 from ghimera.ledger import Ledger
 from ghimera.model_config import ModelServiceConfig
 from ghimera.model_http import ModelHttpPort, PinnedModelHttp
-from ghimera.model_work import ModelInvocation, wire_output
+from ghimera.model_work import ModelInvocation, wire_observation
 from ghimera.models import LedgerRow, ModelIdentity
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.visual_config import VisualConfig
@@ -139,7 +139,7 @@ class LocalVisionReader:
             )
         )
         async with asyncio_timeout(budget.remaining_seconds):
-            response = await invocation.invoke(lambda: port.post(body), wire_output)
+            response = await invocation.invoke(lambda: port.post(body), wire_observation)
         response_hash = hashlib.sha256(response.body).hexdigest()
         # Persist only hashes/identity; image payloads and source instructions are not logs.
         ledger.append(

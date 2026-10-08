@@ -212,6 +212,12 @@ class DirectoryLedgerSink:
         """The native durable sink binds its original header, not caller metadata."""
         return self._header.config
 
+    @property
+    def committed_rows(self) -> tuple[LedgerRow, ...]:
+        with self._lock:
+            self._active()
+            return tuple(self._rows)
+
     def append(self, row: LedgerRow) -> None:
         with self._lock:
             try:

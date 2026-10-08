@@ -181,6 +181,13 @@ class GhimeraConfig(BaseModel):
             self.journal is None or self.model_work.max_unanswered_calls > self.judge_budget
         ):
             raise ValueError("model work needs a durable journal and a bound within judge budget")
+        if self.model_work is not None and self.model_work.results is not None:
+            results, journal = self.model_work.results, self.journal
+            if journal is None or (
+                4 * ((results.max_result_bytes + 2) // 3) >= journal.max_record_bytes
+                or 4 * ((results.max_total_result_bytes + 2) // 3) >= journal.max_journal_bytes
+            ):
+                raise ValueError("retained model bytes must fit within the declared journal bounds")
         if self.source_work is not None and self.journal is None:
             raise ValueError("source work requires the existing durable run journal")
         if self.pdf_transcription is not None and (

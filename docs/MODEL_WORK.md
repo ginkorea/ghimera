@@ -2,6 +2,55 @@
 
 Published in 0.4.9; full I03 closure remains open.
 
+## Retained-answer development candidate
+
+The next owned source candidate adds an explicit `[model_work.results]` policy
+(`ghimera.model-results/1`), with per-answer and total original-byte bounds. See
+`examples/model-results.toml`. It reuses the existing owner-private native
+journal, single-writer lock and fsync; it does not introduce a second database.
+Retention stores exact port-result bytes or original HTTP response bytes with
+the observed status/media type inside their original acknowledgement. The
+hash and size remain hashes/counts of the original bytes, not of the base64
+storage envelope. Missing policy leaves 0.4.9 configuration and record
+identities unchanged.
+
+Admission reserves each outstanding call's maximum retained-answer space before
+contact. Actual acknowledged sizes replace those reservations. Unknown outcomes
+remain held; they are not treated as free capacity. Oversized returns are not
+truncated into apparently valid results: their observation remains in the
+journal, but they are refused and cannot be replayed. The journal's existing
+record/total capacity still applies; a failed durable acknowledgement is fatal.
+Retention bounds must leave room for their base64 encoding inside journal
+bounds; actual envelope capacity is still checked by the journal writer.
+
+`ModelInvocation(..., replay_intent_sequence=<original sequence>).replay(decode)`
+binds one local read to the exact original phase, input scope/hash/size, model
+identity, source URL and acknowledged output. The writer's committed prefix
+must equal the restored ledger: another run's copied rows are not admission.
+It does not reserve a new model call and has no service callback. Calling its
+remote-invocation method instead refuses before contact. The local decoder must
+validate the original result and an append-only `model_replay` observation
+records the original intent/acknowledgement references. A replay observation is
+not a promise that a downstream consumer applied the answer.
+
+The actual research owner exposes `ModelCalls.replay(...)` for its four phases;
+it restores the appropriate typed result without a planner/analyst/reviewer
+call. Existing citation, native-text, ontology and independent-review checks
+remain the consumer's responsibility. Reviewed PDF/visual ports retain actual
+wire status/media type rather than inventing a successful response status.
+Budget restore must match all original judge reservations before mutation;
+semantic quotas are reconstructed from original phase intents, not subsequent
+consumer/replay rows. A new call with a non-restored budget also refuses before
+contact.
+
+This candidate is not published or fully gated yet. Focused native acceptance
+includes fresh child-process termination after answer fsync and before the
+research phase applies it, followed by original-run replay without another
+controlled contact. It does not constitute arbitrary whole-session adoption,
+automatic retry of unknown calls, live model-quality acceptance or Chinese OCR
+validation. The research loop still needs interrupted control-state adoption
+to select these original sequences automatically.
+
 A research request previously reserved a judge call only in memory. Its native
 journal observation was appended in the completion handler. A controlled child
 process terminating inside the injected planner could therefore leave a clean,

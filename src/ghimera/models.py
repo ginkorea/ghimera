@@ -30,7 +30,7 @@ from ghimera.human_browser_types import (
 )
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.model_types import ModelCallEvidence
-from ghimera.model_work_types import ModelAcknowledgement, ModelIntent
+from ghimera.model_work_types import ModelAcknowledgement, ModelIntent, ModelReplay
 from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.page_transcription_types import PageTranscriptionCall, ReviewedPageTranscription
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
@@ -715,6 +715,7 @@ class LedgerRow(Record):
         "retained_source",
         "model_intent",
         "model_ack",
+        "model_replay",
     ]
     url: str | None = None
     route: str | None = None
@@ -732,6 +733,7 @@ class LedgerRow(Record):
     model_call: ModelCallEvidence | None = None
     model_intent: ModelIntent | None = Field(default=None, exclude_if=lambda v: v is None)
     model_ack: ModelAcknowledgement | None = Field(default=None, exclude_if=lambda v: v is None)
+    model_replay: ModelReplay | None = Field(default=None, exclude_if=lambda v: v is None)
     extraction: ExtractionEvidence | None = None
     extraction_attempt: HtmlExtractionAttempt | None = Field(
         default=None, exclude_if=lambda v: v is None
@@ -789,7 +791,9 @@ class LedgerRow(Record):
             self.event == "model_ack"
         ) != (self.model_ack is not None):
             raise ValueError("model operation rows require their typed invocation evidence")
-        if self.event in {"model_intent", "model_ack"} and (
+        if (self.event == "model_replay") != (self.model_replay is not None):
+            raise ValueError("model replay rows require their original observation reference")
+        if self.event in {"model_intent", "model_ack", "model_replay"} and (
             self.model is None
             or self.bytes_read != 0
             or self.transport is not None
@@ -799,6 +803,10 @@ class LedgerRow(Record):
             raise ValueError("model operation evidence is not a source read or approved result")
         if self.model_ack is not None and self.model_ack.intent_sequence >= self.sequence:
             raise ValueError("model acknowledgement must refer to an earlier intent")
+        if self.model_replay is not None and not (
+            self.model_replay.intent_sequence < self.model_replay.ack_sequence < self.sequence
+        ):
+            raise ValueError("model replay must refer to an earlier intent and acknowledgement")
         if (
             self.model_ack is not None
             and self.model_ack.refused_call is not None

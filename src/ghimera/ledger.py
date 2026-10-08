@@ -26,6 +26,14 @@ class DurableLedgerSink(LedgerSink, Protocol):
     def effective_config(self) -> GhimeraConfig: ...
 
 
+@runtime_checkable
+class ReplayLedgerSink(DurableLedgerSink, Protocol):
+    """Replay requires the writer's exact committed prefix, not borrowed caller rows."""
+
+    @property
+    def committed_rows(self) -> tuple[LedgerRow, ...]: ...
+
+
 class Ledger:
     def __init__(
         self, *, sink: LedgerSink | None = None, restored_rows: tuple[LedgerRow, ...] = ()
@@ -62,3 +70,10 @@ class Ledger:
 
     def snapshot(self) -> tuple[LedgerRow, ...]:
         return tuple(self._rows)
+
+    def has_replay_binding(self, config: GhimeraConfig) -> bool:
+        return (
+            isinstance(self._sink, ReplayLedgerSink)
+            and self._sink.effective_config == config
+            and self._sink.committed_rows == self.snapshot()
+        )

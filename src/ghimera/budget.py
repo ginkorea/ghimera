@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Callable
 
 from ghimera.config import GhimeraConfig
-from ghimera.model_work import uncertain_model_sequences
+from ghimera.model_work import uncertain_model_sequences, validate_model_rows
 from ghimera.models import LedgerRow, Receipt
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
@@ -57,6 +57,18 @@ class RunBudget:
             )
         if self.config.model_work is not None and uncertain_model_sequences(rows):
             raise ValueError("uncertain model reservations require reconciliation, not retry")
+        if (
+            self.config.model_work is not None
+            and validate_model_rows(self.config.model_work, self.config.judge_budget, rows)
+            != receipt.judge_calls
+        ):
+            raise ValueError("restored receipt must preserve original model reservations")
+        if (
+            receipt.fetches > self.config.page_budget
+            or receipt.bytes_read > self.config.byte_budget
+            or receipt.judge_calls > self.config.judge_budget
+        ):
+            raise ValueError("restored spend exceeds the original run budget")
         self.started -= receipt.elapsed_seconds + downtime_seconds
         self.fetches, self.bytes_read = receipt.fetches, receipt.bytes_read
         self.judge_calls = receipt.judge_calls
@@ -65,14 +77,18 @@ class RunBudget:
         self.challenge_attempts = sum(row.event == "challenge" for row in rows)
         self.local_inputs = sum(row.event == "local_input" for row in rows)
         self.local_input_bytes = sum(row.bytes_read for row in rows if row.event == "local_input")
-        self.semantic_calls = sum(row.event == "semantic" for row in rows)
-        self.semantic_review_calls = sum(row.event == "semantic_review" for row in rows)
-        if (
-            self.fetches > self.config.page_budget
-            or self.bytes_read > self.config.byte_budget
-            or self.judge_calls > self.config.judge_budget
-        ):
-            raise ValueError("restored spend exceeds the original run budget")
+        if self.config.model_work is not None:
+            self.semantic_calls = sum(
+                row.model_intent is not None and row.model_intent.phase == "semantic_extract"
+                for row in rows
+            )
+            self.semantic_review_calls = sum(
+                row.model_intent is not None and row.model_intent.phase == "semantic_review"
+                for row in rows
+            )
+        else:
+            self.semantic_calls = sum(row.event == "semantic" for row in rows)
+            self.semantic_review_calls = sum(row.event == "semantic_review" for row in rows)
 
     def check_time(self) -> None:
         if self.remaining_seconds <= 0:

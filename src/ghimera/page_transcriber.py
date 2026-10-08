@@ -19,7 +19,7 @@ from ghimera.model_http import (
     PinnedModelHttp,
 )
 from ghimera.model_types import TokenUsage
-from ghimera.model_work import ModelInvocation, wire_output
+from ghimera.model_work import ModelInvocation, wire_observation
 from ghimera.models import LedgerRow, ModelIdentity
 from ghimera.page_transcription_config import PageTranscriptionConfig
 from ghimera.page_transcription_types import (
@@ -168,7 +168,7 @@ class LocalPageTranscriber:
         outcome: Literal["success", "refused", "cancelled"] = "refused"
         try:
             async with asyncio.timeout(min(service.timeout_seconds, budget.remaining_seconds)):
-                response = await invocation.invoke(lambda: port.post(request), wire_output)
+                response = await invocation.invoke(lambda: port.post(request), wire_observation)
             if (
                 response.status != 200
                 or response.content_type.split(";", 1)[0] != "application/json"
