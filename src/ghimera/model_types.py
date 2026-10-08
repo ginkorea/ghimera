@@ -2,8 +2,16 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from pydantic.json_schema import SkipJsonSchema
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    GetCoreSchemaHandler,
+    GetJsonSchemaHandler,
+    model_validator,
+)
+from pydantic.json_schema import JsonSchemaValue, SkipJsonSchema
+from pydantic_core import CoreSchema
 
 from ghimera.model_config import ModelServiceConfig
 
@@ -65,10 +73,40 @@ class CompletionShape(BaseModel):
         return self
 
 
+class _ClientEvidenceServiceSchema:
+    """Frozen model-facing projection, not operational validation or serialization.
+
+    The separate reference retains the historical short definition name when
+    unambiguous, but cannot rewrite full configuration in a mixed schema.
+    Runtime values remain native ModelServiceConfig instances with every pin.
+    """
+
+    def __get_pydantic_core_schema__(
+        self, source_type: object, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        schema = dict(handler.resolve_ref_schema(handler(source_type)))
+        schema["ref"] = "ghimera.model_types.client_evidence.ModelServiceConfig"
+        return schema
+
+    def __get_pydantic_json_schema__(
+        self, core_schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
+        schema = handler(core_schema)
+        projection = handler.resolve_ref_schema(schema)
+        properties = projection["properties"]
+        properties.pop("gateway", None)
+        schema_field = "schema" if "schema" in properties else "schema_version"
+        properties[schema_field]["enum"] = [
+            "chimera.model-service/1",
+            "chimera.model-service/2",
+        ]
+        return schema
+
+
 class ModelCallEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.model-call/1"] = Field(alias="schema")
-    service: ModelServiceConfig
+    service: Annotated[ModelServiceConfig, _ClientEvidenceServiceSchema()]
     task: ModelTask
     prompt_revision: str
     request_sha256: Digest
