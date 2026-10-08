@@ -3,8 +3,9 @@
 import asyncio
 import ipaddress
 import math
+import re
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 from urllib.parse import urlsplit
 
 from curl_cffi import AsyncCurl, Curl, CurlError, CurlInfo, CurlOpt
@@ -88,6 +89,24 @@ class PinnedJsonHttp(Generic[PolicyT]):
     async def post(
         self, body: bytes, *, max_bytes: int | None = None, timeout_seconds: float | None = None
     ) -> JsonResponse:
+        return await self.request(
+            "POST", body, max_bytes=max_bytes, timeout_seconds=timeout_seconds
+        )
+
+    async def request(
+        self,
+        method: Literal["GET", "POST", "PUT"],
+        body: bytes = b"",
+        *,
+        endpoint_suffix: str = "",
+        max_bytes: int | None = None,
+        timeout_seconds: float | None = None,
+    ) -> JsonResponse:
+        """Same admitted origin; suffixes cannot expand authority or traverse paths."""
+        if method not in {"GET", "POST", "PUT"} or (method == "GET" and body):
+            raise ValueError("private JSON request method/body is invalid")
+        if endpoint_suffix and not re.fullmatch(r"(?:/[A-Za-z0-9_-]+)+", endpoint_suffix):
+            raise ValueError("private JSON suffix must be bounded origin-relative segments")
         config = self.config
         if (max_bytes is not None and max_bytes <= 0) or (
             timeout_seconds is not None
@@ -106,7 +125,12 @@ class PinnedJsonHttp(Generic[PolicyT]):
         try:
             async with asyncio.timeout(timeout):
                 destination = await self._destination()
-                curl.setopt(CurlOpt.URL, config.endpoint)
+                endpoint = (
+                    config.endpoint.rstrip("/") + endpoint_suffix
+                    if endpoint_suffix
+                    else config.endpoint
+                )
+                curl.setopt(CurlOpt.URL, endpoint)
                 curl.setopt(CurlOpt.RESOLVE, [destination.curl_resolve])
                 curl.setopt(CurlOpt.PROXY, "")
                 curl.setopt(CurlOpt.NOPROXY, "")
@@ -117,7 +141,10 @@ class PinnedJsonHttp(Generic[PolicyT]):
                 curl.setopt(CurlOpt.SSL_VERIFYHOST, 2)
                 curl.setopt(CurlOpt.TIMEOUT_MS, max(1, int(timeout * 1000)))
                 curl.setopt(CurlOpt.ACCEPT_ENCODING, "")
-                curl.setopt(CurlOpt.POSTFIELDS, body)
+                if method != "GET":
+                    curl.setopt(CurlOpt.POSTFIELDS, body)
+                if method != "POST":
+                    curl.setopt(CurlOpt.CUSTOMREQUEST, method)
                 metadata = [b"Content-Type: application/json", b"Accept: application/json"]
                 if self._credential is not None:
                     scheme = b"ApiKey " if config.authorization == "api_key" else b"Bearer "

@@ -67,11 +67,40 @@ class DeliveryOutboxConfig(DeliveryStoreConfig):
 class DeliveryWorkerConfig(Record):
     """Background policy independent of the published store/result identities."""
 
-    schema_version: Literal["ghimera.delivery-worker/1"] = Field(alias="schema")
+    schema_version: Literal["ghimera.delivery-worker/1", "ghimera.delivery-worker/2"] = Field(
+        alias="schema"
+    )
     poll_seconds: Seconds
     shutdown_grace_seconds: Seconds
     retention: Literal["keep", "prune_acknowledged"]
     max_prunes_per_cycle: Positive
+    acknowledged_age_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    rotate_acknowledged_attempts: bool = Field(default=False, exclude_if=lambda value: not value)
+    compact_after_pruned_items: Positive | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    compaction_minimum_free_bytes: Positive | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def versioned_retention(self) -> "DeliveryWorkerConfig":
+        if self.schema_version == "ghimera.delivery-worker/1":
+            if (
+                self.acknowledged_age_seconds is not None
+                or self.rotate_acknowledged_attempts
+                or self.compact_after_pruned_items is not None
+            ):
+                raise ValueError("age retention and attempt rotation require worker /2")
+        elif self.acknowledged_age_seconds is None:
+            raise ValueError("worker /2 requires an explicit acknowledged age")
+        if (self.compact_after_pruned_items is None) != (
+            self.compaction_minimum_free_bytes is None
+        ):
+            raise ValueError("compaction requires an explicit interval and disk-free allowance")
+        return self
 
     @property
     def identity(self) -> str:

@@ -36,6 +36,7 @@ class DeliveryWorker:
         ) = None
         self._queue: DeliveryQueueSummary | None = None
         self._cursor: str | None = None
+        self._pruned_since_compaction = 0
 
     @property
     def status(self) -> DeliveryWorkerStatus:
@@ -147,11 +148,12 @@ class DeliveryWorker:
         if self.config.retention == "keep":
             return
         candidates = await self._outbox.acknowledged_candidates(
-            limit=self.config.max_prunes_per_cycle, after_delivery_id=self._cursor
+            limit=self.config.max_prunes_per_cycle,
+            after_delivery_id=self._cursor,
+            minimum_age_seconds=self.config.acknowledged_age_seconds,
         )
         if not candidates:
             self._cursor = None
-            return
         for identity in candidates:
             # Advance even on a readback refusal so a lost destination copy cannot
             # starve healthy neighbors. A later wrap retries retained refusals.
@@ -167,6 +169,21 @@ class DeliveryWorker:
             else:
                 if not state.payload_retained:
                     self._pruned += 1
+                    self._pruned_since_compaction += 1
+                    if self.config.rotate_acknowledged_attempts:
+                        await self._outbox.rotate_acknowledged_attempts(identity)
+        interval, free = (
+            self.config.compact_after_pruned_items,
+            self.config.compaction_minimum_free_bytes,
+        )
+        if interval is not None and free is not None and self._pruned_since_compaction >= interval:
+            try:
+                await self._outbox.compact(minimum_free_bytes=free)
+            except (OSError, sqlite3.Error):
+                self._refused += 1
+                self._last_failure = "unavailable"
+            else:
+                self._pruned_since_compaction = 0
 
     async def _run(self) -> None:
         try:

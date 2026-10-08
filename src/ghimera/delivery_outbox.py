@@ -1,6 +1,7 @@
 """Restart-safe result delivery; collection need not wait on downstream contact."""
 
 import asyncio
+import math
 import sqlite3
 import time
 from collections.abc import Callable
@@ -68,13 +69,31 @@ class DeliveryOutbox:
         return await self._apply(lambda store: store.summary())
 
     async def acknowledged_candidates(
-        self, *, limit: int, after_delivery_id: str | None = None
+        self,
+        *,
+        limit: int,
+        after_delivery_id: str | None = None,
+        minimum_age_seconds: float | None = None,
     ) -> tuple[str, ...]:
+        if minimum_age_seconds is not None and (
+            not math.isfinite(minimum_age_seconds) or minimum_age_seconds < 0
+        ):
+            raise ValueError("acknowledged retention age must be finite and nonnegative")
         return await self._apply(
             lambda store: store.acknowledged_candidates(
-                limit=limit, after_delivery_id=after_delivery_id
+                limit=limit,
+                after_delivery_id=after_delivery_id,
+                acknowledged_before=self._clock() - minimum_age_seconds
+                if minimum_age_seconds is not None
+                else None,
             )
         )
+
+    async def rotate_acknowledged_attempts(self, delivery_id: str) -> int:
+        return await self._apply(lambda store: store.rotate_acknowledged_attempts(delivery_id))
+
+    async def compact(self, *, minimum_free_bytes: int) -> None:
+        await self._apply(lambda store: store.compact(minimum_free_bytes))
 
     async def enqueue(self, result: Result) -> DeliveryState:
         item = DeliveryItem(

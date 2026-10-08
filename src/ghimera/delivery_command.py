@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import os
 import signal
 import sqlite3
 import sys
@@ -10,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, NoReturn
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 
 from ghimera.delivery_config import (
     DeliveryOutboxConfig,
@@ -19,17 +20,21 @@ from ghimera.delivery_config import (
     Seconds,
 )
 from ghimera.delivery_outbox import DeliveryOutbox
+from ghimera.delivery_sink import DeliverySink
 from ghimera.delivery_types import DeliveryWorkerStatus
 from ghimera.delivery_worker import DeliveryWorker
 from ghimera.directory_delivery import DirectoryDeliverySink
 from ghimera.models import Record
+from ghimera.remote_delivery import RemoteDeliveryConfig, RemoteDeliverySink
 from ghimera.result_archive import bounded_file
 
 
 class DeliveryCommandConfig(Record):
-    schema_version: Literal["ghimera.delivery-command/1"] = Field(alias="schema")
+    schema_version: Literal["ghimera.delivery-command/1", "ghimera.delivery-command/2"] = Field(
+        alias="schema"
+    )
     outbox: DeliveryOutboxConfig
-    destination: DirectoryDeliveryConfig
+    destination: DirectoryDeliveryConfig | RemoteDeliveryConfig
     worker: DeliveryWorkerConfig
     status_seconds: Seconds
 
@@ -37,11 +42,29 @@ class DeliveryCommandConfig(Record):
     def bound_destination(self) -> "DeliveryCommandConfig":
         if (
             self.outbox.target != self.destination.target
-            or self.outbox.directory == self.destination.directory
+            or (
+                isinstance(self.destination, DirectoryDeliveryConfig)
+                and self.outbox.directory == self.destination.directory
+            )
             or self.worker.max_prunes_per_cycle > self.outbox.max_items
         ):
             raise ValueError("delivery command needs distinct stores and one exact destination")
+        if (
+            isinstance(self.destination, RemoteDeliveryConfig)
+            and self.schema_version != "ghimera.delivery-command/2"
+        ):
+            raise ValueError("remote delivery requires command /2")
         return self
+
+
+def destination_sink(config: DirectoryDeliveryConfig | RemoteDeliveryConfig) -> DeliverySink:
+    if isinstance(config, DirectoryDeliveryConfig):
+        return DirectoryDeliverySink(config)
+    name = config.credential_environment_variable
+    value = os.environ.get(name) if name is not None else None
+    if name is not None and (not value or any(ord(char) < 32 or ord(char) > 126 for char in value)):
+        raise ValueError("configured remote delivery credential is absent or invalid")
+    return RemoteDeliverySink(config, credential=SecretStr(value) if value is not None else None)
 
 
 async def execute(
@@ -56,7 +79,7 @@ async def execute(
     worker = DeliveryWorker(
         config.worker,
         outbox=DeliveryOutbox(config.outbox),
-        sink=DirectoryDeliverySink(config.destination),
+        sink=destination_sink(config.destination),
     )
     loop = asyncio.get_running_loop()
     installed: list[signal.Signals] = []

@@ -1,0 +1,18 @@
+# Non-active private remote destination. Replace address, endpoint and target.
+# Only explicitly approved private addresses are admitted by the shared transport.
+schema = "ghimera.remote-delivery/1"
+endpoint = "https://delivery.example.invalid/deliveries"
+approved_addresses = ["192.168.50.10"]
+allow_plaintext = false
+allow_plaintext_credentials = false
+authorization = "bearer"
+credential_environment_variable = "GHIMERA_DELIVERY_BEARER"
+timeout_seconds = 30.0
+max_request_bytes = 50000000
+max_response_bytes = 65536
+max_header_bytes = 16384
+
+[target]
+schema = "ghimera.delivery-target/1"
+id = "owned_archive"
+revision = "replace-with-reviewed-destination-revision"

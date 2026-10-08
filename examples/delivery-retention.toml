@@ -1,0 +1,11 @@
+# Non-active /2 age and retry-audit retention; never removes dedup tombstones.
+schema = "ghimera.delivery-worker/2"
+poll_seconds = 2.0
+shutdown_grace_seconds = 30.0
+retention = "prune_acknowledged"
+max_prunes_per_cycle = 8
+acknowledged_age_seconds = 86400.0
+rotate_acknowledged_attempts = true
+# Optional explicit compaction after pruning; SQLite needs temporary disk space.
+# compact_after_pruned_items = 32
+# compaction_minimum_free_bytes = 1073741824

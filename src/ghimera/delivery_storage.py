@@ -1,6 +1,7 @@
 """Transactional outbox claims, bounded result bytes and non-secret retry audit."""
 
 import math
+import shutil
 import uuid
 from typing import Literal
 
@@ -280,7 +281,7 @@ class DeliveryStorage:
         )
 
     def acknowledged_candidates(
-        self, *, limit: int, after_delivery_id: str | None
+        self, *, limit: int, after_delivery_id: str | None, acknowledged_before: float | None = None
     ) -> tuple[str, ...]:
         """Bounded stable cursor over retained payloads; this does not authorize pruning."""
         self.check()
@@ -296,7 +297,38 @@ class DeliveryStorage:
             (after,) = TypeAdapter(tuple[int]).validate_python(row, strict=True)
         rows = self.private.db.execute(
             "SELECT id FROM items WHERE state='acknowledged' AND payload IS NOT NULL"
-            " AND rowid>? ORDER BY rowid LIMIT ?",
-            (after, limit),
+            " AND rowid>? AND (? IS NULL OR next_attempt-?<=?) ORDER BY rowid LIMIT ?",
+            (
+                after,
+                acknowledged_before,
+                self.config.retry_delay_seconds,
+                acknowledged_before,
+                limit,
+            ),
         ).fetchall()
         return tuple(TypeAdapter(tuple[str]).validate_python(row, strict=True)[0] for row in rows)
+
+    def rotate_acknowledged_attempts(self, identity: str) -> int:
+        """Keep immutable dedup tombstones and the last acknowledged attempt."""
+        self.check()
+        with self.private.transaction():
+            state = self.state(identity)
+            if state.status != "acknowledged" or state.payload_retained:
+                raise ValueError("attempt rotation requires a readback-pruned payload")
+            cursor = self.private.db.execute(
+                "DELETE FROM attempts WHERE item=? AND rowid NOT IN"
+                " (SELECT MAX(rowid) FROM attempts WHERE item=?)",
+                (identity, identity),
+            )
+            return cursor.rowcount
+
+    def compact(self, minimum_free_bytes: int) -> None:
+        """Reclaim free SQLite pages without deleting immutable identity rows."""
+        self.check()
+        if type(minimum_free_bytes) is not int or minimum_free_bytes <= 0:
+            raise ValueError("compaction requires a positive explicit disk allowance")
+        if shutil.disk_usage(self.config.directory).free < minimum_free_bytes:
+            raise OSError("delivery_compaction_disk_allowance_unavailable")
+        with self.private.writer():
+            self.private.db.execute("VACUUM")
+            self.private.check()

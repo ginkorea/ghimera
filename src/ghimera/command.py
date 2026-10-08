@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from ghimera.collector import Collector
 from ghimera.config import GhimeraConfig
 from ghimera.continuation import CheckpointReceipt, CheckpointStore, ResearchSuspended
+from ghimera.corpus import EvidenceCorpus
 from ghimera.embedding_types import EmbeddingReferences
 from ghimera.human_browser_types import HumanAssistant
 from ghimera.refusals import GhimeraRefused
@@ -198,11 +199,39 @@ class CredentialBindings(BaseModel):
         )
 
 
+def assemble_collector(
+    config: GhimeraConfig,
+    bindings: ResolvedCredentials,
+    references: EmbeddingReferences | None,
+    *,
+    source_resolver: Resolver | None = None,
+    human_assistant: HumanAssistant | None = None,
+    corpus: EvidenceCorpus | None = None,
+) -> Collector:
+    """Native dependency admission shared by commands and unattended startup."""
+    model_credentials, vision_credential, visual_reviewer_credential = bindings.completion_roles(
+        config
+    )
+    return Collector(
+        config,
+        references=references,
+        model_credentials=model_credentials,
+        vision_credential=vision_credential,
+        visual_reviewer_credential=visual_reviewer_credential,
+        encoder_credential=bindings.encoder,
+        source_credentials=bindings.sources,
+        source_resolver=source_resolver,
+        human_assistant=human_assistant,
+        corpus=corpus,
+    )
+
+
 async def execute(
     options: CommandOptions,
     *,
     source_resolver: Resolver | None = None,
     human_assistant: HumanAssistant | None = None,
+    corpus: EvidenceCorpus | None = None,
 ) -> ArchiveReceipt | CheckpointReceipt:
     options = CommandOptions.model_validate(options.model_dump())
     config = GhimeraConfig.model_validate(
@@ -242,19 +271,13 @@ async def execute(
         if options.references_path is not None
         else None
     )
-    model_credentials, vision_credential, visual_reviewer_credential = bindings.completion_roles(
-        config
-    )
-    collector = Collector(
+    collector = assemble_collector(
         config,
-        references=references,
-        model_credentials=model_credentials,
-        vision_credential=vision_credential,
-        visual_reviewer_credential=visual_reviewer_credential,
-        encoder_credential=bindings.encoder,
-        source_credentials=bindings.sources,
+        bindings,
+        references,
         source_resolver=source_resolver,
         human_assistant=human_assistant,
+        corpus=corpus,
     )
     request = collector.validate_request(request)
     # Reserve output before any paid/discovery work; an existing result is not reusable.
