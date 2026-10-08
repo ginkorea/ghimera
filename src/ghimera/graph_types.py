@@ -152,6 +152,21 @@ class GraphPdfReading(GraphRecord):
         return tuple(p.page_index for p in self.pages if start < p.end and end > p.start)
 
 
+class GraphRetainedOrigin(GraphRecord):
+    """A current corpus query admitted an old representation, not a new fetch."""
+
+    schema_version: Literal["ghimera.graph-retained-origin/1"] = Field(alias="schema")
+    document_sha256: Digest
+    corpus_id: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+    config_sha256: Digest
+    generation: Count
+    bundle_sha256: Digest
+    query_sha256: Digest
+    encoding_call_sha256: Digest
+    source_mode: Literal["retained_snapshot"] = "retained_snapshot"
+    source_age: Literal["unknown"] = "unknown"
+
+
 class GraphNode(GraphRecord):
     id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]*:[0-9a-f]{64}$")]
     role: Name
@@ -174,6 +189,9 @@ class GraphNode(GraphRecord):
         default=None, exclude_if=lambda v: v is None
     )
     pdf_reading: GraphPdfReading | None = Field(default=None, exclude_if=lambda v: v is None)
+    retained_source: GraphRetainedOrigin | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @staticmethod
     def document_identity(
@@ -184,12 +202,15 @@ class GraphNode(GraphRecord):
         *,
         human_browser: BrowserSourceEvidence | None = None,
         pdf_reading: GraphPdfReading | None = None,
+        retained_source: GraphRetainedOrigin | None = None,
     ) -> str:
         identity = f"{len(source_url)}:{source_url}:{content_sha256}:{text_sha256}:{revision}"
         if human_browser is not None:
             identity += f":{human_browser.acquisition}:{human_browser.capture_id}"
         if pdf_reading is not None:
             identity += f":{pdf_reading.content_digest()}"
+        if retained_source is not None:
+            identity += f":{retained_source.content_digest()}"
         return identity
 
     @model_validator(mode="after")
@@ -225,6 +246,7 @@ class GraphNode(GraphRecord):
                     self.revision,
                     human_browser=self.human_browser,
                     pdf_reading=self.pdf_reading,
+                    retained_source=self.retained_source,
                 ):
                     raise ValueError(
                         "graph PDF reading must bind its exact representation identity"
@@ -233,6 +255,20 @@ class GraphNode(GraphRecord):
             raise ValueError("content version fields belong only to document nodes")
         elif self.pdf_reading is not None:
             raise ValueError("PDF reading provenance belongs only to document nodes")
+        if self.retained_source is not None and (
+            self.role != "document"
+            or self.identity
+            != self.document_identity(
+                self.source_url or "",
+                self.content_sha256 or "",
+                self.text_sha256 or "",
+                self.revision,
+                human_browser=self.human_browser,
+                pdf_reading=self.pdf_reading,
+                retained_source=self.retained_source,
+            )
+        ):
+            raise ValueError("retained graph origin must bind its document representation")
         return self
 
 

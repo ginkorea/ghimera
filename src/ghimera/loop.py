@@ -33,6 +33,7 @@ from ghimera.models import (
     ModelIdentity,
     Page,
     Receipt,
+    RetainedOriginal,
     Scope,
     StopReason,
     Verdict,
@@ -60,6 +61,7 @@ class CollectionSession:
     ) -> None:
         self.goal, self.budget, self.ledger, self.graph = goal, budget, ledger, graph
         self._documents: dict[str, Document] = {}
+        self._retained_sources: dict[str, RetainedOriginal] = {}
         self._frontier: list[tuple[float, str, int]] = []
         self._visited: set[str] = set()
         self._reference_book = ReferenceBook(budget.config)
@@ -135,6 +137,9 @@ class CollectionSession:
 
     def restore_state(self, state: SessionState, harvest: Harvest) -> None:
         self._documents = {doc.sha256: doc for doc in harvest.documents}
+        self._retained_sources = {
+            item.origin.document_sha256: item for item in harvest.retained_sources
+        }
         self._frontier = list(state.frontier)
         heapq.heapify(self._frontier)
         self._visited = set(state.visited)
@@ -1026,6 +1031,97 @@ class GoalLoop:
             await graph.discovered(link.url, parent)
         return True
 
+    async def admit_retained(self, session: CollectionSession, original: RetainedOriginal) -> None:
+        """Reuse the current graph/stage/budget, never replay old source or model work."""
+        from ghimera.retained_graph import validate_original
+
+        original = RetainedOriginal.model_validate(original.model_dump())
+        validate_original(self._config, original)
+        graph = session.graph
+        if (
+            session._closed
+            or session._operating
+            or session.budget.config != self._config
+            or graph is None
+        ):
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        key = original.origin.document_sha256
+        if key in session._retained_sources:
+            if session._retained_sources[key] != original:
+                raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
+            return
+        policy = self._config.research.retained_evidence if self._config.research else None
+        if policy is None or (
+            len(session._retained_sources) >= policy.max_source_documents
+            or sum(
+                len(item.document.model_dump_json().encode())
+                for item in (*session._retained_sources.values(), original)
+            )
+            > policy.max_snapshot_bytes
+        ):
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        with session.operation():
+            document = original.document
+            reading = document.extracted.pdf_transcription
+            document_id = await graph.document(
+                document.url,
+                document.raw,
+                document.extracted.text,
+                original.revision,
+                transport=document.transport,
+                local_input=document.local_input,
+                human_browser=document.human_browser,
+                pdf_reading=reading.graph_reading() if reading else None,
+                retained_source=original.origin,
+            )
+            session.ledger.append(
+                LedgerRow(
+                    sequence=session.ledger.next_sequence,
+                    event="retained_source",
+                    url=document.url,
+                    reason="retained_original_admitted",
+                    retained_source=original.origin,
+                )
+            )
+            session._retained_sources[key] = original
+            if self._semantics is not None:
+                lock = session._semantic_locks.setdefault(document_id, asyncio.Lock())
+                try:
+                    async with asyncio.timeout(session.budget.remaining_seconds), lock:
+                        if document_id not in session._semantic_sources:
+                            async with session._slots.slot("semantic"):
+                                await self._semantics.extract(
+                                    session.goal.text,
+                                    document,
+                                    document_id,
+                                    graph,
+                                    session.budget,
+                                    session.ledger,
+                                    record_terminal_refusal=True,
+                                )
+                            session._semantic_sources.add(document_id)
+                except (GhimeraRefused, TimeoutError, asyncio.CancelledError) as exc:
+                    code = (
+                        exc.code
+                        if isinstance(exc, GhimeraRefused)
+                        else RefusalCode.BUDGET_EXHAUSTED
+                        if isinstance(exc, TimeoutError)
+                        else RefusalCode.SEMANTIC_EXTRACTION_FAILED
+                    )
+                    session.ledger.append(
+                        LedgerRow(
+                            sequence=session.ledger.next_sequence,
+                            event="refusal",
+                            url=document.url,
+                            refusal=code,
+                            reason="retained_semantics_refused",
+                            retained_failure=original.origin,
+                        )
+                    )
+                    if isinstance(exc, TimeoutError):
+                        raise GhimeraRefused(code) from None
+                    raise
+
     def finish(self, session: CollectionSession, stop: StopReason) -> Harvest:
         if session._closed or session._operating or session.budget.config != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -1047,9 +1143,10 @@ class GoalLoop:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
         return Harvest(
-            schema="chimera.harvest/1",
+            schema="chimera.harvest/2" if session._retained_sources else "chimera.harvest/1",
             goal=goal,
             documents=session.documents,
+            retained_sources=tuple(session._retained_sources.values()),
             ledger=ledger.snapshot(),
             receipt=Receipt(
                 fetches=budget.fetches,

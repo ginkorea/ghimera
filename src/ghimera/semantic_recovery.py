@@ -27,15 +27,17 @@ def failed_window(
     code: RefusalCode,
     *,
     allow_continue: bool,
+    record_terminal: bool = False,
 ) -> SemanticRefusal | None:
     policy = config.semantics
-    if policy is None or policy.failure is None:
+    if policy is None or (policy.failure is None and not record_terminal):
         return None
     recovered = sum(
         row.semantic_refusal is not None and row.semantic_refusal.continued for row in rows
     )
     continued = (
         allow_continue
+        and policy.failure is not None
         and phase in {"extract", "review"}
         and code.value in policy.failure.allowed_refusals
         and recovered < policy.failure.max_failed_windows_per_run

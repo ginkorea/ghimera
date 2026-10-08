@@ -307,6 +307,18 @@ class ResearchResult(ResearchRecord):
                 "retained research requires its exact intent, policy and result schema"
             )
         if self.retrieval is not None:
+            originals = {
+                item.origin.document_sha256: item for item in self.retrieval.graph_originals
+            }
+            admitted = self.harvest.retained_sources
+            if any(originals.get(item.origin.document_sha256) != item for item in admitted):
+                raise ValueError("graph origins must bind the exact actual retrieval snapshot")
+            if (
+                self.harvest.graph is not None
+                and self.status == "answered"
+                and tuple(originals.values()) != admitted
+            ):
+                raise ValueError("answered graph research cannot silently omit retained originals")
             ids = {question.id for question in self.questions}
             for round_ in self.rounds:
                 if round_.assessment is None:

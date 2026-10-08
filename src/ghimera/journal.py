@@ -25,6 +25,7 @@ from ghimera.journal_types import (
     JournalEntry,
     JournalHeader,
     JournalReport,
+    JournalRetainedDocument,
     JournalSummary,
     canonical,
     digest,
@@ -259,7 +260,9 @@ class DirectoryLedgerSink:
                 ):
                     raise _refuse()
                 summary = JournalSummary(
-                    schema="chimera.run-journal-summary/1",
+                    schema="chimera.run-journal-summary/2"
+                    if harvest.retained_sources
+                    else "chimera.run-journal-summary/1",
                     run_id=self._header.run_id,
                     header_sha256=digest(self._header),
                     last_entry_sha256=self._previous,
@@ -275,6 +278,18 @@ class DirectoryLedgerSink:
                             raw_bytes=len(doc.raw),
                         )
                         for doc in harvest.documents
+                    ),
+                    retained_documents=tuple(
+                        JournalRetainedDocument(
+                            url=item.document.url,
+                            sha256=item.document.sha256,
+                            native_text_sha256=hashlib.sha256(
+                                item.document.extracted.text.encode()
+                            ).hexdigest(),
+                            raw_bytes=len(item.document.raw),
+                            origin=item.origin,
+                        )
+                        for item in harvest.retained_sources
                     ),
                 )
                 _immutable_file(
@@ -349,6 +364,11 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
                 _read_file(summary_path, policy.max_summary_bytes)
             )
             receipt = summary.receipt
+            retained = tuple(row for row in rows if row.retained_source is not None)
+            if len(retained) != len(summary.retained_documents) or tuple(
+                (row.url, row.retained_source) for row in retained
+            ) != tuple((item.url, item.origin) for item in summary.retained_documents):
+                raise _refuse()
             encoding = tuple(row.encoding_call for row in rows if row.encoding_call is not None)
             if (
                 incomplete

@@ -585,6 +585,9 @@ class ResearchLoop:
             self._refuse(session, exc.code)
             if session.budget.remaining_seconds <= 0:
                 raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED) from exc
+        if session.graph is not None:
+            for original in reuse.report.graph_originals:
+                await self._collector.admit_retained(session, original)
 
     async def _assess(
         self,

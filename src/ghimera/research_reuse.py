@@ -9,7 +9,8 @@ from pydantic import Field, model_validator
 from ghimera.corpus_evidence import CorpusEvidenceBundle, CorpusEvidenceReader
 from ghimera.corpus_types import BoundCorpusDocument, CorpusRecord
 from ghimera.embedding_types import EncodingCall
-from ghimera.models import Document
+from ghimera.graph_types import GraphRetainedOrigin
+from ghimera.models import Document, RetainedOriginal
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_reuse_config import ResearchReuseConfig
 
@@ -76,6 +77,35 @@ class ResearchRetrievalReport(CorpusRecord):
     intent: Annotated[str, Field(min_length=1)]
     observations: tuple[RetrievalObservation, ...]
     snapshots: tuple[CorpusEvidenceBundle, ...]
+
+    @property
+    def graph_originals(self) -> tuple[RetainedOriginal, ...]:
+        """First successful query owns graph admission; repeated hits never redo semantics."""
+        originals: dict[str, RetainedOriginal] = {}
+        for bundle in self.snapshots:
+            query = bundle.query
+            for document in bundle.sources:
+                identity = BoundCorpusDocument(document).identity
+                if identity in originals:
+                    continue
+                originals[identity] = RetainedOriginal(
+                    document=document,
+                    query_text=bundle.query_text,
+                    encoding_call=query.encoding_call,
+                    origin=GraphRetainedOrigin(
+                        schema="ghimera.graph-retained-origin/1",
+                        document_sha256=identity,
+                        corpus_id=query.corpus_id,
+                        config_sha256=query.config_sha256,
+                        generation=query.generation,
+                        bundle_sha256=bundle_digest(bundle),
+                        query_sha256=query.query_sha256,
+                        encoding_call_sha256=hashlib.sha256(
+                            query.encoding_call.model_dump_json().encode()
+                        ).hexdigest(),
+                    ),
+                )
+        return tuple(originals.values())
 
     @property
     def documents(self) -> tuple[Document, ...]:

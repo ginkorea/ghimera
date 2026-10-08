@@ -108,6 +108,10 @@ def validate_harvest(harvest: "Harvest") -> None:
             raise ValueError("browser document requires its successful capture observation")
     if harvest.graph is not None:
         for node in harvest.graph.nodes:
+            if node.retained_source is not None:
+                # Harvest's retained-origin validator already binds the complete
+                # original. Its old capture is not a current browser action.
+                continue
             evidence = node.human_browser
             if evidence is None:
                 if (node.source_url, node.content_sha256) in content:

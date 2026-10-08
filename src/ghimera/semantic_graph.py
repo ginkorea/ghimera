@@ -314,6 +314,8 @@ class SemanticStage:
         graph: ResearchGraph,
         budget: RunBudget,
         ledger: Ledger,
+        *,
+        record_terminal_refusal: bool = False,
     ) -> None:
         policy = self._config.semantics
         graph_policy = self._config.graph
@@ -425,6 +427,7 @@ class SemanticStage:
                     ledger.snapshot(),
                     code,
                     allow_continue=not committed,
+                    record_terminal=record_terminal_refusal,
                 )
                 self._failure(ledger, document.url, code, call, refusal)
                 if refusal is not None and refusal.continued:
@@ -643,8 +646,8 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
         failed = row.semantic_refusal
         if failed is not None:
             failure_policy = policy.failure
-            if failure_policy is None or failed.policy_digest != policy.content_digest():
-                raise ValueError("semantic refusal requires its original failure policy")
+            if failed.policy_digest != policy.content_digest():
+                raise ValueError("semantic refusal differs from its extraction/failure policy")
             if failed.proposal is not None and (
                 failed.proposal.model_call != row.model_call
                 or failed.proposal.model_call is None
@@ -666,7 +669,8 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
             if failed.continued:
                 continued_failures += 1
                 if (
-                    failed.phase not in {"extract", "review"}
+                    failure_policy is None
+                    or failed.phase not in {"extract", "review"}
                     or row.refusal is None
                     or row.refusal.value not in failure_policy.allowed_refusals
                     or continued_failures > failure_policy.max_failed_windows_per_run
@@ -720,23 +724,51 @@ def validate_harvest(harvest: Harvest) -> None:
     ):
         raise ValueError("semantic observations require their bounded configured graph")
     graph = ResearchGraph(config.graph, snapshot.run_id, MemoryGraphSink())
-    sources = {(item.url, item.sha256): item for item in harvest.source_documents}
+    sources = harvest.graph_source_documents
     nodes = {node.id: node for node in snapshot.nodes}
     edges = {edge.id: edge for edge in snapshot.edges}
     projected: set[str] = set()
-    counts: dict[tuple[str, str], int] = {}
+    counts: dict[str, int] = {}
+
+    def readings(node: GraphNode) -> tuple[Document, ...]:
+        retained = node.retained_source
+        candidates = (
+            tuple(item.document for item in harvest.retained_sources if item.origin == retained)
+            if retained is not None
+            else harvest.source_documents
+        )
+        return tuple(
+            item
+            for item in candidates
+            if (
+                node.source_url == item.url
+                and node.content_sha256 == item.sha256
+                and node.text == item.extracted.text
+                and node.pdf_reading
+                == (
+                    item.extracted.pdf_transcription.graph_reading()
+                    if item.extracted.pdf_transcription is not None
+                    else None
+                )
+            )
+        )
+
     for row in rows:
         observation = row.semantic_window or row.semantic_refusal
         if observation is None:
             continue
-        key = (observation.source_url, observation.document_sha256)
-        document = sources.get(key)
         node = nodes.get(observation.graph_document_id)
+        matches = readings(node) if node is not None else ()
+        document = matches[0] if matches else None
+        key = observation.graph_document_id
         counts[key] = counts.get(key, 0) + 1
         if (
             document is None
             or node is None
             or node.role != "document"
+            or observation.document_sha256 != document.sha256
+            or observation.source_url != document.url
+            or row.url != document.url
             or node.source_url != document.url
             or node.content_sha256 != document.sha256
             or node.text != document.extracted.text
@@ -794,12 +826,33 @@ def validate_harvest(harvest: Harvest) -> None:
                 "semantic archive projections must match native observations and durable graph"
             )
         projected.update(item.id for item in observation.edges)
-    for key, document in sources.items():
+    for document in sources:
         expected_count = min(
             policy.max_windows_per_document,
             (len(document.extracted.text) + policy.window_chars - 1) // policy.window_chars,
         )
-        if counts.get(key, 0) != expected_count and not any(
+        matching_nodes = tuple(
+            node
+            for node in nodes.values()
+            if node.role == "document" and document in readings(node)
+        )
+        retained_nodes = tuple(node for node in matching_nodes if node.retained_source is not None)
+        for node in retained_nodes:
+            if counts.get(node.id, 0) != expected_count and not any(
+                row.refusal is not None
+                and (
+                    (
+                        row.semantic_refusal is not None
+                        and row.semantic_refusal.graph_document_id == node.id
+                    )
+                    or row.retained_failure == node.retained_source
+                )
+                for row in harvest.ledger
+            ):
+                raise ValueError(
+                    "retained graph originals require their own semantic coverage or refusal"
+                )
+        if not any(counts.get(node.id, 0) == expected_count for node in matching_nodes) and not any(
             row.url == document.url
             and row.refusal is not None
             and row.event in {"semantic", "refusal"}

@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from pydantic import Field, model_validator
 
 from ghimera.config import GhimeraConfig
+from ghimera.graph_types import GraphRetainedOrigin
 from ghimera.models import Goal, LedgerRow, ModelIdentity, Receipt, Record
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -48,19 +49,32 @@ class JournalDocument(Record):
     raw_bytes: Annotated[int, Field(strict=True, ge=0)]
 
 
+class JournalRetainedDocument(JournalDocument):
+    origin: GraphRetainedOrigin
+
+
 class JournalSummary(Record):
-    schema_version: Literal["chimera.run-journal-summary/1"] = Field(alias="schema")
+    schema_version: Literal["chimera.run-journal-summary/1", "chimera.run-journal-summary/2"] = (
+        Field(alias="schema")
+    )
     run_id: RunId
     header_sha256: Digest
     last_entry_sha256: Digest
     ledger_rows: Annotated[int, Field(strict=True, ge=0)]
     receipt: Receipt
     documents: tuple[JournalDocument, ...]
+    retained_documents: tuple[JournalRetainedDocument, ...] = Field(
+        default=(), exclude_if=lambda v: not v
+    )
 
     @model_validator(mode="after")
     def counts(self) -> "JournalSummary":
         if self.receipt.accepted_documents != len(self.documents):
             raise ValueError("journal summary must account for every accepted document")
+        if (self.schema_version == "chimera.run-journal-summary/2") != bool(
+            self.retained_documents
+        ):
+            raise ValueError("retained graph documents require the versioned journal summary")
         return self
 
 

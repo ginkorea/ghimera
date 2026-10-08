@@ -2,8 +2,9 @@
 
 Development candidate, not included in the immutable 0.4.5 artifacts. This
 implements the direct-context boundary and configured research-loop reuse of
-I05. Freshness, reranking, retained-source graph projection and representative
-multilingual quality acceptance still require further work.
+I05. A separate development follow-up connects retained native/PDF originals to
+the current evidence graph. Freshness, reranking, visual graph projection and
+representative multilingual quality acceptance still require further work.
 
 `CorpusEvidenceReader(policy, corpus)` borrows an explicitly opened corpus and
 returns ranked original passages with their full original `Document` objects.
@@ -78,7 +79,8 @@ the same revision. Ordinary graph-only planning retains its original prompt pin.
 
 `chimera.research-result/3` keeps `retrieval` beside the fresh `harvest`:
 
-- The fresh harvest contains only current acquisition and model events. Its
+- The harvest's `documents` and `source_documents` contain only fresh originals.
+  Its ledger contains only current acquisition, admission and model events. Its
   fetch/encoding counters do not relabel corpus reads as source HTTP work.
 - `ghimera.research-retrieval/1` contains actual current query observations,
   separately configured query/character/snapshot/document bounds and admitted
@@ -103,11 +105,9 @@ acceptance; protocol fixtures establish wiring and provenance, not accuracy.
 
 ## Remaining required integration, not optional closure
 
-1. Bind graph nodes and semantic extraction to the retained source representation,
-   including reviewed-PDF page/model records and image regions. Preserve native
-   wire identities and do not reinterpret old extraction under today's recipe.
-   The current fresh-harvest graph does not project historical originals; no old
-   local import, browser action or semantic assessment is invented in that graph.
+1. Accept the retained-native/PDF graph follow-up described below through its
+   focused and full gates. Image-region graph projection still requires I10;
+   native/PDF graph support is not a substitute for it.
 2. Extend answer/context citations to visual claims and image regions (I10).
    Retaining image passages is not yet visual-answer or visual-graph acceptance.
 3. Add acquisition observations for future records before enabling age-bounded
@@ -119,6 +119,54 @@ source/query/selection mutations, response limits and exact reviewed-PDF page
 provenance, with scripted encoding/transcription replies. It is not evidence
 that a served model answers correctly or that automatic research reuse is
 deployed. The research-loop candidate also needs its own focused and full gates.
+
+## Retained native/PDF graph follow-up
+
+When the configured research graph is enabled, the same `GoalLoop` and
+`SemanticStage` consume each distinct retrieved original once before planning.
+There is no second graph, model selection or hidden crawler. Current semantic
+extraction and configured independent verification consume the existing run
+budget, preserve source-local identity and feed the ordinary graph-aware planner.
+Repeated query hits do not repeat extraction; completed-round resume restores
+the original graph and acknowledged semantic work rather than replaying it.
+
+`chimera.harvest/2` carries `retained_sources` separately from fresh `documents`.
+Each entry contains its complete original and a `ghimera.graph-retained-origin/1`
+binding: corpus identity/recipe/generation, exact query bundle, whole original
+digest and actual current query-call digest. Source age stays explicitly unknown.
+The research-result validator binds those origins to its actual retrieval
+capsules; changing a query capsule or original breaks validation.
+
+Retained graph document nodes include this origin in their identity. Historical
+PDF page readings, model calls and local/browser provenance remain attached to
+the original; they are not relabelled as current imports, OCR or HTTP requests.
+Fresh-only graph identities and harvest/1 serialization stay unchanged. New
+semantic windows bind the exact native or reviewed-PDF reading, including page
+references; two readings of identical source bytes do not overwrite one another.
+
+Admission is a zero-source-byte `retained_source` ledger observation preceding
+current semantic work. The versioned journal summary records retained document
+origins separately from fresh counts. Full originals and graph evidence persist
+through completed-round checkpoints and the existing acknowledged delivery
+outbox, including after the corpus closes. Operation-level uncertain-ack recovery
+and real-model graph accuracy remain separate required acceptance work.
+
+Failed current semantic work records the exact retained origin, including when
+the run budget expires between windows. A rejected independent review preserves
+its current extractor/reviewer observations without publishing their proposed
+claims. Recording a terminal refusal does not enable continuation: recovery
+still requires the explicit semantic failure policy. Admission checks document
+and snapshot limits before changing the graph.
+
+Development verification: the nine retained graph/browser checks passed under
+Python 3.11.16, including real SQLite/FAISS, native PDF/browser, journal,
+checkpoint and outbox boundaries with scripted model replies. The affected
+module/importer selection passed 336 tests, no failures or skips, under
+`/tmp/chimera-c0-20261006/.venv/bin/python`, importing this isolated candidate.
+Ruff, formatting and strict mypy (164 source files) also passed. The combined
+full gate and independent installed/public-artifact acceptance remain required
+before this graph follow-up is published. None of these checks measures real
+model accuracy or proves the complete infrastructure PRD.
 
 ## Integration contract
 

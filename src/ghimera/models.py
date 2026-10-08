@@ -17,7 +17,12 @@ from ghimera.embedding_types import EncodingCall, IntentReferenceEvidence
 from ghimera.extraction_attempts import HtmlExtractionAttempt, validate_chain
 from ghimera.extraction_types import ExtractionEvidence
 from ghimera.graph_planning_types import PlanningGraph
-from ghimera.graph_types import GraphPdfReading, GraphReadingPage, GraphSnapshot
+from ghimera.graph_types import (
+    GraphPdfReading,
+    GraphReadingPage,
+    GraphRetainedOrigin,
+    GraphSnapshot,
+)
 from ghimera.human_browser_types import (
     AssistanceObservation,
     BrowserSourceEvidence,
@@ -585,6 +590,39 @@ class Document(DocumentSource):
         return self
 
 
+class RetainedOriginal(Record):
+    """Self-contained original plus current query; historical calls stay in the original."""
+
+    document: Document
+    origin: GraphRetainedOrigin
+    query_text: NonEmpty
+    encoding_call: EncodingCall
+
+    @property
+    def revision(self) -> str:
+        return "ghimera-retained-original/1@" + self.origin.document_sha256
+
+    @model_validator(mode="after")
+    def bound(self) -> "RetainedOriginal":
+        call, origin = self.encoding_call, self.origin
+        encoded = call.service.text_prefix + self.query_text
+        if (
+            self.document.verdict.decision != "accept"
+            or origin.document_sha256
+            != hashlib.sha256(self.document.model_dump_json().encode()).hexdigest()
+            or origin.query_sha256 != hashlib.sha256(self.query_text.encode()).hexdigest()
+            or origin.encoding_call_sha256
+            != hashlib.sha256(call.model_dump_json().encode()).hexdigest()
+            or call.outcome != "success"
+            or call.input_sha256 != (hashlib.sha256(encoded.encode()).hexdigest(),)
+            or call.input_chars != len(encoded)
+        ):
+            raise ValueError(
+                "retained original requires its exact representation and current query"
+            )
+        return self
+
+
 class LedgerRow(Record):
     sequence: NonNegative
     event: Literal[
@@ -618,6 +656,7 @@ class LedgerRow(Record):
         "visual_model",
         "transcription_model",
         "transcription",
+        "retained_source",
     ]
     url: str | None = None
     route: str | None = None
@@ -673,9 +712,37 @@ class LedgerRow(Record):
         default=(), exclude_if=lambda v: not v
     )
     browser_action: BrowserSourceAction | None = Field(default=None, exclude_if=lambda v: v is None)
+    retained_source: GraphRetainedOrigin | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    retained_failure: GraphRetainedOrigin | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if self.retained_failure is not None and (
+            self.event != "refusal"
+            or self.refusal is None
+            or self.url is None
+            or self.reason != "retained_semantics_refused"
+        ):
+            raise ValueError("retained processing refusal requires its exact source origin")
+        if (self.event == "retained_source") != (self.retained_source is not None):
+            raise ValueError("retained source observations require their current query origin")
+        if self.retained_source is not None and (
+            self.url is None
+            or self.bytes_read != 0
+            or self.status is not None
+            or self.refusal is not None
+            or self.route is not None
+            or self.transport is not None
+            or self.model_call is not None
+            or self.reason != "retained_original_admitted"
+        ):
+            raise ValueError(
+                "retained original admission is not a fetch or a historical model call"
+            )
         if (self.event == "transcription") != (self.transcription_call is not None):
             raise ValueError("completed transcription calls require their exact typed evidence")
         if self.browser_action is not None and (
@@ -870,19 +937,27 @@ class Receipt(Record):
 
 
 class Harvest(Record):
-    schema_version: Literal["chimera.harvest/1"] = Field(alias="schema")
+    schema_version: Literal["chimera.harvest/1", "chimera.harvest/2"] = Field(alias="schema")
     goal: Goal
     documents: tuple[Document, ...]
     ledger: tuple[LedgerRow, ...]
     receipt: Receipt
     graph: GraphSnapshot | None = None
+    retained_sources: tuple[RetainedOriginal, ...] = Field(default=(), exclude_if=lambda v: not v)
 
     @property
     def source_documents(self) -> tuple[Document, ...]:
         return tuple(item for doc in self.documents for item in doc.evidence_sources())
 
+    @property
+    def graph_source_documents(self) -> tuple[Document, ...]:
+        return self.source_documents + tuple(item.document for item in self.retained_sources)
+
     @model_validator(mode="after")
     def consistent(self) -> "Harvest":
+        from ghimera.retained_graph import validate_harvest as validate_retained_harvest
+
+        validate_retained_harvest(self)
         from ghimera.human_browser_validation import validate_harvest as validate_browser_harvest
         from ghimera.references import validate_reference_ledger
         from ghimera.scoring_validation import validate_reference_rows
@@ -1129,24 +1204,33 @@ class Harvest(Record):
             config = self.receipt.effective_config.graph
             if config is None or self.graph.config_digest != config.content_digest():
                 raise ValueError("graph must bind the effective configuration")
-            source_readings = {
-                (
+            source_readings: dict[tuple[str, str, str], list[GraphPdfReading | None]] = {}
+            for source in self.graph_source_documents:
+                source_reading_key = (
                     source.url,
                     source.sha256,
                     hashlib.sha256(source.extracted.text.encode()).hexdigest(),
-                ): source.extracted.pdf_transcription.graph_reading()
-                if source.extracted.pdf_transcription is not None
-                else None
-                for source in self.source_documents
-            }
+                )
+                source_readings.setdefault(source_reading_key, []).append(
+                    source.extracted.pdf_transcription.graph_reading()
+                    if source.extracted.pdf_transcription is not None
+                    else None
+                )
             for node in self.graph.nodes:
                 if node.role == "document":
-                    key = (node.source_url, node.content_sha256, node.text_sha256)
-                    if key in source_readings and node.pdf_reading != source_readings[key]:
+                    node_reading_key = (
+                        node.source_url or "",
+                        node.content_sha256 or "",
+                        node.text_sha256 or "",
+                    )
+                    if (
+                        node_reading_key in source_readings
+                        and node.pdf_reading not in source_readings[node_reading_key]
+                    ):
                         raise ValueError(
                             "graph document must preserve the actual PDF reading evidence"
                         )
-                if node.local_input is not None:
+                if node.local_input is not None and node.retained_source is None:
                     node.local_input.validate_policy(input_policy)
                     if not any(row.local_input == node.local_input for row in inputs):
                         raise ValueError(

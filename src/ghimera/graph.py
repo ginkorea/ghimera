@@ -22,6 +22,7 @@ from ghimera.graph_types import (
     GraphEvidence,
     GraphNode,
     GraphPdfReading,
+    GraphRetainedOrigin,
     GraphSnapshot,
 )
 from ghimera.human_browser_types import BrowserSourceEvidence
@@ -375,7 +376,7 @@ class ResearchGraph:
         await self.append(nodes=(source,), edges=(edge,))
         return source.id
 
-    async def document(
+    def document_node(
         self,
         url: str,
         raw: bytes,
@@ -386,7 +387,8 @@ class ResearchGraph:
         local_input: LocalInputEvidence | None = None,
         human_browser: BrowserSourceEvidence | None = None,
         pdf_reading: GraphPdfReading | None = None,
-    ) -> str:
+        retained_source: GraphRetainedOrigin | None = None,
+    ) -> GraphNode:
         content_digest = hashlib.sha256(raw).hexdigest()
         text_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         # Extraction changes create a new representation of the same source bytes.
@@ -397,9 +399,10 @@ class ResearchGraph:
             revision,
             human_browser=human_browser,
             pdf_reading=pdf_reading,
+            retained_source=retained_source,
         )
         kind = next(role.kind for role in self._config.roles if role.name == "document")
-        doc = GraphNode(
+        return GraphNode(
             id=self._identity("document", identity),
             role="document",
             kind=kind,
@@ -416,6 +419,32 @@ class ResearchGraph:
             local_input=local_input,
             human_browser=human_browser,
             pdf_reading=pdf_reading,
+            retained_source=retained_source,
+        )
+
+    async def document(
+        self,
+        url: str,
+        raw: bytes,
+        text: str,
+        revision: str,
+        *,
+        transport: TransportEvidence | None = None,
+        local_input: LocalInputEvidence | None = None,
+        human_browser: BrowserSourceEvidence | None = None,
+        pdf_reading: GraphPdfReading | None = None,
+        retained_source: GraphRetainedOrigin | None = None,
+    ) -> str:
+        doc = self.document_node(
+            url,
+            raw,
+            text,
+            revision,
+            transport=transport,
+            local_input=local_input,
+            human_browser=human_browser,
+            pdf_reading=pdf_reading,
+            retained_source=retained_source,
         )
         source = self.node("source", url, url, self._config.profile_version)
         await self.append(
