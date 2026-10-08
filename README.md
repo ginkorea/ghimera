@@ -74,6 +74,23 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+### Check a recipe offline
+
+Before running research, validate your copied `collector.toml` without contacting
+sources or model services:
+
+```python
+from pathlib import Path
+
+from ghimera import GhimeraConfig
+
+config = GhimeraConfig.from_toml(Path("collector.toml"), max_bytes=100_000)
+print(config.schema_version)
+```
+
+This checks configuration, not service availability or research quality. The
+intent example above needs the services and credentials you configured.
+
 Planning, discovery, collection, assessment, answer generation and independent
 review share the configured allowances. A result is answered only after native
 coverage, citation, review and confidence checks pass. Budget exhaustion is not

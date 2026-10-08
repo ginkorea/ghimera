@@ -34,16 +34,19 @@ def test_renamed_package_reads_the_existing_config_schema():
     assert config.model_dump(by_alias=True)["schema"] == "chimera.config/1"
 
 
-def test_readme_offline_example_runs_against_the_public_api(monkeypatch, capsys, tmp_path):
+def test_readme_offline_recipe_check_runs_against_the_public_api(monkeypatch, capsys, tmp_path):
     root = Path(__file__).resolve().parents[1]
-    copyfile(root / "examples" / "chimera.toml", tmp_path / "chimera.toml")
+    copyfile(root / "examples" / "collector.toml", tmp_path / "collector.toml")
     monkeypatch.chdir(tmp_path)
     readme = (root / "README.md").read_text()
-    code = readme.split("```python\n", 1)[1].split("```", 1)[0]
+    # The intent example requires real services. Execute the explicitly offline
+    # example instead; concrete Collector adapter behavior is tested separately.
+    offline = readme.split("### Check a recipe offline\n", 1)[1]
+    code = offline.split("```python\n", 1)[1].split("```", 1)[0]
     namespace: dict[str, object] = {"__name__": "__readme_example__"}
     exec(compile(code, str(root / "README.md"), "exec"), namespace)
-    assert capsys.readouterr().out.strip() == "frontier_empty"
-    assert callable(namespace["main"])
+    assert capsys.readouterr().out.strip() == "chimera.config/1"
+    assert namespace["config"].models is not None
 
 
 def test_readme_is_standalone_user_documentation():

@@ -35,6 +35,7 @@ from ghimera.research import ModelCalls
 from ghimera.research_types import PlanningRequest, ResearchRequest
 from ghimera.semantic_graph import SemanticStage
 from tests.test_c0 import config
+from tests.test_completion_diagnostics import FINAL, PRIVATE, Wire
 from tests.test_document_extraction import native_pdf
 from tests.test_intent_research import PlannerFixture, policy
 from tests.test_page_transcription import ModelPort
@@ -415,6 +416,47 @@ def test_research_success_uses_existing_port_and_quota_boundary(tmp_path):
     assert result.questions and budget.judge_calls == 1
     assert [row.event for row in ledger.snapshot()] == ["model_intent", "model_ack", "plan"]
     session.close()
+
+
+def test_client_contract_failure_survives_native_refused_ack_readback(tmp_path):
+    import json
+
+    cfg = configured(tmp_path)
+    budget, ledger = opened(cfg)
+    goal = Goal(text="find ports")
+    extracted = document().extracted
+    original_wire = Wire()
+    original_model = SelfHostedModel(cfg, original_wire.config, http=original_wire)
+    original = asyncio.run(original_model.document(goal, extracted, second_look=False))
+    output = json.loads(FINAL)
+    output["model_call"] = original.model_call.model_dump(mode="json", by_alias=True)
+    wire = Wire(content=json.dumps(output))
+    model = SelfHostedModel(cfg, wire.config, http=wire)
+    attempt = ModelInvocation(
+        budget,
+        ledger,
+        phase="verdict",
+        model=model.model,
+        request=port_input(budget, goal, extracted, second_look=False),
+    )
+    with pytest.raises(GhimeraRefused, match="adapter_contract"):
+        asyncio.run(
+            attempt.invoke(
+                lambda: model.document(goal, extracted, second_look=False),
+                lambda result: result.model_dump_json().encode(),
+            )
+        )
+    ledger.close()
+    report = read_journal(cfg.journal, "operation")
+    assert report.uncertain_model_calls == ()
+    ack = report.rows[-1].model_ack
+    assert ack.outcome == "refused" and ack.output_scope == "wire_response"
+    assert ack.stored_output is None
+    assert ack.refused_call.output_contract_failure.reason == "model_claimed_telemetry"
+    assert ack.refused_call.completion.finish_reason == "stop"
+    assert ack.output_bytes == len(wire.body) and wire.calls == 1
+    assert PRIVATE not in report.rows[-1].model_dump_json()
+    assert "protocol fixture" not in report.rows[-1].model_dump_json()
 
 
 @pytest.mark.parametrize("defect", [None, "truncated"])

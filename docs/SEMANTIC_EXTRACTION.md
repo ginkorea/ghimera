@@ -104,8 +104,49 @@ identify that failed observation, not successful extraction. The `/3` packet
 contained rule names but no actual graph endpoint contracts. `/5` closes that
 generic input omission without reinterpreting the original ACK; a separate
 role-compatible but source-unsupported relation in that same output remains a
-quality gap. Focused fixtures establish contract/refusal/replay behavior only.
-Real `/5` semantic quality and whole-Collector acceptance remain pending.
+quality gap. Later actual `/5` trials on the unchanged Chinese PDF also failed:
+Qwen proposed unsupported directed relations and a literal span absent from its
+source window, which the native source guard correctly refused. The separate
+OSS-20B `/5` trial returned HTTP 200 with `finish_reason="length"` at its exact
+configured 2048-output-token cap; the client refused before any accepted semantic
+window or answer. These are failed actual trials, not quality acceptance or
+evidence that the missing content is absent from the document. Focused fixtures
+establish contract/refusal/replay behavior only. Real semantic quality and
+whole-Collector acceptance remain open.
+
+Version 6 explicitly combines the native graph contract with required independent
+review: `schema="ghimera.semantics/6"`,
+`prompt_profile="reviewed_graph_bound_native_spans"`; see
+[the inert reviewed graph-bound fragment](../examples/semantics-reviewed-graph-bound.toml).
+Complete unique role/relation definitions and `verification` are mandatory.
+The existing cross-config admission requires a distinct reviewer model ID,
+matching actual reviewer port and bounded extractor/reviewer contexts. Extraction
+uses `ghimera-semantic-extraction/6`, retaining the exact graph/policy contract,
+unchanged native window, actual request bytes and call evidence. The configured
+verification profile keeps its own existing prompt revision; batched `/4` can
+select `native_quote_checks` or `independent_dimension_checks`.
+
+`/6` reuses the same native semantic stage, complete bounded review partitions,
+model-work intents/ACKs, shared call budget/deadline, projector and archive/journal
+validators. Every actual assessment binds the unchanged original proposal and
+source window. Unsupported or ambiguous observations are quarantined without
+repairing the proposal; review findings remain coverage gaps, not new graph
+facts. Admitted relations still remain `model_asserted`, never truth, verified
+human approval or corroboration. Insufficient review allowance refuses rather
+than dropping partitions or silently accepting unreviewed neighbors.
+
+This requires fresh `/6` proposals and actual independent review in a new
+explicitly configured run, not detached adoption of historical `/5` assertions.
+Profiles `/1`–`/5` retain their original policies, prompt/request
+identities and provenance; `/5` still forbids verification, including explicit
+null. The native revision guard rejects interpreting an original `/5` extraction
+as `/6`. No original archive, source bytes or ACK is rewritten. Controlled
+conformance checks are distinct from real independent semantic quality and
+whole-Collector acceptance. The development `/6` selection passed 284 controlled
+checks on Python 3.11.16 with the SDK absent, covering independent review,
+quarantine, historical-wire preservation, native ACK replay and sealed result
+archive readback. This is source conformance evidence, not real-model accuracy;
+the complete candidate gate and real independent quality acceptance remain open.
 
 Accepted documents pass through sequential bounded native-text windows. Calls
 consume both `max_calls_per_run` and the existing shared judge/model-call
@@ -139,7 +180,7 @@ added beside originals and extraction provenance, not substituted for them.
 
 ## Durable output and failure
 
-An explicit bounded failure-continuation policy is available for version-4
+An explicit bounded failure-continuation policy is available for version-4 or -6
 recipes; see [semantic recovery](SEMANTIC_RECOVERY.md). Failed native windows
 remain source-bound planning gaps and never graph facts. Without that policy,
 existing recipes retain their refused-window behavior, including skipping that

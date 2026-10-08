@@ -18,7 +18,7 @@ from ghimera.loop import GoalLoop
 from ghimera.model_client import SelfHostedModel, model_schema
 from ghimera.model_http import ModelHttpResponse
 from ghimera.models import Extracted
-from ghimera.refusals import GhimeraRefused
+from ghimera.refusals import GhimeraRefused, ModelFailure
 from ghimera.research import ResearchLoop
 from ghimera.research_types import (
     PlanningRequest,
@@ -158,6 +158,43 @@ def test_concrete_model_port_uses_graph_context_to_emit_bound_followup_queries(t
     assert context.entities[0].node.label in plan.queries[0].text
     assert plan.model_call.prompt_revision == "ghimera-graph-planning/1"
     assert wire.requests[0]["graph_context"]["population_digest"] == context.population_digest
+
+
+def test_model_invented_graph_reference_is_refused_with_nonsecret_native_diagnostics(tmp_path):
+    cfg = planning_config(tmp_path)
+    doc = document()
+    _, rows, _ = observed(cfg, (doc,))
+    context = build_context(cfg, rows)
+
+    class UnboundPlanningWire(PlanningWire):
+        async def post(self, body):
+            response = await super().post(body)
+            envelope = json.loads(response.body)
+            output = json.loads(envelope["choices"][0]["message"]["content"])
+            output["queries"][0]["graph_refs"] = ["private-invented-graph-reference"]
+            envelope["choices"][0]["message"]["content"] = json.dumps(output)
+            return ModelHttpResponse(200, json.dumps(envelope).encode(), "application/json")
+
+    request = PlanningRequest(
+        intent="map the organization",
+        questions=(),
+        documents=(doc,),
+        assessment=None,
+        max_questions=4,
+        max_queries=2,
+        max_query_chars=200,
+        graph_context=context,
+    )
+    wire = UnboundPlanningWire(cfg.models.planner)
+    with pytest.raises(ModelFailure, match="adapter_contract") as refused:
+        asyncio.run(SelfHostedModel(cfg, cfg.models.planner, http=wire).plan(request))
+    call = refused.value.model_call
+    assert call.output_contract_failure.reason == "unbound_graph_reference"
+    assert call.status == 200 and call.outcome == "refused"
+    assert call.completion.finish_reason == "stop" and call.completion.model_matches
+    assert call.usage.total_tokens == 30 and len(wire.requests) == 1
+    assert "private-invented-graph-reference" not in call.model_dump_json()
+    assert type(call).model_validate_json(call.model_dump_json()) == call
 
 
 def test_tampered_native_graph_context_refuses_before_model_io(tmp_path):

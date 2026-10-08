@@ -2,6 +2,31 @@
 
 Published in 0.4.9; full I03 closure remains open.
 
+## Client-owned output-contract diagnosis (development)
+
+The development client records an optional `output_contract_failure` alongside
+its existing request/response hash, byte count and completion observations.
+`ghimera.model-output-contract/1` has a closed reason vocabulary:
+`response_too_large`, `model_claimed_telemetry`, and `unbound_graph_reference`.
+Each reason is set only at the client branch that actually refused the result;
+it is not inferred from a generic failure or copied from provider prose.
+The diagnostic may belong only to a refused call. It contains no answer,
+reasoning, graph identifiers, credentials or raw refused response. Native
+journal readers retain it with a known refused call when the existing
+acknowledgement conditions hold. It does not enable replay of refused output.
+`response_too_large` identifies the full-body collaborator check in the model
+client. The native bounded HTTP reader can refuse oversized transfers earlier,
+before a completion is parsed; this diagnostic does not relabel that transport
+failure. An unparsed completion remains UNKNOWN/held under the existing
+acknowledgement rules, not a known refused answer or free budget.
+
+Absent diagnostics preserve historical serialization. The client-owned field
+is omitted from model-facing schemas and does not change historical prompts,
+model request schemas or acceptance checks. A completed generation can still
+be refused; `finish_reason=stop` is not proof of a valid research plan. The
+real earlier organization trial lacks this branch diagnostic, so its precise
+rejection remains unresolved rather than being retroactively labelled.
+
 ## Retained-answer development candidate
 
 The next owned source candidate adds an explicit `[model_work.results]` policy

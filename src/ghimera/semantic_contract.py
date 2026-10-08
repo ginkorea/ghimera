@@ -1,7 +1,7 @@
 """A bounded model-input view derived only from the existing native graph recipe.
 
 This is not a second ontology owner or proof of source entailment. The projector
-still owns role/citation/span admission; single-model output stays unreviewed.
+still owns role/citation/span admission; review never establishes corroboration.
 """
 
 from typing import TYPE_CHECKING, Literal
@@ -28,7 +28,7 @@ def build_graph_contract(
     config: "GhimeraConfig", policy: SemanticConfig
 ) -> SemanticGraphContract | None:
     """Same exact projection view for model prompt, reservation and explicit replay."""
-    if policy.schema_version != "ghimera.semantics/5":
+    if policy.schema_version not in {"ghimera.semantics/5", "ghimera.semantics/6"}:
         return None
     from ghimera.config import GhimeraConfig
 

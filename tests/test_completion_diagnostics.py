@@ -4,10 +4,11 @@ import asyncio
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from ghimera.model_client import SelfHostedModel, model_schema
 from ghimera.model_http import ModelHttpResponse
-from ghimera.model_types import ModelCallEvidence
+from ghimera.model_types import ModelCallEvidence, ModelOutputContractFailure
 from ghimera.models import Extracted, Goal, LedgerRow, Verdict
 from ghimera.refusals import ModelFailure
 from tests.test_c0 import config
@@ -169,3 +170,41 @@ def test_legacy_call_serialization_is_unchanged_when_diagnostics_are_absent():
     schema = ModelCallEvidence.model_json_schema()
     assert "completion" not in schema["properties"]
     assert "CompletionShape" not in json.dumps(schema)
+    assert "output_contract_failure" not in restored.model_dump()
+    assert "output_contract_failure" not in schema["properties"]
+    assert "ModelOutputContractFailure" not in json.dumps(model_schema(Verdict))
+
+
+@pytest.mark.parametrize("defect", ["response_too_large", "model_claimed_telemetry"])
+def test_adapter_failure_records_the_exact_client_branch_without_output_prose(defect):
+    if defect == "response_too_large":
+        wire = Wire()
+        wire.config = wire.config.model_copy(update={"max_response_bytes": len(wire.body) - 1})
+    else:
+        output = json.loads(FINAL)
+        output["model_call"] = invoke(Wire()).model_call.model_dump(mode="json", by_alias=True)
+        wire = Wire(content=json.dumps(output))
+    with pytest.raises(ModelFailure, match="adapter_contract") as refused:
+        invoke(wire)
+    call = refused.value.model_call
+    assert call.output_contract_failure.reason == defect
+    assert call.outcome == "refused" and call.response_bytes == len(wire.body)
+    assert wire.calls == 1
+    retained = call.model_dump_json(by_alias=True)
+    assert PRIVATE not in retained and "protocol fixture" not in retained
+    assert ModelCallEvidence.model_validate_json(retained) == call
+
+
+def test_output_failure_is_a_closed_refused_only_client_diagnostic():
+    call = invoke(Wire()).model_call.model_dump(mode="json", by_alias=True)
+    failure = ModelOutputContractFailure(
+        schema="ghimera.model-output-contract/1", reason="unbound_graph_reference"
+    )
+    call["output_contract_failure"] = failure.model_dump(mode="json", by_alias=True)
+    with pytest.raises(ValidationError, match="refused call"):
+        ModelCallEvidence.model_validate(call)
+    call["outcome"] = "refused"
+    assert ModelCallEvidence.model_validate(call).output_contract_failure == failure
+    call["output_contract_failure"]["reason"] = PRIVATE
+    with pytest.raises(ValidationError):
+        ModelCallEvidence.model_validate(call)

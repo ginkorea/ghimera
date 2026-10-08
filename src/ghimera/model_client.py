@@ -50,6 +50,7 @@ from ghimera.model_types import (
     CompletionShape,
     FinishReason,
     ModelCallEvidence,
+    ModelOutputContractFailure,
     ModelTask,
     TokenUsage,
 )
@@ -526,6 +527,7 @@ class SelfHostedModel:
         response = ModelHttpResponse(None, b"", "")
         usage = None
         completion: CompletionShape | None = None
+        output_contract_failure: ModelOutputContractFailure | None = None
         context = prompt.evidence
         visual_context = any(
             window.citation.basis in {"image_ocr", "reviewed_visual_claim"}
@@ -602,6 +604,7 @@ class SelfHostedModel:
                 ),
                 outcome=outcome,
                 completion=completion,
+                output_contract_failure=output_contract_failure,
             )
             if prompt.task in {"identity_propose", "identity_review"}:
                 from ghimera.model_types import IdentityCallEvidence
@@ -804,6 +807,7 @@ class SelfHostedModel:
                         "native_span_keys",
                         "defined_ontology",
                         "graph_bound_native_spans",
+                        "reviewed_graph_bound_native_spans",
                     }
                     else ""
                 )
@@ -812,7 +816,12 @@ class SelfHostedModel:
                     if prompt.task == "semantic_extract"
                     and semantic is not None
                     and semantic.prompt_profile
-                    in {"native_span_keys", "defined_ontology", "graph_bound_native_spans"}
+                    in {
+                        "native_span_keys",
+                        "defined_ontology",
+                        "graph_bound_native_spans",
+                        "reviewed_graph_bound_native_spans",
+                    }
                     else ""
                 )
                 + (
@@ -824,7 +833,12 @@ class SelfHostedModel:
                     "Relationship direction and validity dates require explicit source support."
                     if prompt.task == "semantic_extract"
                     and semantic is not None
-                    and semantic.prompt_profile in {"defined_ontology", "graph_bound_native_spans"}
+                    and semantic.prompt_profile
+                    in {
+                        "defined_ontology",
+                        "graph_bound_native_spans",
+                        "reviewed_graph_bound_native_spans",
+                    }
                     else ""
                 )
                 + (
@@ -841,6 +855,18 @@ class SelfHostedModel:
                     "or complete coverage. Empty mentions/relations are valid."
                     if prompt.task == "semantic_extract"
                     and prompt.semantic_graph_contract is not None
+                    else ""
+                )
+                + (
+                    " This explicit reviewed profile produces proposals for the separately "
+                    "configured independent reviewer before graph projection. Do not generate "
+                    "a review, claim approval or anticipate a favorable review. Original "
+                    "proposals remain unchanged; unsupported or ambiguous observations are "
+                    "quarantined by the client. Independent model review is not truth, human "
+                    "approval, corroboration or complete coverage."
+                    if prompt.task == "semantic_extract"
+                    and semantic is not None
+                    and semantic.prompt_profile == "reviewed_graph_bound_native_spans"
                     else ""
                 )
                 + (
@@ -953,6 +979,9 @@ class SelfHostedModel:
                 raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
             response = await self._http.post(body)
             if len(response.body) > service.max_response_bytes:
+                output_contract_failure = ModelOutputContractFailure(
+                    schema="ghimera.model-output-contract/1", reason="response_too_large"
+                )
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             if response.status != 200 or response.content_type != "application/json":
                 raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
@@ -976,6 +1005,9 @@ class SelfHostedModel:
                 ).content(content, output)
             result = output.model_validate_json(content)
             if result.model_call is not None:
+                output_contract_failure = ModelOutputContractFailure(
+                    schema="ghimera.model-output-contract/1", reason="model_claimed_telemetry"
+                )
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             return result.model_copy(update={"model_call": evidence("success")})
         except ModelWireFailure as exc:
@@ -1266,7 +1298,16 @@ class SelfHostedModel:
             if call is None:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             raise ModelFailure(
-                RefusalCode.ADAPTER_CONTRACT, call.model_copy(update={"outcome": "refused"})
+                RefusalCode.ADAPTER_CONTRACT,
+                call.model_copy(
+                    update={
+                        "outcome": "refused",
+                        "output_contract_failure": ModelOutputContractFailure(
+                            schema="ghimera.model-output-contract/1",
+                            reason="unbound_graph_reference",
+                        ),
+                    }
+                ),
             )
         return result
 

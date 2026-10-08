@@ -105,6 +105,14 @@ class CompletionShape(BaseModel):
         return self
 
 
+class ModelOutputContractFailure(BaseModel):
+    """Client-observed validation branch, never refused output or provider prose."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.model-output-contract/1"] = Field(alias="schema")
+    reason: Literal["response_too_large", "model_claimed_telemetry", "unbound_graph_reference"]
+
+
 class _ClientEvidenceServiceSchema:
     """Frozen model-facing projection, not operational validation or serialization.
 
@@ -161,6 +169,15 @@ class ModelCallEvidence(BaseModel):
     completion: SkipJsonSchema[CompletionShape | None] = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    output_contract_failure: SkipJsonSchema[ModelOutputContractFailure | None] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def failure_is_refused(self) -> "ModelCallEvidence":
+        if self.output_contract_failure is not None and self.outcome != "refused":
+            raise ValueError("output-contract failure belongs only to a refused call")
+        return self
 
     @property
     def total_tokens(self) -> int | None:
