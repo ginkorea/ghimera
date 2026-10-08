@@ -1,0 +1,8 @@
+# Caller-bound HumanBrowserConfig fragment. Scope, driver and session are
+# explicit parent policy inputs. A page action is selected by exact source URL.
+# Merge browser-navigation-guard.toml as well. Downloads and pagination have
+# separate action owners and cannot be enabled together in this recipe.
+[[human_browser.pagination]]
+source_url = "https://publisher.example/research?page=2"
+navigation_url = "https://publisher.example/research?page=1"
+selector = "a[rel='next']"

@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.model_config import EmbeddingServiceConfig
+from ghimera.retrieval import HybridRetrievalConfig
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -26,6 +27,7 @@ class CorpusSearchConfig(BaseModel):
     max_snippet_chars: Positive
     minimum_cosine: Annotated[float, Field(ge=-1, le=1, allow_inf_nan=False)]
     languages: tuple[str, ...]
+    retrieval: HybridRetrievalConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def coherent(self) -> "CorpusSearchConfig":

@@ -221,6 +221,24 @@ def parse_feed(
         if content_type in XML_TYPES:
             fmt, title, language, entries = xml_entries(raw, source_url, policy)
         elif content_type in JSON_TYPES:
+            if policy.site_api is not None:
+                from ghimera.source_api import api_entries
+
+                entries = api_entries(raw, source_url, policy.site_api, policy.max_entries)
+                evidence = SourceFeedEvidence(
+                    schema="ghimera.source-feed-evidence/1",
+                    policy=policy,
+                    source_url=source_url,
+                    source_sha256=hashlib.sha256(raw).hexdigest(),
+                    content_type=content_type,
+                    format="json_api",
+                    title=policy.site_api.title,
+                    declared_language=policy.site_api.language,
+                    entries=entries,
+                )
+                if len(evidence.model_dump_json().encode()) > policy.max_output_bytes:
+                    raise ValueError("API output exceeds its configured response bound")
+                return evidence
             wire = JsonFeed.model_validate_json(raw)
             fmt, title, language = "json_feed", wire.title, wire.language
             entries_list: list[SourceFeedEntry] = []

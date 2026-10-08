@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.embedding_types import EncodingCall
 from ghimera.models import Document
+from ghimera.retrieval import RetrievalEvidence
 from ghimera.visual_types import ImageRegion
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -147,6 +148,7 @@ class CorpusQuery(CorpusRecord):
     encoding_call: EncodingCall
     hits: tuple[CorpusHit, ...]
     approximate: Literal[True] = True
+    retrieval: RetrievalEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def reconciled(self) -> "CorpusQuery":
@@ -156,4 +158,12 @@ class CorpusQuery(CorpusRecord):
             or len({hit.passage_id for hit in self.hits}) != len(self.hits)
         ):
             raise ValueError("corpus query requires one successful encoding and distinct hits")
+        if self.retrieval is not None:
+            ranked = {
+                row.passage_id: position for position, row in enumerate(self.retrieval.ranking)
+            }
+            if any(hit.passage_id not in ranked for hit in self.hits) or tuple(
+                ranked[hit.passage_id] for hit in self.hits
+            ) != tuple(sorted(ranked[hit.passage_id] for hit in self.hits)):
+                raise ValueError("hybrid query hits must preserve their admitted ranking")
         return self

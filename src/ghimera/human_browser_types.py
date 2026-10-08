@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.browser_navigation_types import BrowserNavigationConfig, BrowserNavigationEvidence
 from ghimera.browser_operation_types import BrowserOperation
+from ghimera.browser_pagination_types import BrowserPaginationAction, BrowserPaginationEvidence
+from ghimera.browser_tor import BrowserTorConfig, BrowserTorEvidence
 from ghimera.document_media import DocumentMime
 from ghimera.source_session_types import origin_key, path_matches, safe_path
 
@@ -138,6 +140,8 @@ class HumanBrowserConfig(BaseModel):
     max_dom_bytes: Annotated[int, Field(strict=True, gt=0)]
     downloads: BrowserDownloadConfig | None = Field(default=None, exclude_if=lambda v: v is None)
     navigation: BrowserNavigationConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    pagination: tuple[BrowserPaginationAction, ...] = Field(default=(), exclude_if=lambda v: not v)
+    tor_verification: BrowserTorConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def explicit_binding(self) -> "HumanBrowserConfig":
@@ -185,6 +189,21 @@ class HumanBrowserConfig(BaseModel):
             raise ValueError("downloads require the caller-bound page connection")
         if self.navigation is not None and self.adapter != "patchright_page":
             raise ValueError("guarded navigation requires the caller-bound page connection")
+        if self.pagination and (self.navigation is None or self.downloads is not None):
+            raise ValueError("pagination requires guarded DOM capture and one action owner")
+        if len({action.source_url for action in self.pagination}) != len(self.pagination) or any(
+            not self.permits(url)
+            for action in self.pagination
+            for url in (action.source_url, action.navigation_url)
+        ):
+            raise ValueError("pagination mappings require distinct scoped target URLs")
+        if self.tor_verification is not None and (
+            self.declared_route != "tor"
+            or self.adapter != "patchright_page"
+            or self.navigation is None
+            or not self.permits(self.tor_verification.probe_url)
+        ):
+            raise ValueError("Tor verification requires an explicit guarded caller-bound probe")
         return self
 
     def permits(self, url: str) -> bool:
@@ -255,8 +274,8 @@ class HumanBrowserEvidence(BaseModel):
     browser_version: Annotated[str, Field(min_length=1)]
     lifecycle: Literal["caller_managed"]
     network_boundary: Literal["operator_managed_browser"]
-    declared_route: Literal["direct"]
-    route_verification: Literal["operator_declaration_only"]
+    declared_route: Literal["direct", "tor"]
+    route_verification: Literal["operator_declaration_only", "native_proxy_and_tor_probe"]
     browser_subresource_bytes: None
     browser_subresource_requests: None
     content_type: Literal["text/html", "application/xhtml+xml"]
@@ -267,6 +286,10 @@ class HumanBrowserEvidence(BaseModel):
     navigation: BrowserNavigationEvidence | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    pagination: BrowserPaginationEvidence | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    tor: BrowserTorEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @property
     def captured_sha256(self) -> str:
@@ -278,7 +301,9 @@ class HumanBrowserEvidence(BaseModel):
 
     @model_validator(mode="after")
     def assistance_binding(self) -> "HumanBrowserEvidence":
-        if self.collector_dom_bytes_read != self.dom_bytes + sum(
+        if self.collector_dom_bytes_read != self.dom_bytes + (
+            len(self.pagination.landing_dom) if self.pagination is not None else 0
+        ) + (len(self.tor.probe_body) if self.tor is not None else 0) + sum(
             item.request.observed_dom_bytes for item in self.assistance
         ):
             raise ValueError("DOM spend includes every earlier assisted interstitial")
@@ -318,6 +343,17 @@ class HumanBrowserEvidence(BaseModel):
         ):
             raise ValueError("browser evidence must bind its effective policy and scope")
         validate_navigation(checked.navigation, policy, checked.request_url, checked.final_url)
+        action = next((a for a in policy.pagination if a.source_url == checked.request_url), None)
+        if (action is None) != (checked.pagination is None):
+            raise ValueError("pagination evidence must bind its configured source action")
+        if checked.pagination is not None:
+            pagination = checked.pagination
+            if pagination.action != action or len(pagination.landing_dom) > policy.max_dom_bytes:
+                raise ValueError("pagination cannot change its admitted action or DOM bounds")
+            if policy.navigation is None:
+                raise ValueError("pagination requires its guarded navigation policy")
+            pagination.landing_navigation.validate_policy(policy.navigation, policy)
+        validate_tor(checked.declared_route, checked.route_verification, checked.tor, policy)
         for item in checked.assistance:
             validate_assistance_navigation(item.request, policy)
 
@@ -368,8 +404,8 @@ class BrowserDownloadEvidence(BaseModel):
     browser_version: Annotated[str, Field(min_length=1)]
     lifecycle: Literal["caller_managed"]
     network_boundary: Literal["operator_managed_browser"]
-    declared_route: Literal["direct"]
-    route_verification: Literal["operator_declaration_only"]
+    declared_route: Literal["direct", "tor"]
+    route_verification: Literal["operator_declaration_only", "native_proxy_and_tor_probe"]
     browser_subresource_bytes: None
     browser_subresource_requests: None
     browser_download_bytes: None
@@ -386,6 +422,7 @@ class BrowserDownloadEvidence(BaseModel):
     landing_navigation: BrowserNavigationEvidence | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    tor: BrowserTorEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @property
     def captured_sha256(self) -> str:
@@ -456,6 +493,7 @@ class BrowserDownloadEvidence(BaseModel):
             or checked.file_bytes > policy.downloads.max_file_bytes
             or checked.collector_dom_bytes_read
             > policy.max_dom_bytes * (policy.max_assistance_attempts + 1)
+            + (len(checked.tor.probe_body) if checked.tor is not None else 0)
             or len(checked.assistance) > policy.max_assistance_attempts
             or any(
                 item.request.reason not in policy.assistance_reasons
@@ -465,6 +503,7 @@ class BrowserDownloadEvidence(BaseModel):
             )
         ):
             raise ValueError("download evidence must bind its effective action and limits")
+        validate_tor(checked.declared_route, checked.route_verification, checked.tor, policy)
         validate_navigation(checked.navigation, policy, checked.request_url, checked.final_url)
         for item in checked.assistance:
             validate_assistance_navigation(item.request, policy)
@@ -497,8 +536,8 @@ class BrowserResponseEvidence(BaseModel):
     browser_version: Annotated[str, Field(min_length=1)]
     lifecycle: Literal["caller_managed"]
     network_boundary: Literal["operator_managed_browser"]
-    declared_route: Literal["direct"]
-    route_verification: Literal["operator_declaration_only"]
+    declared_route: Literal["direct", "tor"]
+    route_verification: Literal["operator_declaration_only", "native_proxy_and_tor_probe"]
     browser_subresource_bytes: None
     browser_subresource_requests: None
     browser_fetch_bytes: None
@@ -514,6 +553,7 @@ class BrowserResponseEvidence(BaseModel):
     navigation: BrowserNavigationEvidence | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    tor: BrowserTorEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @property
     def captured_sha256(self) -> str:
@@ -521,7 +561,7 @@ class BrowserResponseEvidence(BaseModel):
 
     @property
     def collector_bytes_read(self) -> int:
-        return self.collector_file_bytes_read
+        return self.collector_file_bytes_read + (len(self.tor.probe_body) if self.tor else 0)
 
     @model_validator(mode="after")
     def actual_response_binding(self) -> "BrowserResponseEvidence":
@@ -556,7 +596,30 @@ class BrowserResponseEvidence(BaseModel):
             or checked.file_bytes > policy.downloads.max_file_bytes
         ):
             raise ValueError("inline response must bind its selected session, policy and limits")
+        validate_tor(checked.declared_route, checked.route_verification, checked.tor, policy)
         validate_navigation(checked.navigation, policy, checked.request_url, checked.final_url)
+
+
+def validate_tor(
+    route: str, verification: str, tor: BrowserTorEvidence | None, policy: HumanBrowserConfig
+) -> None:
+    if route == "direct":
+        if tor is not None or verification != "operator_declaration_only":
+            raise ValueError("direct browser captures cannot claim Tor evidence")
+    elif (
+        tor is None
+        or policy.tor_verification is None
+        or (
+            verification != "native_proxy_and_tor_probe"
+            or tor.policy != policy.tor_verification
+            or tor.target_id != policy.target_id
+        )
+    ):
+        raise ValueError("Tor captures require their exact policy and native target proof")
+    elif policy.navigation is None:
+        raise ValueError("Tor captures require guarded probe navigation")
+    else:
+        tor.navigation.validate_policy(policy.navigation, policy)
 
 
 def validate_navigation(
@@ -594,6 +657,13 @@ def validate_assistance_navigation(
         if action is not None and action.selector is not None
         else request.request_url
     )
+    pagination = next((a for a in policy.pagination if a.source_url == request.request_url), None)
+    if (
+        pagination is not None
+        and request.navigation is not None
+        and (request.navigation.request_url == pagination.navigation_url)
+    ):
+        root = pagination.navigation_url
     validate_navigation(request.navigation, policy, root, request.final_url)
 
 

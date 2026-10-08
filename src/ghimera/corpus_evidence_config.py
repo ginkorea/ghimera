@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.model_config import EmbeddingServiceConfig
+from ghimera.retrieval import HybridRetrievalConfig
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
 
@@ -25,6 +26,7 @@ class CorpusEvidenceConfig(BaseModel):
     languages: tuple[str, ...]
     timeout_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
     source_mode: Literal["retained_snapshot"]
+    retrieval: HybridRetrievalConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def coherent(self) -> "CorpusEvidenceConfig":

@@ -19,6 +19,7 @@ from ghimera.browser_navigation_types import (
     BrowserNavigationEvidence,
     BrowserNavigationHop,
 )
+from ghimera.browser_tor import BrowserCommandLine, BrowserTorEvidence
 from ghimera.human_browser_types import CaptureScope, HumanBrowserConfig, Identifier
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
@@ -76,11 +77,19 @@ class BrowserNavigationGuard:
         request_url: str,
         scope: CaptureScope,
         admission: BrowserNavigationAdmission,
+        tor: BrowserTorEvidence | None = None,
     ) -> None:
         self.config = BrowserNavigationConfig.model_validate(config.model_dump())
         self._browser_policy = HumanBrowserConfig.model_validate(browser_policy.model_dump())
-        if self._browser_policy.declared_route == "tor":
+        if self._browser_policy.declared_route == "tor" and (
+            self._browser_policy.tor_verification is None
+        ):
             raise GhimeraRefused(RefusalCode.TOR_UNAVAILABLE)
+        tor_policy = self._browser_policy.tor_verification
+        if tor_policy is not None and request_url != tor_policy.probe_url:
+            if tor is None or tor.policy != tor_policy or tor.target_id != browser_policy.target_id:
+                raise GhimeraRefused(RefusalCode.TOR_UNAVAILABLE)
+            BrowserTorEvidence.model_validate(tor.model_dump())
         try:
             if version("patchright") != self._browser_policy.driver_version:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -116,6 +125,14 @@ class BrowserNavigationGuard:
             session = await self._page.context.new_cdp_session(self._page)
             self._session = session
             target = TargetReply.model_validate(await session.send("Target.getTargetInfo"))
+            if self._browser_policy.tor_verification is not None:
+                command_line = BrowserCommandLine.model_validate(
+                    await session.send("Browser.getBrowserCommandLine")
+                )
+                try:
+                    self._browser_policy.tor_verification.admit_command_line(command_line.arguments)
+                except ValueError:
+                    raise GhimeraRefused(RefusalCode.TOR_UNAVAILABLE) from None
             if (
                 target.target_info.target_id != self._browser_policy.target_id
                 or target.target_info.type != "page"

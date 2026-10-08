@@ -75,7 +75,10 @@ class CorpusLeadSearch(GroundedSearch):
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
         async with asyncio.timeout(request.timeout_seconds):
             query = await self._corpus.search(
-                request.query.text, top_k=policy.max_passage_hits, languages=policy.languages
+                request.query.text,
+                top_k=policy.max_passage_hits,
+                languages=policy.languages,
+                retrieval=policy.retrieval,
             )
             if (
                 query.corpus_id != policy.corpus_id

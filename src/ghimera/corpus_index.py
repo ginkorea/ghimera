@@ -24,6 +24,21 @@ class NativePassageIndex:
         if vectors:
             index.add(np.asarray([unit_vector(row) for row in vectors], dtype=np.float32))
         self._index, self._dimensions = index, config.encoder.dimensions
+        self._vectors = tuple(unit_vector(row) for row in vectors)
+
+    def cosine(self, vector: tuple[float, ...], position: int) -> float:
+        """Exact vector evidence for a lexical candidate outside the ANN shortlist."""
+        if len(vector) != self._dimensions or not 0 <= position < len(self._vectors):
+            raise ValueError("query vector and native passage position must match the index")
+        return max(
+            -1.0,
+            min(
+                1.0,
+                sum(
+                    a * b for a, b in zip(unit_vector(vector), self._vectors[position], strict=True)
+                ),
+            ),
+        )
 
     def search(
         self, vector: tuple[float, ...], *, candidates: int

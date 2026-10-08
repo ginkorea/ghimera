@@ -7,6 +7,7 @@ from ghimera.human_browser_types import (
     BrowserDownloadEvidence,
     BrowserResponseEvidence,
     BrowserSourceEvidence,
+    HumanBrowserEvidence,
     validate_assistance_navigation,
 )
 
@@ -43,6 +44,12 @@ def validate_harvest(harvest: "Harvest") -> None:
             evidence.validate_policy(policy)
             if evidence.navigation is not None:
                 navigation_hops.update(hop.url for hop in evidence.navigation.hops)
+            if isinstance(evidence, HumanBrowserEvidence) and evidence.pagination is not None:
+                navigation_hops.update(
+                    hop.url for hop in evidence.pagination.landing_navigation.hops
+                )
+            if evidence.tor is not None:
+                navigation_hops.update(hop.url for hop in evidence.tor.navigation.hops)
             if not isinstance(evidence, BrowserResponseEvidence):
                 for item in evidence.assistance:
                     if item.request.navigation is not None:

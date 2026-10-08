@@ -1,0 +1,16 @@
+# Optional fragment for corpus search AND retained evidence reader policies.
+# These bounds are examples; admit capacity and real model quality separately.
+[retrieval]
+schema = "ghimera.hybrid-retrieval/1"
+tokenizer = "unicode_words_and_script_bigrams/1"
+reranker = "weighted_reciprocal_rank_fusion/1"
+vector_candidates = 40
+lexical_candidates = 40
+max_passages = 10000
+max_text_chars = 10000000
+max_tokens_per_passage = 4096
+rank_constant = 60.0
+vector_weight = 1.0
+lexical_weight = 1.0
+bm25_k1 = 1.2
+bm25_b = 0.75

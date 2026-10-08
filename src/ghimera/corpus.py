@@ -22,6 +22,7 @@ from ghimera.models import Document, Harvest
 from ghimera.owned_worker import off_loop
 from ghimera.ports import EvidenceEncoder
 from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused, RefusalCode
+from ghimera.retrieval import HybridRetrievalConfig, NativeLexicalIndex
 from ghimera.visual_types import ImageRegion
 
 
@@ -350,6 +351,7 @@ class EvidenceCorpus:
         top_k: int,
         languages: tuple[str, ...] = (),
         encoding_observer: Callable[[EncodingCall], None] | None = None,
+        retrieval: HybridRetrievalConfig | None = None,
     ) -> CorpusQuery:
         with self._operation():
             if (
@@ -361,20 +363,69 @@ class EvidenceCorpus:
             ):
                 raise ValueError("query, language filter and top-k require explicit bounds")
             operation = uuid.uuid4().hex
+            if retrieval is not None:
+                retrieval = HybridRetrievalConfig.model_validate(retrieval.model_dump())
+                if retrieval.vector_candidates > self.config.search_candidates:
+                    raise ValueError("hybrid candidates exceed the native vector query allowance")
             query_hash = hashlib.sha256(text.encode()).hexdigest()
             self._storage.start(operation, kind="query", input_sha=query_hash, calls=1)
             try:
                 async with asyncio.timeout(self.config.operation_timeout_seconds):
                     generation, ids, index = await self._snapshot()
+                    lexical = None
+                    if retrieval is not None:
+                        policy = retrieval
+
+                        def lexical_snapshot() -> NativeLexicalIndex:
+                            storage = CorpusStorage(self.config, create=False)
+                            try:
+                                if len(ids) > policy.max_passages:
+                                    raise ValueError(
+                                        "lexical corpus exceeds admitted passage count"
+                                    )
+                                passages: list[tuple[int, str]] = []
+                                chars = 0
+                                for identity in ids:
+                                    passage = storage.passage(identity)
+                                    chars += len(passage.text)
+                                    if chars > policy.max_text_chars:
+                                        raise ValueError(
+                                            "lexical corpus exceeds admitted text bound"
+                                        )
+                                    passages.append((identity, passage.text))
+                                return NativeLexicalIndex(policy, tuple(passages))
+                            finally:
+                                storage.close()
+
+                        lexical = await off_loop(lexical_snapshot)
+                        lexical.admit_query(text)
                     batch, _ = await self._encode(
                         (text,), self._query_encoder, operation, "query", encoding_observer
                     )
                     hits: list[CorpusHit] = []
                     neighbors = await off_loop(
                         lambda: index.search(
-                            batch.vectors[0], candidates=self.config.search_candidates
+                            batch.vectors[0],
+                            candidates=self.config.search_candidates
+                            if retrieval is None
+                            else retrieval.vector_candidates,
                         )
                     )
+                    ranking = None
+                    if lexical is not None:
+                        ranking = await off_loop(
+                            lambda: lexical.rerank(
+                                text, tuple(ids[position] for position, _ in neighbors)
+                            )
+                        )
+                        positions = {identity: position for position, identity in enumerate(ids)}
+                        neighbors = tuple(
+                            (
+                                positions[row.passage_id],
+                                index.cosine(batch.vectors[0], positions[row.passage_id]),
+                            )
+                            for row in ranking.ranking
+                        )
                     for position, cosine in neighbors:
                         if cosine < self.config.minimum_cosine:
                             continue
@@ -394,6 +445,7 @@ class EvidenceCorpus:
                         query_sha256=query_hash,
                         encoding_call=batch.call,
                         hits=tuple(hits),
+                        retrieval=ranking,
                     )
                 self._storage.terminal(operation, "committed")
                 return result

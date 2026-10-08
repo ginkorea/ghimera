@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.reference_types import reference_url
+from ghimera.source_api import Relationship
 from ghimera.source_feed_config import FeedFormat, SourceFeedConfig
 
 
@@ -21,6 +22,24 @@ class SourceFeedEntry(FeedRecord):
     content: str
     declared_date: str
     declared_id: str
+    api_relation: Relationship | None = Field(default=None, exclude_if=lambda v: v is None)
+    api_locator: str | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @model_validator(mode="after")
+    def mapped_source(self) -> "SourceFeedEntry":
+        if (self.api_relation is None) != (self.api_locator is None):
+            raise ValueError("API relationship requires its retained JSON locator")
+        if (
+            self.api_locator is not None
+            and self.api_locator
+            and not self.api_locator.startswith("/")
+        ):
+            raise ValueError("API locator must be a JSON pointer")
+        if self.api_relation is not None and (self.role == "feed") != (
+            self.api_relation == "pagination"
+        ):
+            raise ValueError("API pagination and citation roles must remain distinct")
+        return self
 
     @property
     def url(self) -> str | None:
@@ -88,6 +107,10 @@ class SourceFeedEvidence(FeedRecord):
             or len(self.title) > policy.max_field_chars
             or len(self.declared_language) > policy.max_field_chars
             or any(
+                (entry.api_relation is not None) != (self.format == "json_api")
+                for entry in self.entries
+            )
+            or any(
                 len(value) > policy.max_field_chars
                 for entry in self.entries
                 for value in (
@@ -97,6 +120,7 @@ class SourceFeedEvidence(FeedRecord):
                     entry.content,
                     entry.declared_date,
                     entry.declared_id,
+                    entry.api_locator or "",
                 )
             )
         ):

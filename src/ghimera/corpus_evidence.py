@@ -56,6 +56,8 @@ class CorpusEvidenceBundle(CorpusRecord):
         hits = {hit.passage_id: hit for hit in self.query.hits}
         if (
             not self.query_text.strip()
+            or (self.query.retrieval.policy if self.query.retrieval is not None else None)
+            != policy.retrieval
             or len(self.query_text) > policy.max_query_chars
             or len(hits) > policy.max_passage_hits
             or len(sources) != len(bound)
@@ -122,6 +124,7 @@ class CorpusEvidenceReader:
                 top_k=policy.max_passage_hits,
                 languages=policy.languages,
                 encoding_observer=encoding_observer,
+                retrieval=policy.retrieval,
             )
             bundle = CorpusEvidenceBundle(
                 schema="ghimera.corpus-evidence/1",

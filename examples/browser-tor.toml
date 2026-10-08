@@ -1,0 +1,16 @@
+# Opt-in fragment; this never starts Tor or changes a borrowed browser.
+# The caller launches Chromium with exactly:
+# --proxy-server=socks5://127.0.0.1:9150
+# --proxy-bypass-list=<-loopback>
+# --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1
+# Include the approved probe origin/path in BOTH browser and collector scopes.
+# Use caller-bound patchright_page with guarded navigation.
+[human_browser]
+declared_route = "tor"
+
+[human_browser.tor_verification]
+schema = "ghimera.browser-tor/1"
+proxy_url = "socks5://127.0.0.1:9150"
+probe_url = "https://check.torproject.org/api/ip"
+max_probe_bytes = 4096
+required_resolver_rule = "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"

@@ -6,7 +6,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-FeedFormat = Literal["rss", "atom", "sitemap", "json_feed"]
+from ghimera.source_api import SiteApiConfig
+
+FeedFormat = Literal["rss", "atom", "sitemap", "json_feed", "json_api"]
 Positive = Annotated[int, Field(strict=True, gt=0)]
 Seconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 XML_TYPES = frozenset(
@@ -35,6 +37,7 @@ class SourceFeedConfig(BaseModel):
     max_text_chars: Positive
     max_field_chars: Positive
     max_links: Positive
+    site_api: SiteApiConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def bounded(self) -> "SourceFeedConfig":
@@ -42,9 +45,13 @@ class SourceFeedConfig(BaseModel):
             self.content_types
         ):
             raise ValueError("feed formats and content types must be unique")
-        available = (XML_TYPES if set(self.formats) - {"json_feed"} else frozenset()) | (
-            JSON_TYPES if "json_feed" in self.formats else frozenset()
-        )
+        if ("json_api" in self.formats) != (self.site_api is not None):
+            raise ValueError("site JSON requires an explicit API mapping")
+        if "json_api" in self.formats and "json_feed" in self.formats:
+            raise ValueError("one JSON response dialect has one explicit parser owner")
+        available = (
+            XML_TYPES if set(self.formats) - {"json_feed", "json_api"} else frozenset()
+        ) | (JSON_TYPES if set(self.formats) & {"json_feed", "json_api"} else frozenset())
         if not set(self.content_types) <= available:
             raise ValueError("feed MIME admission must match its explicit formats")
         if any(

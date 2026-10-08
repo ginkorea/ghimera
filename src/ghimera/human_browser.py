@@ -23,6 +23,8 @@ from ghimera.browser_download_stream import DownloadSpend
 from ghimera.browser_navigation import BrowserNavigationGuard
 from ghimera.browser_navigation_types import BrowserNavigationEvidence
 from ghimera.browser_operation_types import BrowserOperation
+from ghimera.browser_pagination_types import BrowserPaginationEvidence
+from ghimera.browser_tor import BrowserCommandLine, BrowserTorEvidence, TorProbeObservation
 from ghimera.http import html_barrier
 from ghimera.human_browser_errors import HumanCaptureCancelled, HumanCaptureFailure
 from ghimera.human_browser_types import (
@@ -99,6 +101,7 @@ class CaptureWork:
         self.deadline = deadline
         self.assistance: list[AssistanceObservation] = []
         self.operation = operation
+        self.tor: BrowserTorEvidence | None = None
 
     @asynccontextmanager
     async def reading(self, maximum: int) -> AsyncIterator[DownloadSpend]:
@@ -124,7 +127,7 @@ class HumanBrowserSession(ABC):
     def __init__(self, config: HumanBrowserConfig, *, assistant: HumanAssistant | None) -> None:
         # Revalidate: Pydantic model_copy can otherwise bypass the policy boundary.
         config = HumanBrowserConfig.model_validate(config.model_dump())
-        if config.declared_route == "tor":
+        if config.declared_route == "tor" and config.tor_verification is None:
             # CDP attachment alone cannot prove Tor routing or prevent a direct fallback.
             raise GhimeraRefused(RefusalCode.TOR_UNAVAILABLE)
         if config.assistance_reasons and assistant is None:
@@ -163,6 +166,10 @@ class HumanBrowserSession(ABC):
         maximum = self.config.max_dom_bytes * (self.config.max_assistance_attempts + 1)
         if self.config.downloads is not None:
             maximum += self.config.downloads.max_file_bytes + 1
+        if any(action.source_url == url for action in self.config.pagination):
+            maximum += self.config.max_dom_bytes
+        if self.config.tor_verification is not None:
+            maximum += self.config.tor_verification.max_probe_bytes
         if max_bytes is not None:
             if type(max_bytes) is not int or max_bytes <= 0:
                 raise HumanCaptureFailure(RefusalCode.BUDGET_EXHAUSTED, 0, ())
@@ -217,6 +224,8 @@ class HumanBrowserSession(ABC):
     async def _capture_page(
         self, browser: BrowserIdentity, page: "Page", url: str, work: CaptureWork
     ) -> BrowserAcquisition:
+        if self.config.tor_verification is not None:
+            work.tor = await self._verify_tor(page, work)
         action = (
             next((item for item in self.config.downloads.actions if item.source_url == url), None)
             if self.config.downloads
@@ -226,6 +235,27 @@ class HumanBrowserSession(ABC):
             return await self._download(browser, page, url, action, work)
         if self.config.downloads is not None and self.config.downloads.navigation_content_types:
             return await self._download(browser, page, url, None, work)
+        pagination = next((a for a in self.config.pagination if a.source_url == url), None)
+        if pagination is not None:
+            async with self._navigation(page, pagination.navigation_url, work) as landing_guard:
+                await page.goto(pagination.navigation_url, wait_until="domcontentloaded")
+                landing_dom, _, _, landing = await self._assisted_dom(
+                    page, url, work, landing_guard, navigation_root=pagination.navigation_url
+                )
+                if landing is None:
+                    raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            evidence = BrowserPaginationEvidence(
+                action=pagination,
+                landing_navigation=landing,
+                landing_dom=landing_dom,
+                landing_dom_sha256=hashlib.sha256(landing_dom).hexdigest(),
+            )
+            async with self._navigation(page, url, work) as guard:
+                await page.locator(pagination.selector).click(
+                    timeout=self.config.timeout_seconds * 1000
+                )
+                await page.wait_for_url(url, wait_until="domcontentloaded")
+                return await self._capture_dom(browser, page, url, work, guard, evidence)
         async with self._navigation(page, url, work) as guard:
             await page.goto(
                 url, wait_until="domcontentloaded", timeout=self.config.timeout_seconds * 1000
@@ -250,6 +280,7 @@ class HumanBrowserSession(ABC):
             request_url=url,
             scope=work.scope,
             admission=work.operation.admission,
+            tor=work.tor,
         ) as guard:
             try:
                 yield guard
@@ -264,6 +295,7 @@ class HumanBrowserSession(ABC):
         url: str,
         work: CaptureWork,
         guard: BrowserNavigationGuard | None = None,
+        pagination: BrowserPaginationEvidence | None = None,
     ) -> BrowserCapture:
         dom, final_url, content_type, navigation = await self._assisted_dom(
             page, url, work, guard, navigation_root=url
@@ -284,8 +316,10 @@ class HumanBrowserSession(ABC):
                 browser_version=browser.version,
                 lifecycle=self.config.lifecycle,
                 network_boundary=self.config.network_boundary,
-                declared_route="direct",
-                route_verification="operator_declaration_only",
+                declared_route=self.config.declared_route,
+                route_verification="native_proxy_and_tor_probe"
+                if work.tor is not None
+                else "operator_declaration_only",
                 browser_subresource_bytes=None,
                 browser_subresource_requests=None,
                 content_type=content_type,
@@ -294,10 +328,76 @@ class HumanBrowserSession(ABC):
                 collector_dom_bytes_read=work.bytes_read,
                 assistance=tuple(work.assistance),
                 navigation=navigation,
+                pagination=pagination,
+                tor=work.tor,
             ),
         )
         result.validate_policy(self.config)
         return result
+
+    async def _verify_tor(self, page: "Page", work: CaptureWork) -> BrowserTorEvidence:
+        policy = self.config.tor_verification
+        if policy is None or work.scope is None or not work.scope.permits(policy.probe_url):
+            raise GhimeraRefused(RefusalCode.TOR_UNAVAILABLE)
+        session = await page.context.new_cdp_session(page)
+        try:
+            arguments = BrowserCommandLine.model_validate(
+                await session.send("Browser.getBrowserCommandLine")
+            )
+            policy.admit_command_line(arguments.arguments)
+            observed = TorProbeObservation(policy.probe_url)
+            session.on("Network.responseReceived", observed.observe)
+            await session.send("Network.enable")
+            return await self._tor_probe(page, work, observed)
+        finally:
+            await session.detach()
+
+    async def _tor_probe(
+        self, page: "Page", work: CaptureWork, observed: TorProbeObservation
+    ) -> BrowserTorEvidence:
+        policy = self.config.tor_verification
+        if policy is None:
+            raise GhimeraRefused(RefusalCode.TOR_UNAVAILABLE)
+        async with self._navigation(page, policy.probe_url, work) as guard:
+            response = await page.goto(policy.probe_url, wait_until="domcontentloaded")
+            if response is None or response.status != 200 or page.url != policy.probe_url:
+                raise GhimeraRefused(RefusalCode.TOR_UNAVAILABLE)
+            async with work.reading(policy.max_probe_bytes) as spend:
+                maximum = min(policy.max_probe_bytes, spend.max_bytes - spend.bytes_read)
+                reply = DomReply.model_validate(
+                    await page.evaluate(
+                        """cap => {
+                        const bytes = new TextEncoder().encode(document.body.innerText);
+                        const kept = bytes.subarray(0, cap);
+                        let binary = '';
+                        for (let i=0; i<kept.length; i+=4096) {
+                            binary += String.fromCharCode(...kept.subarray(i,i+4096));
+                        }
+                        return {url: document.URL, content_type: document.contentType,
+                            dom_base64: btoa(binary), complete: bytes.length <= cap};
+                    }""",
+                        maximum,
+                        isolated_context=True,
+                    )
+                )
+                body = base64.b64decode(reply.dom_base64, validate=True)
+                spend.bytes_read += len(body)
+                if not reply.complete or len(body) > maximum:
+                    raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                if reply.url != policy.probe_url or guard is None:
+                    raise GhimeraRefused(RefusalCode.TOR_UNAVAILABLE)
+                navigation = await guard.settled_evidence(page.url)
+        if observed.response is None or observed.failed:
+            raise GhimeraRefused(RefusalCode.TOR_UNAVAILABLE)
+        return BrowserTorEvidence(
+            policy=policy,
+            target_id=self.config.target_id,
+            probe_body=body,
+            probe_sha256=hashlib.sha256(body).hexdigest(),
+            native_proxy_flags_verified=True,
+            navigation=navigation,
+            network=observed.response,
+        )
 
     async def _assisted_dom(
         self,
@@ -496,8 +596,10 @@ class HumanBrowserSession(ABC):
                 browser_version=browser.version,
                 lifecycle=self.config.lifecycle,
                 network_boundary=self.config.network_boundary,
-                declared_route="direct",
-                route_verification="operator_declaration_only",
+                declared_route=self.config.declared_route,
+                route_verification="native_proxy_and_tor_probe"
+                if work.tor is not None
+                else "operator_declaration_only",
                 browser_subresource_bytes=None,
                 browser_subresource_requests=None,
                 browser_download_bytes=None,
@@ -510,6 +612,7 @@ class HumanBrowserSession(ABC):
                 assistance=tuple(work.assistance),
                 navigation=navigation,
                 landing_navigation=landing_navigation,
+                tor=work.tor,
             )
             result = BrowserDownloadCapture(body=body, evidence=evidence)
             result.validate_policy(self.config)
@@ -585,8 +688,10 @@ class HumanBrowserSession(ABC):
             browser_version=browser.version,
             lifecycle=self.config.lifecycle,
             network_boundary=self.config.network_boundary,
-            declared_route="direct",
-            route_verification="operator_declaration_only",
+            declared_route=self.config.declared_route,
+            route_verification="native_proxy_and_tor_probe"
+            if work.tor is not None
+            else "operator_declaration_only",
             browser_subresource_bytes=None,
             browser_subresource_requests=None,
             browser_fetch_bytes=None,
@@ -600,6 +705,7 @@ class HumanBrowserSession(ABC):
             file_bytes=len(read.body),
             collector_file_bytes_read=len(read.body),
             navigation=navigation,
+            tor=work.tor,
         )
         capture = BrowserResponseCapture(body=read.body, evidence=evidence)
         capture.validate_policy(self.config)

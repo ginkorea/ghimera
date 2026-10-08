@@ -1,0 +1,26 @@
+# Merge into an explicit source-feeds recipe with formats = ["json_api"]
+# and content_types = ["application/json"]. No API key is required by this
+# example; never put credentials in a source URL or this recipe.
+[site_api]
+schema = "ghimera.site-api/1"
+source_origins = ["https://api.crossref.org"]
+title = "Crossref work metadata and declared references"
+language = "und"
+max_json_nodes = 100000
+max_json_depth = 32
+
+[[site_api.mappings]]
+relation = "result"
+entries_path = ["message"]
+url_path = ["URL"]
+title_path = ["title"]
+content_path = ["abstract"]
+id_path = ["DOI"]
+
+[[site_api.mappings]]
+relation = "references"
+entries_path = ["message", "reference"]
+url_path = ["DOI"]
+title_path = ["article-title"]
+id_path = ["key"]
+url_template = "https://doi.org/{value}"

@@ -77,6 +77,7 @@ class CorpusSearchWire(CorpusRecord):
         )
         if (
             self.binding_revision != policy.identity[1]
+            or (query.retrieval.policy if query.retrieval is not None else None) != policy.retrieval
             or self.query_text != query_text
             or len(query_text) > policy.max_query_chars
             or not query_text.strip()
