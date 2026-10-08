@@ -236,9 +236,25 @@ class GhimeraConfig(BaseModel):
                 for policy in (
                     self.research_recovery.source_completion,
                     self.research_recovery.source_acquisition,
+                    self.research_recovery.source_processing,
                 )
             ):
                 raise ValueError("source capsule must fit within native source-work capacity")
+        if (
+            self.research_recovery is not None
+            and self.research_recovery.source_processing is not None
+        ):
+            if (
+                self.journal is None
+                or self.model_work is None
+                or self.model_work.results is None
+                or self.scoring is None
+                or self.scoring.run_encoding_recovery is None
+                or self.models is None
+            ):
+                raise ValueError(
+                    "source processing requires retained native model and RUN encoding owners"
+                )
         automation = self.identity_automation
         if automation is not None:
             if (

@@ -433,7 +433,11 @@ class Collector:
         *,
         snapshot_sha256: str,
         boundary: Literal[
-            "model_return", "source_completion", "query_return", "source_acquisition"
+            "model_return",
+            "source_completion",
+            "query_return",
+            "source_acquisition",
+            "source_processing",
         ] = "model_return",
         attempt: "ModelAttemptAuthorization | None" = None,
     ) -> ResearchResult:

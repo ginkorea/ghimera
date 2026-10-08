@@ -91,6 +91,7 @@ from ghimera.source_completion import (
     SourceCompletionRuntime,
     SourceCompletionSnapshot,
 )
+from ghimera.source_processing import SourceProcessingRead
 from ghimera.source_work_types import SourceOperation
 
 T = TypeVar("T", bound=ResearchModelResult)
@@ -882,7 +883,11 @@ class ResearchLoop:
         *,
         snapshot_sha256: str,
         boundary: Literal[
-            "model_return", "source_completion", "query_return", "source_acquisition"
+            "model_return",
+            "source_completion",
+            "query_return",
+            "source_acquisition",
+            "source_processing",
         ] = "model_return",
         attempt: ModelAttemptAuthorization | None = None,
     ) -> ResearchResult:
@@ -894,6 +899,40 @@ class ResearchLoop:
         policy = self._config.research_recovery
         if policy is None:
             raise ValueError("model-boundary recovery requires explicit configured policy")
+        if boundary == "source_processing":
+            if attempt is not None:
+                raise ValueError("model attempt cannot authorize source processing")
+            from ghimera.source_work import SourceWorkStore
+
+            processing = SourceWorkStore.processing_read(
+                self._config,
+                run_id,
+                snapshot_sha256,
+                expected_models=self.recovery_models(),
+                expected_runtime=self.source_runtime(),
+            )
+            original = processing.cursor.original
+            downtime = time.time() - original.saved_at
+            if downtime < 0:
+                raise ValueError("wall clock moved backwards since original source cut")
+            ResearchScopeCompiler(self._policy).restore_hosts(original)
+            session = await self._collector.restore(
+                run_id,
+                original.progress.harvest,
+                original.session,
+                search_calls=original.progress.search_calls,
+                downtime_seconds=downtime,
+                processing=processing,
+            )
+            try:
+                stopped = await self._collector.process_processing(session, processing)
+                if stopped in {"failed", "budget_exhausted"}:
+                    raise ValueError("source processing did not complete its original consumer")
+                return await self._drive(
+                    original.request, session, run_id=run_id, source_processing=processing
+                )
+            finally:
+                session.close()
         if boundary == "source_acquisition":
             if attempt is not None:
                 raise ValueError("model attempt cannot authorize acquired-source adoption")
@@ -1246,12 +1285,19 @@ class ResearchLoop:
         recovery: ResearchRecoveryRead | None = None,
         source_recovery: SourceCompletionRead | None = None,
         source_acquisition: SourceAcquisitionRead | None = None,
+        source_processing: SourceProcessingRead | None = None,
         suspend_after_rounds: int | None = None,
     ) -> ResearchResult:
         if (
             sum(
                 item is not None
-                for item in (checkpoint, recovery, source_recovery, source_acquisition)
+                for item in (
+                    checkpoint,
+                    recovery,
+                    source_recovery,
+                    source_acquisition,
+                    source_processing,
+                )
             )
             > 1
         ):
@@ -1263,6 +1309,8 @@ class ResearchLoop:
             if source_recovery is not None
             else source_acquisition.snapshot
             if source_acquisition is not None
+            else source_processing.cursor.original
+            if source_processing is not None
             else None
         )
         progress = (
@@ -1607,7 +1655,9 @@ class ResearchLoop:
             try:
                 await self._collector.import_local(
                     session,
-                    () if source_acquisition is not None else request.local_documents,
+                    ()
+                    if source_acquisition is not None or source_processing is not None
+                    else request.local_documents,
                     acquisition_control=acquisition_control if acquisition_enabled else None,
                     acquisition=source_acquisition,
                 )

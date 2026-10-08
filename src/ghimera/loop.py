@@ -60,6 +60,8 @@ from ghimera.session_state import SessionState
 from ghimera.source_acquisition import SourceAcquisitionRead, SourceAcquisitionSnapshot
 from ghimera.source_acquisition_types import SourceAcquisitionReturn
 from ghimera.source_completion import SourceCompletionRuntime
+from ghimera.source_processing import SourceProcessingRead
+from ghimera.source_processing_work import SourceProcessingWork
 from ghimera.source_work_types import (
     LocalSourceRequest,
     SourceCoordinates,
@@ -74,6 +76,7 @@ CollectionStop = StopReason | Literal["round_limit"]
 AcquisitionControl = Callable[[SourceOperation, int, int], SourceAcquisitionSnapshot]
 
 if TYPE_CHECKING:
+    from ghimera.graph_types import GraphBatch
     from ghimera.research_recovery_types import ResearchRecoveryRead
     from ghimera.source_completion import SourceCompletionSnapshot
     from ghimera.source_work import SourceWorkStore, SourceWorkToken
@@ -92,6 +95,8 @@ class CollectionSession:
     ) -> None:
         self.goal, self.budget, self.ledger, self.graph = goal, budget, ledger, graph
         self.source_work = source_work
+        self._processing: SourceProcessingWork | None = None
+        self._processing_read: SourceProcessingRead | None = None
         self._documents: dict[str, Document] = {}
         self._retained_sources: dict[str, RetainedOriginal] = {}
         self._frontier: list[tuple[float, str, int]] = []
@@ -405,6 +410,7 @@ class GoalLoop:
         downtime_seconds: float,
         model_return: "ResearchRecoveryRead | None" = None,
         acquisition: SourceAcquisitionRead | None = None,
+        processing: SourceProcessingRead | None = None,
     ) -> CollectionSession:
         """Resume the exact durable run; no new identity, calls or budget reset."""
         from ghimera.journal import DirectoryLedgerSink
@@ -415,6 +421,29 @@ class GoalLoop:
         ):
             raise ValueError("continuation requires the original collection recipe and judge")
         rows, receipt = harvest.ledger, harvest.receipt
+        if processing is not None:
+            if (
+                model_return is not None
+                or acquisition is not None
+                or processing.cursor.original.progress.harvest != harvest
+                or processing.cursor.original.session != state
+            ):
+                raise ValueError("processing requires its original exact session/control")
+            rows = processing.journal.rows
+            from ghimera.run_encoding import encoding_usage
+
+            encoding_calls, encoding_chars = encoding_usage(self._config, rows)
+            receipt = receipt.model_copy(
+                update={
+                    "judge_calls": validate_model_rows(
+                        self._config.model_work, self._config.judge_budget, rows
+                    ),
+                    "fetches": count_fetch_attempts(self._config, rows),
+                    "bytes_read": sum(row.bytes_read for row in rows),
+                    "encoding_calls": encoding_calls,
+                    "encoding_chars": encoding_chars,
+                }
+            )
         if acquisition is not None and (
             model_return is not None
             or acquisition.snapshot.progress.harvest != harvest
@@ -467,7 +496,7 @@ class GoalLoop:
                 from ghimera.source_work import SourceWorkStore
 
                 source_work = SourceWorkStore.resume(
-                    self._config, run_id, len(rows), acquisition=acquisition
+                    self._config, run_id, len(rows), acquisition=acquisition, processing=processing
                 )
             budget = RunBudget(self._config, self._clock)
             admission = (
@@ -490,11 +519,79 @@ class GoalLoop:
                     if self._config.identity_automation is not None
                     else None,
                 )
-                await graph.start(harvest.goal.text, expected=harvest.graph)
-                if graph.snapshot() != harvest.graph:
+                prepared = (
+                    tuple(item.batch for item in processing.cursor.graph_commits)
+                    if processing is not None
+                    else ()
+                )
+
+                def verify_source_batch(owner: ResearchGraph, batch: "GraphBatch") -> None:
+                    if (
+                        processing is None
+                        or processing.operation.page is None
+                        or processing.cursor.extracted is None
+                    ):
+                        raise ValueError("prepared graph lacks original source/parser reading")
+                    page, extracted = processing.operation.page, processing.cursor.extracted
+                    revision = self._extraction_revision(extracted)
+                    document = owner.document_node(
+                        page.final_url,
+                        page.body,
+                        extracted.text,
+                        revision,
+                        transport=page.transport,
+                        local_input=page.local_input,
+                        human_browser=page.human_browser,
+                        source_refresh=page.source_refresh,
+                        pdf_reading=extracted.pdf_transcription.graph_reading()
+                        if extracted.pdf_transcription is not None
+                        else None,
+                    )
+                    try:
+                        owner.validate_document_commit(batch, document, page.final_url, revision)
+                    except ValueError:
+                        if not isinstance(processing.operation.request, LocalSourceRequest):
+                            raise
+                        graph_policy = self._config.graph
+                        if graph_policy is None:
+                            raise ValueError("source recovery lost original graph policy") from None
+                        parent = owner.node(
+                            "intent", run_id, harvest.goal.text, graph_policy.profile_version
+                        )
+                        owner.validate_discovery_commit(batch, page.url, parent.id)
+
+                if processing is not None:
+                    persisted = await graph_sink.replay()
+                    if any(
+                        item.acknowledged and item.batch.sequence >= len(persisted)
+                        for item in processing.cursor.graph_commits
+                    ):
+                        raise ValueError("original acknowledged graph batch is missing")
+                await graph.start(
+                    harvest.goal.text,
+                    expected=harvest.graph,
+                    prepared=prepared,
+                    verify_prepared=verify_source_batch if prepared else None,
+                )
+                if processing is not None and source_work is not None and prepared:
+                    from ghimera.source_processing import SourceGraphCommit, SourceProcessingCursor
+
+                    source_work.save_processing(
+                        SourceProcessingCursor.model_validate(
+                            dict(
+                                processing.cursor.model_dump(),
+                                graph_commits=tuple(
+                                    SourceGraphCommit(batch=batch, acknowledged=True)
+                                    for batch in prepared
+                                ),
+                            )
+                        )
+                    )
+                if processing is None and graph.snapshot() != harvest.graph:
                     raise ValueError("graph changed after the research checkpoint; reconcile first")
             session = CollectionSession(harvest.goal, budget, ledger, graph, source_work)
             session.restore_state(state, harvest)
+            session._processing_read = processing
             return session
         except BaseException:
             if source_work is not None:
@@ -620,10 +717,16 @@ class GoalLoop:
             raise ValueError("fetched acquisition requires its original native source request")
         token = work.admitted_token(admission)
         request = admission.operation.request
-        with session.operation():
-            result = await self._collect_source(
-                session, request.scope, request.url, request.depth, acquired=token
-            )
+        with (
+            session.serial_driver()
+            if self._config.research_recovery is not None
+            and self._config.research_recovery.source_processing is not None
+            else nullcontext()
+        ):
+            with session.operation():
+                result = await self._collect_source(
+                    session, request.scope, request.url, request.depth, acquired=token
+                )
         if (
             result is None
             and session.budget.fetches - session._window_start >= self._config.saturation_window
@@ -632,6 +735,68 @@ class GoalLoop:
                 return "saturated"
             session._window_start, session._window_new = session.budget.fetches, 0
         return result
+
+    async def process_processing(
+        self, session: CollectionSession, admission: SourceProcessingRead
+    ) -> CollectionStop | None:
+        from ghimera.source_work import SourceWorkToken
+
+        work = session.source_work
+        original = admission.operation
+        page = original.page
+        if (
+            work is None
+            or page is None
+            or session._processing_read != admission
+            or admission.cursor.original.runtime != self.source_runtime()
+        ):
+            raise ValueError("processing lost its exact original native source/runtime")
+        token = SourceWorkToken(original.operation_id, work.report().journal_header_sha256)
+        request = original.request
+        scope = request.scope if isinstance(request, SourceRequest) else None
+        depth = request.depth if isinstance(request, SourceRequest) else 0
+        parent_hops = request.reference_hops if isinstance(request, SourceRequest) else 0
+        try:
+            with session.serial_driver(), session.operation():
+                session.budget.check_time()
+                result = await self._process_page(
+                    session, page, request.url, depth, scope, parent_hops
+                )
+                work.processed(token, result, session.ledger.next_sequence)
+        except asyncio.CancelledError:
+            session.ledger.append(
+                LedgerRow(
+                    sequence=session.ledger.next_sequence,
+                    event="refusal",
+                    url=request.url,
+                    refusal=RefusalCode.EXTRACTION_FAILED,
+                    reason="source_processing_cancelled",
+                )
+            )
+            work.refused(
+                token, "source_processing_cancelled", session.ledger.next_sequence, cancelled=True
+            )
+            raise
+        except (GhimeraRefused, TimeoutError) as exc:
+            code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+            if code in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}:
+                raise
+            session.ledger.append(
+                LedgerRow(
+                    sequence=session.ledger.next_sequence,
+                    event="refusal",
+                    url=request.url,
+                    refusal=code,
+                    reason=code.value,
+                )
+            )
+            work.refused(token, code.value, session.ledger.next_sequence)
+            raise
+        if session.budget.fetches - session._window_start >= self._config.saturation_window:
+            if session._window_new < self._config.saturation_min_new:
+                return "saturated"
+            session._window_start, session._window_new = session.budget.fetches, 0
+        return None
 
     async def _import_local(
         self,
@@ -733,7 +898,10 @@ class GoalLoop:
                         work.processing(token)
                     if acquisition_control is not None:
                         budget.check_time()
-                    if session.graph is not None:
+                    if session.graph is not None and (
+                        self._config.research_recovery is None
+                        or self._config.research_recovery.source_processing is None
+                    ):
                         await session.graph.discovered(seed.source_id, session.graph.intent_id)
                     budget.check_time()
                     result = await self._process_page(session, page, seed.source_id, 0, None, 0)
@@ -1330,27 +1498,90 @@ class GoalLoop:
         active_scope: Scope | None,
         parent_hops: int,
     ) -> Document | None:
+        policy = self._config.research_recovery
+        if policy is None or policy.source_processing is None:
+            return await self._consume_page(session, page, url, depth, active_scope, parent_hops)
+        if (
+            session.source_work is None
+            or not session._operating
+            or not session._driving
+            or session._processing is not None
+        ):
+            raise ValueError("source processing requires one original serial native driver")
+        owner = SourceProcessingWork(
+            session.source_work, session.ledger, resumed=session._processing_read is not None
+        )
+        operation = session.source_work.processing_operation(owner.cursor)
+        request = operation.request
+        if (
+            operation.page != page
+            or request.url != url
+            or (
+                isinstance(request, SourceRequest)
+                and (
+                    request.depth != depth
+                    or request.reference_hops != parent_hops
+                    or request.scope != active_scope
+                )
+            )
+        ):
+            raise ValueError("processing changed the original Page/source coordinates")
+        session._processing = owner
+        session._processing_read = None
+        try:
+            with (
+                session.graph.source_commits(owner.graph_commit)
+                if session.graph is not None
+                else nullcontext()
+            ):
+                if (
+                    not owner.resumed
+                    and owner.cursor.original.phase == "initial_local"
+                    and session.graph is not None
+                ):
+                    await session.graph.discovered(page.url, session.graph.intent_id)
+                return await self._consume_page(
+                    session, page, url, depth, active_scope, parent_hops
+                )
+        finally:
+            session._processing = None
+
+    async def _consume_page(
+        self,
+        session: CollectionSession,
+        page: Page,
+        url: str,
+        depth: int,
+        active_scope: Scope | None,
+        parent_hops: int,
+    ) -> Document | None:
         """One extraction/scoring/verdict/identity owner for web and local snapshots."""
         goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
         documents, visited = session._documents, session._visited
         candidate = None
+        processing = session._processing
+        retained = (
+            processing.cursor.extracted if processing is not None and processing.resumed else None
+        )
         extraction_started = self._clock()
         async with session._slots.slot("extraction"), asyncio.timeout(budget.remaining_seconds):
             try:
                 extracted = (
-                    await self._pdf_transcription.extract(
+                    retained
+                    if retained is not None
+                    else await self._pdf_transcription.extract(
                         page, native=self._extractor, budget=budget, ledger=ledger
                     )
-                    if self._pdf_transcription is not None
+                    if retained is not None or self._pdf_transcription is not None
                     else await self._extractor.extract(page)
                 )
             except ExtractionCancelled as exc:
                 self._record_parse_attempts(ledger, exc.attempts)
                 # Preserve asyncio.timeout's exact CancelledError contract.
                 raise asyncio.CancelledError from None
-        if extracted.extraction is not None:
+        if retained is None and extracted.extraction is not None:
             self._record_parse_attempts(ledger, extracted.extraction.attempts)
-        if (
+        if retained is None and (
             extracted.extraction is not None
             or extracted.document_parse is not None
             or extracted.source_feed is not None
@@ -1381,6 +1612,8 @@ class GoalLoop:
                             reason="locator_drift: publisher uses generic extraction",
                         )
                     )
+        if processing is not None and retained is None:
+            processing.save("parsed", extracted=extracted)
         document_node_id = None
         if graph is not None and self._visuals is None:
             document_node_id = await graph.document(
@@ -1399,19 +1632,69 @@ class GoalLoop:
         # Score native evidence before the judge. Similarity guides the frontier,
         # but never replaces a document verdict or factual source evidence.
         async with session._slots.slot("scoring"):
-            ranked = await self._scorer.score(goal, extracted, budget, ledger)
+            if processing is not None and processing.cursor.ranked is not None:
+                ranked = processing.cursor.ranked
+            elif (
+                processing is not None
+                and processing.resumed
+                and processing.cursor.stage == "scoring"
+            ):
+                from ghimera.semantic_scoring import EmbeddingScorer
+
+                if not isinstance(self._scorer, EmbeddingScorer):
+                    raise ValueError("RUN score recovery requires its native scorer")
+                ranked = await self._scorer.resume_score(
+                    goal,
+                    extracted,
+                    budget,
+                    ledger,
+                    original_start=len(processing.cursor.prefix_sha256),
+                )
+                processing.save("scored", ranked=ranked)
+            else:
+                if processing is not None:
+                    processing.save("scoring")
+                ranked = await self._scorer.score(goal, extracted, budget, ledger)
+                if processing is not None:
+                    processing.save("scored", ranked=ranked)
         verdict = None
         disposition = "hold"
         for second_look in (False, True):
-            verdict, disposition = await self._document_verdict(
-                session,
-                extracted,
-                page.final_url if budget.config.document_judgment else url,
-                second_look,
-                source_sha256=hashlib.sha256(page.body).hexdigest(),
+            recorded = (
+                (
+                    processing.cursor.second_verdict
+                    if second_look
+                    else processing.cursor.first_verdict
+                )
+                if processing is not None
+                else None
             )
+            if recorded is not None and processing is not None:
+                verdict = recorded
+                disposition = (
+                    processing.cursor.second_disposition
+                    if second_look
+                    else processing.cursor.first_disposition
+                ) or "hold"
+            else:
+                verdict, disposition = await self._document_verdict(
+                    session,
+                    extracted,
+                    page.final_url if budget.config.document_judgment else url,
+                    second_look,
+                    source_sha256=hashlib.sha256(page.body).hexdigest(),
+                )
+                if processing is not None:
+                    processing.save(
+                        "judged" if disposition != "hold" or second_look else "scored",
+                        verdict=verdict,
+                        disposition=disposition,
+                        second_look=second_look,
+                    )
             if disposition != "hold":
                 break
+        if processing is not None:
+            processing.save("consuming")
         if verdict is not None and disposition == "accept":
             digest = hashlib.sha256(page.body).hexdigest()
             images: tuple[ImageEvidence, ...] = ()
@@ -1644,8 +1927,30 @@ class GoalLoop:
             if context is None
             else (port_input(budget, session.goal, extracted, context, second_look=second_look))
         )
+        processing = session._processing
+        stage = "second_verdict" if second_look else "first_verdict"
+        pending = processing is not None and processing.resumed and processing.cursor.stage == stage
+        original_sequence = (
+            processing.cursor.model_sequence if pending and processing is not None else None
+        )
+        if (
+            pending
+            and processing is not None
+            and processing.cursor.model_request_sha256 != hashlib.sha256(request).hexdigest()
+        ):
+            raise ValueError("saved verdict changed original logical request")
         async with session._slots.slot("judge"):
-            if context is not None and policy is not None:
+            if pending and context is not None and original_sequence is not None:
+                context_sequence = original_sequence - 1
+                reserved = ledger.snapshot()[context_sequence].judgment_context
+                if (
+                    reserved is None
+                    or reserved.context != context
+                    or reserved.second_look != second_look
+                    or reserved.input_sha256 != hashlib.sha256(request).hexdigest()
+                ):
+                    raise ValueError("saved verdict changed original context reservation")
+            elif context is not None and policy is not None:
                 context_sequence = ledger.next_sequence
                 ledger.append(
                     LedgerRow(
@@ -1663,7 +1968,20 @@ class GoalLoop:
                         ),
                     )
                 )
-            intent_sequence = ledger.next_sequence
+            intent_sequence = (
+                original_sequence if original_sequence is not None else ledger.next_sequence
+            )
+            replay_sequence = (
+                original_sequence
+                if original_sequence is not None and original_sequence < ledger.next_sequence
+                else None
+            )
+            if processing is not None and not pending:
+                processing.save(
+                    "second_verdict" if second_look else "first_verdict",
+                    model_sequence=intent_sequence,
+                    request=request,
+                )
             invocation = ModelInvocation(
                 budget,
                 ledger,
@@ -1671,20 +1989,26 @@ class GoalLoop:
                 model=self._judge.model,
                 url=url,
                 request=request,
+                replay_intent_sequence=replay_sequence,
             )
             try:
                 async with asyncio.timeout(budget.remaining_seconds):
-                    verdict = await invocation.invoke(
-                        lambda: (
-                            self._judge.scored_document(
-                                session.goal, extracted, context, second_look=second_look
-                            )
-                            if isinstance(self._judge, ScoredDocumentJudge) and context is not None
-                            else self._judge.document(
-                                session.goal, extracted, second_look=second_look
-                            )
-                        ),
-                        record_output,
+                    verdict = (
+                        invocation.replay(lambda stored: Verdict.model_validate_json(stored.body()))
+                        if replay_sequence is not None
+                        else await invocation.invoke(
+                            lambda: (
+                                self._judge.scored_document(
+                                    session.goal, extracted, context, second_look=second_look
+                                )
+                                if isinstance(self._judge, ScoredDocumentJudge)
+                                and context is not None
+                                else self._judge.document(
+                                    session.goal, extracted, second_look=second_look
+                                )
+                            ),
+                            record_output,
+                        )
                     )
             except asyncio.CancelledError as exc:
                 ledger.append(

@@ -232,6 +232,16 @@ assertions with exact region anchors, not independent corroboration.
 
 ## Next I03 recovery increment (unpublished source candidate)
 
+The isolated source-processing candidate additionally retains acknowledged
+native parser/scoring/first-and-second-verdict consumption in the existing
+SourceWork transaction, with exact prepared source graph batches captured before
+sink contact. Its explicit recovery `/7` library boundary has focused crash
+witnesses prepared but not yet run; see
+[source processing recovery](SOURCE_PROCESSING_RECOVERY.md). Query-return and
+acquired-page recovery are already implemented in the native core; broad older
+open-cut descriptions do not mean those specific APIs are absent. Arbitrary
+semantic/visual/frontier/concurrent cuts and real quality remain open.
+
 The optional versioned `research_recovery` policy saves exact native control
 before planning, assessment, answer and review, including the first plan with
 zero completed rounds. `ResearchLoop.recover` adopts only an intact saved

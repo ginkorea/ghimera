@@ -120,11 +120,92 @@ class EmbeddingScorer(Scorer):
         if encoding_decisions is not None and policy.run_encoding_recovery is None:
             raise ValueError("explicit vector replay requires scoring/3 run encoding recovery")
         self._encoding_decisions = encoding_decisions
+        self._retained_reading_sequence: int | None = None
         self._sessions: WeakKeyDictionary[RunBudget, _IntentSession] = WeakKeyDictionary()
 
     def validate_config(self, config: GhimeraConfig) -> None:
         if config.scoring != self._policy:
             raise ValueError("scorer must share the run's exact effective policy")
+
+    async def resume_score(
+        self,
+        goal: Goal,
+        document: Extracted,
+        budget: RunBudget,
+        ledger: Ledger,
+        *,
+        original_start: int,
+    ) -> tuple[LinkCandidate, ...]:
+        """Consume only the explicit saved source transaction's original schedule."""
+        policy = self._policy
+        if policy.run_encoding_recovery is None or not ledger.has_replay_binding(budget.config):
+            raise ValueError("score adoption requires the original RUN journal")
+        rows = ledger.snapshot()
+        if type(original_start) is not int or not 0 <= original_start <= len(rows):
+            raise ValueError("score adoption requires its original phase prefix")
+        spans = selected_windows(document.text, goal, policy)
+        links = tuple(
+            sorted(document.links, key=lambda link: keyword_score(goal, link), reverse=True)[
+                : policy.max_links
+            ]
+        )
+        texts = tuple(document.text[start:end] for start, end in spans) + tuple(
+            link.url + "\n" + link.anchor[: policy.max_anchor_chars] for link in links
+        )
+        plan: list[BatchPlan] = []
+        if self._references is None and not any(row.intent_reference is not None for row in rows):
+            plan.extend(
+                ("intent", service, batch, start)
+                for start, batch in encoding_batches(policy.intent_encoder, (goal.text,))
+                for service in (policy.intent_encoder,)
+            )
+        plan.extend(
+            ("source", policy.encoder, batch, start)
+            for start, batch in encoding_batches(policy.encoder, texts)
+        )
+        original = tuple(
+            row
+            for row in rows[original_start:]
+            if row.run_encoding_intent is not None
+            and (
+                row.run_encoding_intent.purpose != "intent"
+                or not any(r.intent_reference is not None for r in rows)
+            )
+        )
+        decisions = []
+        for index, (purpose, service, batch, start) in enumerate(plan):
+            if index < len(original):
+                row = original[index]
+                intent = row.run_encoding_intent
+                if intent is None or (
+                    intent.purpose,
+                    intent.service,
+                    intent.texts,
+                    intent.batch_start,
+                ) != (purpose, service, batch, start):
+                    raise ValueError("saved score schedule drifted from exact original request")
+                decisions.append(
+                    RunEncodingDecision(mode="replay", original_intent_sequence=row.sequence)
+                )
+            else:
+                decisions.append(RunEncodingDecision(mode="fresh"))
+        if len(original) > len(plan):
+            raise ValueError("saved score has extra original reservations")
+        replay = EmbeddingScorer(
+            policy,
+            self._encoder,
+            self._references,
+            query_encoder=self._query_encoder if policy.query_encoder is not None else None,
+            encoding_decisions=tuple(decisions),
+        )
+        readings = tuple(
+            row.sequence for row in rows[original_start:] if row.scoring_reading is not None
+        )
+        if readings:
+            if len(readings) != 1:
+                raise ValueError("saved score requires one original native reading")
+            replay._retained_reading_sequence = readings[0]
+        return await replay.score(goal, document, budget, ledger)
 
     def _cosine(
         self, vector: tuple[float, ...], references: tuple[tuple[float, ...], ...]
@@ -396,6 +477,16 @@ class EmbeddingScorer(Scorer):
                     or ledger.snapshot()[reading_sequence].scoring_reading != native_reading
                 ):
                     raise ValueError("vector replay changed its original native parser/reading")
+            elif self._retained_reading_sequence is not None:
+                sequence = self._retained_reading_sequence
+                if (
+                    sequence >= ledger.next_sequence
+                    or ledger.snapshot()[sequence].scoring_reading != native_reading
+                ):
+                    raise ValueError("score adoption changed its retained original reading")
+                source_binding = scoring_source_binding(ledger.snapshot(), document)
+                if source_binding.reading_sequence != sequence:
+                    raise ValueError("score adoption has unrelated later native readings")
             else:
                 reading_row = LedgerRow(
                     sequence=ledger.next_sequence,

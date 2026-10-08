@@ -9,6 +9,8 @@ import hashlib
 import os
 import re
 import tempfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
@@ -182,6 +184,7 @@ class ResearchGraph:
         self._config = config
         self._run_id = run_id
         self._sink = sink
+        self._commit_observer: Callable[[GraphBatch, bool], None] | None = None
         self._identity_config, self._identity_ledger = identity_config, identity_ledger
         if (identity_config is None) != (identity_ledger is None) or (
             identity_config is not None and identity_config.graph != config
@@ -283,23 +286,101 @@ class ResearchGraph:
         )
         return skeleton.model_copy(update={"id": "edge:" + skeleton.content_digest()})
 
-    async def start(self, intent: str, *, expected: GraphSnapshot | None = None) -> None:
+    async def start(
+        self,
+        intent: str,
+        *,
+        expected: GraphSnapshot | None = None,
+        prepared: tuple[GraphBatch, ...] = (),
+        verify_prepared: Callable[["ResearchGraph", GraphBatch], None] | None = None,
+    ) -> None:
         async with self._lock:
             if self._started:
                 raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
-            for batch in await self._sink.replay():
+            persisted = await self._sink.replay()
+            prefix_count = (
+                expected.checkpoint.sequence + 1
+                if expected is not None and expected.checkpoint is not None
+                else 0
+            )
+            if prepared and (expected is None or verify_prepared is None):
+                raise ValueError(
+                    "prepared graph recovery requires its exact original prefix and source proof"
+                )
+            base = persisted[:prefix_count] if prepared else persisted
+            for batch in base:
                 self._validate_batch(batch)
                 self._apply(batch)
+            if prepared:
+                if self.snapshot() != expected or len(persisted) > prefix_count + len(prepared):
+                    raise ValueError("graph contains foreign or missing original prefix effects")
+                for index, batch in enumerate(prepared):
+                    if verify_prepared is None:
+                        raise ValueError("prepared graph lacks source verifier")
+                    verify_prepared(self, batch)
+                    self._validate_batch(batch)
+                    sequence = prefix_count + index
+                    if sequence < len(persisted):
+                        if persisted[sequence] != batch:
+                            raise ValueError("graph suffix differs from its prepared source batch")
+                    else:
+                        ack = await self._sink.append(batch)
+                        if ack != GraphCheckpoint(
+                            sequence=batch.sequence, digest=batch.content_digest()
+                        ):
+                            raise ValueError(
+                                "prepared graph commit lost its native acknowledgement"
+                            )
+                    self._apply(batch)
             self._started = True
         initial = self.node("intent", self._run_id, intent, self._config.profile_version)
-        if expected is not None:
+        if expected is not None and not prepared:
             # Restore is a verification-only step. Missing/changed graph state
             # cannot be repaired by adding a fresh intent before comparison.
             if self.snapshot() != expected or self._nodes.get(initial.id) != initial:
                 raise ValueError("graph changed after the checkpoint; reconcile first")
-        else:
+        elif expected is None:
             await self.append(nodes=(initial,))
         self._intent_id = initial.id
+
+    @contextmanager
+    def source_commits(self, observer: Callable[[GraphBatch, bool], None]) -> Iterator[None]:
+        if self._commit_observer is not None:
+            raise ValueError("one original source owns graph commit capture")
+        self._commit_observer = observer
+        try:
+            yield
+        finally:
+            self._commit_observer = None
+
+    def validate_document_commit(
+        self, batch: GraphBatch, document: GraphNode, url: str, revision: str
+    ) -> None:
+        source = self.node("source", url, url, self._config.profile_version)
+        edge = self.edge("retrieved", document.id, source.id, revision)
+        self._validate_observation_commit(batch, (source, document), (edge,))
+
+    def validate_discovery_commit(self, batch: GraphBatch, url: str, parent_id: str) -> None:
+        source = self.node("source", url, url, self._config.profile_version)
+        edge = self.edge("discovered", source.id, parent_id, self._config.profile_version)
+        self._validate_observation_commit(batch, (source,), (edge,))
+
+    def _validate_observation_commit(
+        self, batch: GraphBatch, nodes: tuple[GraphNode, ...], edges: tuple[GraphEdge, ...]
+    ) -> None:
+        nodes = tuple(node for node in nodes if self._nodes.get(node.id) != node)
+        edges = tuple(edge for edge in edges if self._edges.get(edge.id) != edge)
+        expected = GraphBatch(
+            schema="chimera.graph-batch/1",
+            run_id=self._run_id,
+            config_digest=self.config_digest,
+            sequence=self._checkpoint.sequence + 1 if self._checkpoint else 0,
+            previous_digest=self._checkpoint.digest if self._checkpoint else None,
+            nodes=nodes,
+            edges=edges,
+        )
+        if expected != batch:
+            raise ValueError("prepared graph batch is not the exact original source observation")
 
     def _validate_batch(self, batch: GraphBatch) -> None:
         expected_sequence = self._checkpoint.sequence + 1 if self._checkpoint else 0
@@ -442,6 +523,8 @@ class ResearchGraph:
                 self._validate_batch(batch)
             except ValidationError:
                 raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT) from None
+            if self._commit_observer is not None:
+                self._commit_observer(batch, False)
             task = asyncio.create_task(self._sink.append(batch))
             cancelled = False
             try:
@@ -459,6 +542,8 @@ class ResearchGraph:
                 ack = task.result()
             if ack != GraphCheckpoint(sequence=batch.sequence, digest=batch.content_digest()):
                 raise GhimeraRefused(RefusalCode.GRAPH_SINK_FAILED)
+            if self._commit_observer is not None:
+                self._commit_observer(batch, True)
             self._apply(batch)
             if cancelled:
                 raise asyncio.CancelledError

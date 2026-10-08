@@ -1,0 +1,19 @@
+# Inert fragment; combine with an explicitly pinned complete native recipe.
+# Requires SourceWork + frontier, retained model work, and scoring/3 RUN ACKs.
+# Does not authorize retries of unknown parser, source, model or encoder work.
+[research_recovery]
+schema = "ghimera.research-recovery/7"
+max_snapshot_bytes = 4000000
+clock_policy = "include_downtime"
+tail_policy = "acknowledged_model_return"
+
+[research_recovery.source_acquisition]
+schema = "ghimera.source-acquisition-recovery/1"
+execution = "serial"
+max_capsule_bytes = 2000000
+
+[research_recovery.source_processing]
+schema = "ghimera.source-processing-recovery/1"
+execution = "serial"
+max_capsule_bytes = 4000000
+unknown_policy = "hold"

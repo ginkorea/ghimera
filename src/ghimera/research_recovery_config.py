@@ -21,6 +21,14 @@ class SourceAcquisitionPolicy(BaseModel):
     max_capsule_bytes: Annotated[int, Field(strict=True, gt=0)]
 
 
+class SourceProcessingPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.source-processing-recovery/1"] = Field(alias="schema")
+    execution: Literal["serial"]
+    max_capsule_bytes: Annotated[int, Field(strict=True, gt=0)]
+    unknown_policy: Literal["hold"]
+
+
 class ResearchRecoveryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal[
@@ -30,6 +38,7 @@ class ResearchRecoveryConfig(BaseModel):
         "ghimera.research-recovery/4",
         "ghimera.research-recovery/5",
         "ghimera.research-recovery/6",
+        "ghimera.research-recovery/7",
     ] = Field(alias="schema")
     max_snapshot_bytes: Annotated[int, Field(strict=True, gt=0)]
     clock_policy: Literal["include_downtime"]
@@ -46,9 +55,23 @@ class ResearchRecoveryConfig(BaseModel):
     source_acquisition: SourceAcquisitionPolicy | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    source_processing: SourceProcessingPolicy | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def versioned(self) -> "ResearchRecoveryConfig":
+        if self.schema_version == "ghimera.research-recovery/7":
+            if (
+                self.source_processing is None
+                or self.source_acquisition is None
+                or self.model_fields_set
+                & {"source_completion", "model_reconciliation", "query_control"}
+            ):
+                raise ValueError("processing /7 requires acquisition and processing only")
+            return self
+        if "source_processing" in self.model_fields_set:
+            raise ValueError("source processing requires explicit recovery /7")
         if self.schema_version in {
             "ghimera.research-recovery/4",
             "ghimera.research-recovery/5",

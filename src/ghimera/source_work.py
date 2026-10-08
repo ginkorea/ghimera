@@ -37,6 +37,7 @@ from ghimera.source_completion import (
     SourceCompletionSnapshot,
 )
 from ghimera.source_frontier import SourceFrontier
+from ghimera.source_processing import SourceProcessingCursor, SourceProcessingRead, row_pin
 from ghimera.source_work_types import (
     LocalSourceRequest,
     Operation,
@@ -91,9 +92,13 @@ class SourceWorkStore:
         self._completion = recovery.source_completion if recovery is not None else None
         self._acquisition = recovery.source_acquisition if recovery is not None else None
         self._acquisition_bytes = 0
+        self._processing_policy = recovery.source_processing if recovery is not None else None
+        self._processing_bytes = 0
         self._completion_bytes = 0
         schema = (
-            "ghimera.source-work-store/3"
+            "ghimera.source-work-store/4"
+            if self._processing_policy is not None
+            else "ghimera.source-work-store/3"
             if self._acquisition is not None
             else "ghimera.source-work-store/2"
             if self._completion is not None
@@ -125,6 +130,11 @@ class SourceWorkStore:
                         "CREATE TABLE source_acquisition(id INTEGER PRIMARY KEY CHECK(id=1),"
                         " payload BLOB NOT NULL, sha256 TEXT NOT NULL)"
                     )
+                if self._processing_policy is not None:
+                    self._private.db.execute(
+                        "CREATE TABLE source_processing(id INTEGER PRIMARY KEY CHECK(id=1),"
+                        " payload BLOB NOT NULL, sha256 TEXT NOT NULL)"
+                    )
                 self._private.db.commit()
             else:
                 row = self._private.db.execute(
@@ -149,6 +159,13 @@ class SourceWorkStore:
                     self._acquisition_bytes = row[0] if row is not None else 0
                     if self._acquisition_bytes > self._acquisition.max_capsule_bytes:
                         raise ValueError("acquisition control exceeds its declared byte bound")
+                if self._processing_policy is not None:
+                    row = self._private.db.execute(
+                        "SELECT length(payload) FROM source_processing WHERE id=1"
+                    ).fetchone()
+                    self._processing_bytes = row[0] if row is not None else 0
+                    if self._processing_bytes > self._processing_policy.max_capsule_bytes:
+                        raise ValueError("processing cursor exceeds its original bound")
             if self._policy.frontier is not None:
                 self._frontier = SourceFrontier(
                     self._private,
@@ -161,6 +178,7 @@ class SourceWorkStore:
                     + self._frontier.payload_bytes
                     + self._completion_bytes
                     + self._acquisition_bytes
+                    + self._processing_bytes
                     > self._policy.max_store_bytes
                 ):
                     raise ValueError("source work and frontier exceed their shared capacity")
@@ -204,6 +222,7 @@ class SourceWorkStore:
         ledger_rows: int,
         *,
         acquisition: SourceAcquisitionRead | None = None,
+        processing: SourceProcessingRead | None = None,
     ) -> "SourceWorkStore":
         """Adopt only a quiescent checkpoint, never guess at interrupted work."""
         store = cls(config, run_id, create=False)
@@ -217,6 +236,13 @@ class SourceWorkStore:
                 raise ValueError("only a clean, unsealed run can resume source work")
             if ledger_rows != len(journal.rows):
                 raise ValueError("source-work continuation needs the exact native journal prefix")
+            if processing is not None:
+                if (
+                    acquisition is not None
+                    or store._read_processing(processing.sha256) != processing
+                ):
+                    raise ValueError("processing changed before writer-owned restoration")
+                return store
             if acquisition is not None:
                 if store._read_acquisition(acquisition.sha256) != acquisition:
                     raise ValueError("acquisition changed before writer-owned restoration")
@@ -329,7 +355,11 @@ class SourceWorkStore:
                     - (self._reserved(previous) if previous is not None else 0)
                 )
                 if (
-                    size + self._frontier_bytes + self._completion_bytes + self._acquisition_bytes
+                    size
+                    + self._frontier_bytes
+                    + self._completion_bytes
+                    + self._acquisition_bytes
+                    + self._processing_bytes
                     > self._policy.max_store_bytes
                 ):
                     raise ValueError("source-work byte capacity exhausted")
@@ -375,7 +405,11 @@ class SourceWorkStore:
                     acquisition_bytes = len(data_acquired)
                     if (
                         acquisition_bytes > self._acquisition.max_capsule_bytes
-                        or size + self._frontier_bytes + completion_bytes + acquisition_bytes
+                        or size
+                        + self._frontier_bytes
+                        + completion_bytes
+                        + acquisition_bytes
+                        + self._processing_bytes
                         > self._policy.max_store_bytes
                     ):
                         raise ValueError("acquisition control exceeds original shared capacity")
@@ -402,7 +436,11 @@ class SourceWorkStore:
                     completion_bytes = len(data)
                     if (
                         completion_bytes > self._completion.max_capsule_bytes
-                        or size + self._frontier_bytes + completion_bytes + acquisition_bytes
+                        or size
+                        + self._frontier_bytes
+                        + completion_bytes
+                        + acquisition_bytes
+                        + self._processing_bytes
                         > self._policy.max_store_bytes
                     ):
                         raise ValueError(
@@ -436,6 +474,7 @@ class SourceWorkStore:
             - self._frontier_bytes
             - self._completion_bytes
             - self._acquisition_bytes
+            - self._processing_bytes
         )
 
     def enqueue(self, request: SourceCoordinates, priority: float, ledger_start: int) -> None:
@@ -737,9 +776,144 @@ class SourceWorkStore:
         item = self._get(token)
         if item.state != "acquired":
             raise SourceWorkFailure("processing requires a newly acknowledged original")
+        acquired = (
+            self._read_acquisition()
+            if self._processing_policy is not None and isinstance(item, SourceOperation)
+            else None
+        )
         self._write(
             type(item).model_validate(dict(item.model_dump(), state="processing")), new=False
         )
+        if acquired is not None:
+            current = self._get(token)
+            self.save_processing(
+                SourceProcessingCursor(
+                    schema="ghimera.source-processing-control/1",
+                    original=acquired.snapshot,
+                    operation_sha256=row_pin(current),
+                    stage="parsing",
+                    prefix_sha256=tuple(row_pin(row) for row in acquired.journal.rows),
+                    extracted=None,
+                    ranked=None,
+                    first_verdict=None,
+                    first_disposition=None,
+                    second_verdict=None,
+                    second_disposition=None,
+                    model_sequence=None,
+                    model_request_sha256=None,
+                    graph_commits=(),
+                )
+            )
+
+    def save_processing(self, cursor: SourceProcessingCursor) -> None:
+        if not self._writing or self._processing_policy is None:
+            raise SourceWorkFailure("processing requires its original source writer/policy")
+        cursor = SourceProcessingCursor.model_validate(cursor.model_dump())
+        operation = self._operations.get(cursor.original.operation_id)
+        if (
+            not isinstance(operation, SourceOperation)
+            or operation.state != "processing"
+            or row_pin(operation) != cursor.operation_sha256
+        ):
+            raise SourceWorkFailure("processing cursor changed its original source operation")
+        data = cursor.model_dump_json().encode()
+        if (
+            len(data) > self._processing_policy.max_capsule_bytes
+            or self._reservation
+            + self._frontier_bytes
+            + self._completion_bytes
+            + self._acquisition_bytes
+            + len(data)
+            > self._policy.max_store_bytes
+        ):
+            raise SourceWorkFailure("processing cursor exceeds original shared capacity")
+        with self._private.transaction():
+            self._private.db.execute(
+                "INSERT OR REPLACE INTO source_processing VALUES(1,?,?)",
+                (data, hashlib.sha256(data).hexdigest()),
+            )
+        self._processing_bytes = len(data)
+
+    def current_processing(self) -> SourceProcessingCursor:
+        if self._processing_policy is None:
+            raise ValueError("processing recovery was not selected")
+        row = self._private.db.execute(
+            "SELECT payload,sha256 FROM source_processing WHERE id=1"
+        ).fetchone()
+        if (
+            row is None
+            or not isinstance(row[0], bytes)
+            or len(row[0]) > self._processing_policy.max_capsule_bytes
+            or hashlib.sha256(row[0]).hexdigest() != row[1]
+        ):
+            raise ValueError("missing or changed bounded processing cursor")
+        cursor = SourceProcessingCursor.model_validate_json(row[0])
+        self.processing_operation(cursor)
+        return cursor
+
+    def processing_operation(self, cursor: SourceProcessingCursor) -> SourceOperation:
+        active = tuple(item for item in self._operations.values() if item.ledger_end is None)
+        if (
+            len(active) != 1
+            or not isinstance(active[0], SourceOperation)
+            or active[0].state != "processing"
+            or active[0].operation_id != cursor.original.operation_id
+            or row_pin(active[0]) != cursor.operation_sha256
+        ):
+            raise ValueError("processing cursor lost its one exact original source")
+        return active[0]
+
+    def _read_processing(self, expected_sha256: str | None = None) -> SourceProcessingRead:
+        from ghimera.source_processing_validation import validate_processing
+
+        cursor = self.current_processing()
+        acquired = self._private.db.execute(
+            "SELECT payload,sha256 FROM source_acquisition WHERE id=1"
+        ).fetchone()
+        if (
+            acquired is None
+            or not isinstance(acquired[0], bytes)
+            or hashlib.sha256(acquired[0]).hexdigest() != acquired[1]
+            or SourceAcquisitionSnapshot.model_validate_json(acquired[0]) != cursor.original
+        ):
+            raise ValueError("processing changed its atomic original acquired control")
+        pin = row_pin(cursor)
+        if expected_sha256 is not None and expected_sha256 != pin:
+            raise ValueError("processing adoption requires exact original cursor digest")
+        if self._config.journal is None:
+            raise ValueError("processing lost original journal")
+        journal = read_journal(self._config.journal, self._run_id)
+        active = tuple(item for item in self._operations.values() if item.ledger_end is None)
+        if len(active) != 1 or not isinstance(active[0], SourceOperation):
+            raise ValueError("processing requires exactly its serial original source")
+        operation = active[0]
+        validate_processing(self._config, cursor, operation, journal)
+        return SourceProcessingRead(cursor=cursor, operation=operation, journal=journal, sha256=pin)
+
+    @classmethod
+    def processing_read(
+        cls,
+        config: GhimeraConfig,
+        run_id: str,
+        expected_sha256: str | None = None,
+        *,
+        expected_models: ResearchRecoveryModels | None = None,
+        expected_runtime: SourceCompletionRuntime | None = None,
+    ) -> SourceProcessingRead:
+        store = cls(config, run_id, create=False)
+        try:
+            with store._private.writer(), store._private.transaction():
+                result = store._read_processing(expected_sha256)
+                if (
+                    expected_models is not None
+                    and result.cursor.original.models != expected_models
+                    or expected_runtime is not None
+                    and result.cursor.original.runtime != expected_runtime
+                ):
+                    raise ValueError("processing changed original collaborator identities/runtime")
+                return result
+        finally:
+            store.close()
 
     def processed(
         self,
