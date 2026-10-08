@@ -1033,22 +1033,23 @@ class ResearchLoop:
         if session.budget.remaining_seconds <= 0:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         try:
-            decision = (
-                RerankDecision(
+            decision: RerankDecision | None = None
+            if self._policy.reranking is not None:
+                operation_key = (
+                    "retained:" + str(session.ledger.next_sequence)
+                    if query_work is not None
+                    else "retained:" + hashlib.sha256(text.encode()).hexdigest()
+                )
+                if query_work is not None and query_work.original is not None:
+                    original_key = query_work.original.rerank_operation_key
+                    if original_key is None:
+                        raise ValueError("learned query lost its original score operation key")
+                    operation_key = original_key
+                decision = RerankDecision(
                     schema="ghimera.rerank-decision/1",
                     action="fresh",
-                    operation_key="retained:"
-                    + (
-                        query_work.original.operation_id
-                        if query_work is not None and query_work.original is not None
-                        else str(session.ledger.next_sequence)
-                    )
-                    if query_work is not None
-                    else "retained:" + hashlib.sha256(text.encode()).hexdigest(),
+                    operation_key=operation_key,
                 )
-                if self._policy.reranking is not None
-                else None
-            )
             await reuse.query(
                 text,
                 remaining_seconds=session.budget.remaining_seconds,

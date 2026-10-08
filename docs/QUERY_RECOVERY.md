@@ -66,6 +66,14 @@ original wall budget; exhausted bounds refuse before new contact. Full local
 ACK adoption is not a new query or model reservation. Recovery does not accept
 an immediate round-pause policy; native cancellation remains available.
 
+An unstarted saved learned query retains its original score operation key,
+including if a later process dies after that score ACK. Recovery never derives
+a replacement key from a UUID or a new ledger position. Saved search request
+bytes/hash remain unchanged, while the effective execution deadline is capped
+by both the original request timeout and the restored wall budget remaining
+after downtime. ACK-only adoption makes no provider contact and grants no new
+wall allowance.
+
 ## Limits and evidence
 
 Only the exact serial saved query boundary is admitted: an original unstarted

@@ -145,7 +145,10 @@ class GroundedSearch(ABC):
             rerank_decision = query_work.decision(rerank_decision)
         try:
             try:
-                async with asyncio.timeout(request.timeout_seconds):
+                # The original request bytes stay pinned across restart. Its
+                # timeout is not a renewed wall allowance after charged downtime.
+                budget.check_time()
+                async with asyncio.timeout(min(request.timeout_seconds, budget.remaining_seconds)):
                     response = (
                         await self.request_for_run(request, budget, ledger, rerank_decision)
                         if query_work is None

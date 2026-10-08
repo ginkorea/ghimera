@@ -69,6 +69,7 @@ class QueryWork:
                 or original.corpus != corpus
                 or original.retained_reservation != retained_reservation
                 or original.input_chars != input_chars
+                or original.rerank_operation_key != rerank_operation_key
             ):
                 raise ValueError("query replay changed its exact original reservation")
             reservation = original

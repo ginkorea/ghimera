@@ -260,6 +260,172 @@ def test_fresh_native_command_retained_and_original_score_ack_no_repeat_contact(
         )
 
 
+def test_unstarted_learned_retained_query_then_score_ack_crash_reuses_original_key(
+    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint
+):
+    cfg = retained_configuration(
+        tmp_path,
+        configured(tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint),
+    )
+    raw = cfg.model_dump()
+    raw["research"]["retained_evidence"]["max_queries"] = 1
+    cfg = GhimeraConfig.model_validate(raw)
+    opts, pin, saved = interrupted(tmp_path, cfg, "unstarted")
+    control = cfg.journal.directory / opts.run_id / "research-control.json"
+    reservation = (opts.output_directory / "reservation.json").read_bytes()
+    pending = saved.pending_query
+    assert pending.cursor.stage == "initial_retained"
+    assert pending.rerank_operation_key is not None
+    assert not (tmp_path / "corpus-contacts.jsonl").exists()
+    first_rows = read_journal(cfg.journal, opts.run_id).rows
+    assert not any(row.query_reservation for row in first_rows)
+
+    second = invoke(tmp_path, recovering(opts, pin), "score_retained")
+    assert second.returncode == 73, second.stderr
+    original = read_journal(cfg.journal, opts.run_id).rows
+    intent = next(row for row in original if row.rerank_reservation is not None)
+    assert intent.rerank_reservation.operation_key == pending.rerank_operation_key
+    assert next(row.query_reservation for row in original if row.query_reservation) == pending
+    assert hashlib.sha256(control.read_bytes()).hexdigest() == pin
+    before = (tmp_path / "corpus-contacts.jsonl").read_text().splitlines()
+    assert before == ["prepare", "encoding", "score"]
+
+    done = invoke(tmp_path, recovering(opts, pin))
+    assert done.returncode == 0, done.stderr
+    result = ResearchResultArchive.read(opts.output_directory, max_bytes=opts.max_result_bytes)
+    assert result.status == "answered"
+    assert (tmp_path / "corpus-contacts.jsonl").read_text().splitlines() == before
+    assert result.harvest.ledger[: len(original)] == original
+    scores = [row for row in result.harvest.ledger if row.rerank_reservation is not None]
+    assert scores == [intent]
+    replay = next(row.model_replay for row in result.harvest.ledger if row.model_replay)
+    assert replay.intent_sequence == intent.sequence
+    assert len(result.retrieval.observations) == 1
+    assert result.search_calls == 0
+    assert (opts.output_directory / "reservation.json").read_bytes() == reservation
+    import sqlite3
+
+    with sqlite3.connect(tmp_path / "corpus" / "corpus.sqlite") as database:
+        assert database.execute(
+            "SELECT COUNT(*) FROM operations WHERE id=?", (pending.operation_id,)
+        ).fetchone() == (1,)
+
+
+@pytest.mark.parametrize("remaining,blocks", [(0.05, False), (0.05, True), (0.0, False)])
+def test_saved_search_request_keeps_bytes_but_execution_uses_restored_deadline(
+    tmp_path, monkeypatch, remaining, blocks
+):
+    from ghimera.budget import RunBudget
+    from ghimera.doubles import FakeJudge
+    from ghimera.journal import DirectoryLedgerSink
+    from ghimera.ledger import Ledger
+    from ghimera.models import Goal, Receipt
+    from ghimera.query_work import QueryWork
+    from ghimera.query_work_types import QueryCursor
+    from ghimera.refusals import GhimeraRefused, RefusalCode
+    from ghimera.research_types import SearchQuery, SearchRequest
+    from tests.test_discovery_router import Adapter
+    from tests.test_model_work import configured as work_configuration
+
+    raw = work_configuration(tmp_path, wall_seconds=10).model_dump()
+    raw["model_work"]["results"] = dict(
+        schema="ghimera.model-results/1",
+        max_result_bytes=65536,
+        max_total_result_bytes=524288,
+    )
+    raw["research_recovery"] = dict(
+        schema="ghimera.research-recovery/4",
+        max_snapshot_bytes=4000000,
+        clock_policy="include_downtime",
+        tail_policy="acknowledged_model_return",
+        query_control="serial_acknowledged",
+    )
+    cfg = GhimeraConfig.model_validate(raw)
+    budget = RunBudget(cfg, lambda: 100.0)
+    judge = FakeJudge().model
+    ledger = Ledger(sink=DirectoryLedgerSink(cfg, "deadline", Goal(text="ports"), judge))
+    query = SearchQuery(text="ports", question_ids=("q1",))
+    request = SearchRequest(query=query, limit=1, max_bytes=100, timeout_seconds=0.5)
+    request_bytes = request.model_dump_json().encode()
+
+    class DeadlineAdapter(Adapter):
+        async def request(self, request):
+            if blocks:
+                self.calls.append(request)
+                await asyncio.Event().wait()
+            return await super().request(request)
+
+    adapter = DeadlineAdapter()
+    first = QueryWork(
+        budget,
+        ledger,
+        QueryCursor(stage="discovery", round_number=1, query_index=0),
+        lambda reservation: None,
+    )
+    original = first.prepare("discovery", request_bytes, adapter.identity)
+    budget.restore(
+        Receipt(
+            fetches=0,
+            bytes_read=0,
+            judge_calls=0,
+            accepted_documents=0,
+            elapsed_seconds=0,
+            stop_reason="budget_exhausted",
+            effective_config=cfg,
+            judge=judge,
+        ),
+        (),
+        0,
+        10 - remaining,
+    )
+    work = QueryWork(budget, ledger, original.cursor, lambda reservation: None, original=original)
+    wrong_key = QueryWork(
+        budget, ledger, original.cursor, lambda reservation: None, original=original
+    )
+    with pytest.raises(ValueError, match="exact original reservation"):
+        wrong_key.prepare(
+            "discovery", request_bytes, adapter.identity, rerank_operation_key="changed-key"
+        )
+    assert not ledger.snapshot() and not adapter.calls
+    timeouts = []
+    native_timeout = asyncio.timeout
+
+    def execution_timeout(seconds):
+        timeouts.append(seconds)
+        assert seconds == pytest.approx(remaining)
+        return native_timeout(seconds)
+
+    monkeypatch.setattr("ghimera.search.asyncio.timeout", execution_timeout)
+
+    async def run():
+        if remaining == 0:
+            with pytest.raises(GhimeraRefused) as refused:
+                await adapter.discover(query, budget, ledger, query_work=work)
+            assert refused.value.code == RefusalCode.BUDGET_EXHAUSTED
+        elif blocks:
+            with pytest.raises(GhimeraRefused) as refused:
+                await adapter.discover(query, budget, ledger, query_work=work)
+            assert refused.value.code == RefusalCode.SEARCH_UNAVAILABLE
+        else:
+            await adapter.discover(query, budget, ledger, query_work=work)
+
+    try:
+        asyncio.run(run())
+        assert work.reservation == original
+        assert original.request_json == request_bytes
+        assert original.request_sha256 == hashlib.sha256(request_bytes).hexdigest()
+        assert budget.remaining_seconds == pytest.approx(remaining)
+        assert len(adapter.calls) == budget.search_calls == budget.fetches == (remaining > 0)
+        if remaining > 0:
+            assert adapter.calls[0].model_dump_json().encode() == request_bytes
+            assert timeouts == pytest.approx([remaining])
+            assert ledger.snapshot()[-1].query_ack.outcome == ("refused" if blocks else "returned")
+        else:
+            assert not timeouts and not ledger.snapshot()
+    finally:
+        ledger.close()
+
+
 def test_fresh_command_cited_by_cursor_keeps_original_quantum_and_parent(
     tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint
 ):
