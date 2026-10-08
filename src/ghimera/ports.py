@@ -1,9 +1,10 @@
 """Injected collaborators, never an implicit model, transport, or TAIPAN import."""
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from ghimera.config import GhimeraConfig
 from ghimera.embedding_types import EncodingBatch
+from ghimera.judgment_types import ScoredNativeContext
 from ghimera.model_config import EmbeddingServiceConfig
 from ghimera.models import (
     Document,
@@ -25,6 +26,13 @@ class Judge(Protocol):
     async def document(self, goal: Goal, document: Extracted, *, second_look: bool) -> Verdict: ...
 
     async def grade(self, goal: Goal, documents: tuple[Document, ...]) -> Grade: ...
+
+
+@runtime_checkable
+class ScoredDocumentJudge(Judge, Protocol):
+    async def scored_document(
+        self, goal: Goal, document: Extracted, context: ScoredNativeContext, *, second_look: bool
+    ) -> Verdict: ...
 
 
 class Encoder(Protocol):

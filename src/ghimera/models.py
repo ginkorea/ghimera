@@ -37,6 +37,12 @@ from ghimera.identity_automation_types import (
     IdentityProposalRequest,
     IdentityReview,
 )
+from ghimera.judgment_types import (
+    DocumentJudgmentEvidence,
+    JudgmentContextReservation,
+    ScoringNativeReading,
+    ScoringSourceBinding,
+)
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.model_reconciliation_types import ModelAttemptConsumption, ModelReconciliationDecision
 from ghimera.model_types import IdentityCallEvidence, ModelCallEvidence
@@ -738,6 +744,8 @@ class LedgerRow(Record):
             "model_replay",
         ]
         | SkipJsonSchema[Literal["model_attempt"]]
+        | SkipJsonSchema[Literal["judgment_context"]]
+        | SkipJsonSchema[Literal["scoring_source"]]
     )
     url: str | None = None
     route: str | None = None
@@ -778,6 +786,18 @@ class LedgerRow(Record):
     rendered: RenderResult | None = None
     encoding_call: EncodingCall | None = None
     similarity: SimilarityEvidence | None = None
+    scoring_source: SkipJsonSchema[ScoringSourceBinding | None] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    scoring_reading: SkipJsonSchema[ScoringNativeReading | None] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    judgment_context: SkipJsonSchema[JudgmentContextReservation | None] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    document_judgment: SkipJsonSchema[DocumentJudgmentEvidence | None] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     intent_reference: IntentReferenceEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -858,6 +878,23 @@ class LedgerRow(Record):
             )
         ):
             raise ValueError("a known refused completion must retain its invoked model identity")
+        if self.scoring_source is not None and self.event != "scoring":
+            raise ValueError("scoring source attribution belongs to its native scoring operation")
+        if (self.event == "scoring_source") != (self.scoring_reading is not None) or (
+            self.scoring_reading is not None and self.url != self.scoring_reading.source_url
+        ):
+            raise ValueError("retained scoring reading must identify its original source")
+        if (self.event == "judgment_context") != (self.judgment_context is not None):
+            raise ValueError("judgment context belongs to its exact pre-invocation observation")
+        if (
+            self.judgment_context is not None
+            and self.url != self.judgment_context.context.source_url
+        ):
+            raise ValueError("judgment context must identify its exact original source URL")
+        if self.document_judgment is not None and (
+            self.event != "verdict" or self.refusal is not None
+        ):
+            raise ValueError("judgment disposition requires an actual successful native verdict")
         if self.source_refresh is not None and (
             self.event != "policy"
             or self.reason != "source_refresh_revalidated"
@@ -1266,6 +1303,9 @@ class Harvest(Record):
         if tuple(row.sequence for row in self.ledger) != tuple(range(len(self.ledger))):
             raise ValueError("ledger sequence must be contiguous")
         validate_reference_rows(self.receipt.effective_config, self.goal.text, self.ledger)
+        from ghimera.judgment_validation import validate_judgment_rows
+
+        validate_judgment_rows(self.receipt.effective_config, self.goal.text, self.ledger)
         if self.receipt.fetches != count_fetch_attempts(self.receipt.effective_config, self.ledger):
             raise ValueError("fetch count does not match ledger")
         challenge_rows = tuple(row for row in self.ledger if row.event == "challenge")

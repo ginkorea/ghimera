@@ -20,6 +20,8 @@ from ghimera.extraction_attempts import (
 from ghimera.fetch import FetchLadder
 from ghimera.graph import DirectoryGraphSink, GraphSink, ResearchGraph
 from ghimera.identity_automation import IdentityProposer, IdentityReviewer, IdentityStage
+from ghimera.judgment_context import select_scored_windows
+from ghimera.judgment_types import DocumentJudgmentEvidence, JudgmentContextReservation
 from ghimera.ledger import Ledger
 from ghimera.local_input_types import LocalDocumentSeed
 from ghimera.local_inputs import (
@@ -46,7 +48,7 @@ from ghimera.models import (
     Verdict,
 )
 from ghimera.pdf_transcription import PdfTranscriptionStage
-from ghimera.ports import Extractor, Judge
+from ghimera.ports import Extractor, Judge, ScoredDocumentJudge
 from ghimera.reference_types import DocumentReference, SearchReference
 from ghimera.references import ReferenceBook
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
@@ -1191,11 +1193,18 @@ class GoalLoop:
         async with session._slots.slot("scoring"):
             ranked = await self._scorer.score(goal, extracted, budget, ledger)
         verdict = None
+        disposition = "hold"
         for second_look in (False, True):
-            verdict = await self._document_verdict(session, extracted, url, second_look)
-            if verdict.decision != "hold":
+            verdict, disposition = await self._document_verdict(
+                session,
+                extracted,
+                page.final_url if budget.config.document_judgment else url,
+                second_look,
+                source_sha256=hashlib.sha256(page.body).hexdigest(),
+            )
+            if disposition != "hold":
                 break
-        if verdict is not None and verdict.decision == "accept":
+        if verdict is not None and disposition == "accept":
             digest = hashlib.sha256(page.body).hexdigest()
             images: tuple[ImageEvidence, ...] = ()
             if (
@@ -1375,23 +1384,97 @@ class GoalLoop:
         return candidate
 
     async def _document_verdict(
-        self, session: CollectionSession, extracted: Extracted, url: str, second_look: bool
-    ) -> Verdict:
+        self,
+        session: CollectionSession,
+        extracted: Extracted,
+        url: str,
+        second_look: bool,
+        *,
+        source_sha256: str | None = None,
+    ) -> tuple[Verdict, Literal["accept", "reject", "hold"]]:
         budget, ledger = session.budget, session.ledger
+        policy = budget.config.document_judgment
+        context = None
+        context_sequence = None
+        if policy is not None:
+            if not isinstance(self._judge, ScoredDocumentJudge) or source_sha256 is None:
+                raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            from ghimera.judgment_validation import validate_scoring_readings
+            from ghimera.scoring_validation import validate_reference_rows
+
+            rows = ledger.snapshot()
+            try:
+                validate_reference_rows(budget.config, session.goal.text, rows)
+                validate_scoring_readings(budget.config, rows)
+                matching = tuple(
+                    row
+                    for row in rows
+                    if row.scoring_source is not None
+                    and (row.scoring_source.source_url, row.scoring_source.source_sha256)
+                    == (url, source_sha256)
+                )
+                if not matching or budget.config.models is None:
+                    raise ValueError("no exact original source-bound scoring observation")
+                context = select_scored_windows(
+                    source_url=url,
+                    source_sha256=source_sha256,
+                    extracted=extracted,
+                    goal_text=session.goal.text,
+                    scoring_row=matching[-1],
+                    rows=rows,
+                    max_windows=policy.max_windows,
+                    max_chars=policy.expanded_look_max_chars
+                    if second_look
+                    else policy.first_look_max_chars,
+                    window_chars=budget.config.models.judge.context.window_chars,
+                    padding_chars=policy.padding_chars,
+                )
+            except ValueError:
+                raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT) from None
+        request = (
+            port_input(budget, session.goal, extracted, second_look=second_look)
+            if context is None
+            else (port_input(budget, session.goal, extracted, context, second_look=second_look))
+        )
         async with session._slots.slot("judge"):
+            if context is not None and policy is not None:
+                context_sequence = ledger.next_sequence
+                ledger.append(
+                    LedgerRow(
+                        sequence=context_sequence,
+                        event="judgment_context",
+                        url=url,
+                        reason="scored_native_context_before_model_intent",
+                        judgment_context=JudgmentContextReservation(
+                            schema="ghimera.judgment-context-reservation/1",
+                            context=context,
+                            policy_sha256=policy.content_digest(),
+                            second_look=second_look,
+                            input_sha256=hashlib.sha256(request).hexdigest(),
+                            input_bytes=len(request),
+                        ),
+                    )
+                )
+            intent_sequence = ledger.next_sequence
             invocation = ModelInvocation(
                 budget,
                 ledger,
                 phase="verdict",
                 model=self._judge.model,
                 url=url,
-                request=port_input(budget, session.goal, extracted, second_look=second_look),
+                request=request,
             )
             try:
                 async with asyncio.timeout(budget.remaining_seconds):
                     verdict = await invocation.invoke(
-                        lambda: self._judge.document(
-                            session.goal, extracted, second_look=second_look
+                        lambda: (
+                            self._judge.scored_document(
+                                session.goal, extracted, context, second_look=second_look
+                            )
+                            if isinstance(self._judge, ScoredDocumentJudge) and context is not None
+                            else self._judge.document(
+                                session.goal, extracted, second_look=second_look
+                            )
                         ),
                         record_output,
                     )
@@ -1422,17 +1505,44 @@ class GoalLoop:
                     )
                 )
                 raise GhimeraRefused(code) from None
+            judgment = None
+            disposition = verdict.decision
+            if context is not None and policy is not None and context_sequence is not None:
+                acknowledged = tuple(
+                    row
+                    for row in ledger.snapshot()
+                    if row.model_ack is not None
+                    and row.model_ack.intent_sequence == intent_sequence
+                )
+                if len(acknowledged) != 1 or acknowledged[0].model_ack is None:
+                    raise RuntimeError("scored judgment lost its native acknowledged result")
+                held = verdict.decision == "reject" and context.omitted_chars > 0
+                disposition = "hold" if held else verdict.decision
+                judgment = DocumentJudgmentEvidence(
+                    schema="ghimera.document-judgment-evidence/1",
+                    policy_sha256=policy.content_digest(),
+                    context=context,
+                    context_sequence=context_sequence,
+                    second_look=second_look,
+                    intent_sequence=intent_sequence,
+                    ack_sequence=acknowledged[0].sequence,
+                    output_sha256=hashlib.sha256(record_output(verdict)).hexdigest(),
+                    original_model_decision=verdict.decision,
+                    client_disposition=disposition,
+                    reason="incomplete_rejection_hold" if held else "native_model_decision",
+                )
             ledger.append(
                 LedgerRow(
                     sequence=ledger.next_sequence,
                     event="verdict",
                     model=self._judge.model,
                     model_call=verdict.model_call,
+                    document_judgment=judgment,
                     url=url,
                     reason=f"{verdict.decision}: {verdict.reason}",
                 )
             )
-        return verdict
+        return verdict, disposition
 
     def _record_parse_attempts(
         self, ledger: Ledger, attempts: tuple[HtmlExtractionAttempt, ...]

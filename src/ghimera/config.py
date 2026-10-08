@@ -23,6 +23,7 @@ from ghimera.graph_types import GraphConfig
 from ghimera.human_browser_types import HumanBrowserConfig
 from ghimera.identity_automation_types import IdentityAutomationConfig
 from ghimera.journal_config import JournalConfig
+from ghimera.judgment_types import DocumentJudgmentConfig
 from ghimera.local_input_types import LocalInputConfig
 from ghimera.mcp_lead_config import McpLeadConfig
 from ghimera.model_config import ModelBindingsConfig
@@ -162,6 +163,9 @@ class GhimeraConfig(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     scoring: ScoringConfig | None = None
+    document_judgment: DocumentJudgmentConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     search: SearxConfig | McpLeadConfig | AhmiaConfig | CorpusSearchConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -185,6 +189,30 @@ class GhimeraConfig(BaseModel):
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
+        judgment = self.document_judgment
+        if judgment is not None:
+            if (
+                self.scoring is None
+                or self.scoring.reference_source != "intent"
+                or self.models is None
+                or self.journal is None
+                or self.model_work is None
+                or self.model_work.results is None
+            ):
+                raise ValueError(
+                    "scored judgment requires intent scoring and retained native model work"
+                )
+            context = self.models.judge.context
+            if (
+                judgment.max_windows > context.max_windows_per_document
+                or judgment.first_look_max_chars > judgment.expanded_look_max_chars
+                or judgment.expanded_look_max_chars > context.max_chars
+                or self.scoring.window_chars
+                > min(context.window_chars, judgment.first_look_max_chars)
+            ):
+                raise ValueError(
+                    "scored judgment must remain within original scoring/judge context limits"
+                )
         if (
             self.research_recovery is not None
             and self.research_recovery.source_completion is not None

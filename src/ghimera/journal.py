@@ -372,6 +372,9 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
         from ghimera.identity_automation import validate_identity_rows
 
         validate_identity_rows(header.config, tuple(rows))
+        from ghimera.judgment_validation import validate_judgment_rows
+
+        validate_judgment_rows(header.config, header.goal.text, tuple(rows))
         summary_path = path / "summary.json"
         if summary_path.exists() or summary_path.is_symlink():
             summary = JournalSummary.model_validate_json(

@@ -1,0 +1,11 @@
+# Add only to a complete native recipe with intent scoring, bound judge,
+# private journal and model_work.results. These are explicit operator choices;
+# Ghimera rejects allowances exceeding the original configured judge/scorer.
+[document_judgment]
+schema = "ghimera.document-judgment/1"
+selection = "scored_native_windows"
+max_windows = 3
+first_look_max_chars = 1500
+expanded_look_max_chars = 4000
+padding_chars = 450
+incomplete_rejection = "hold"

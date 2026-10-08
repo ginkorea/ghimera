@@ -19,6 +19,8 @@ from ghimera.embedding_types import (
     ReferenceChunk,
     unit_vector,
 )
+from ghimera.judgment_context import native_scoring_reading, scoring_source_binding
+from ghimera.judgment_validation import validate_scoring_readings
 from ghimera.ledger import Ledger
 from ghimera.models import Extracted, Goal, LedgerRow, LinkCandidate
 from ghimera.ports import EvidenceEncoder
@@ -324,6 +326,25 @@ class EmbeddingScorer(Scorer):
     ) -> tuple[LinkCandidate, ...]:
         self.validate_config(budget.config)
         policy = self._policy
+        config = budget.config
+        native_reading = (
+            native_scoring_reading(ledger.snapshot(), document)
+            if config.document_judgment is not None
+            or getattr(config.semantics, "window_selection", None) is not None
+            else None
+        )
+        source_binding = None
+        if native_reading is not None:
+            reading_row = LedgerRow(
+                sequence=ledger.next_sequence,
+                event="scoring_source",
+                url=native_reading.source_url,
+                scoring_reading=native_reading,
+                reason="private_native_reading_before_encoding_not_accepted_content",
+            )
+            validate_scoring_readings(config, ledger.snapshot() + (reading_row,))
+            ledger.append(reading_row)
+            source_binding = scoring_source_binding(ledger.snapshot(), document)
         spans = selected_windows(document.text, goal, policy)
         if not spans:
             raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED)
@@ -394,6 +415,7 @@ class EmbeddingScorer(Scorer):
                 url=document.canonical_url,
                 model=self._encoder.model,
                 similarity=evidence,
+                scoring_source=source_binding,
                 reason=(
                     "intent_cosine_not_probability"
                     if policy.reference_source == "intent"
