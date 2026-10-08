@@ -54,6 +54,7 @@ from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, Semantic
 from ghimera.semantic_recovery import SemanticRecoveryStopped
 from ghimera.session_state import SessionState
 from ghimera.source_work_types import LocalSourceRequest, SourceCoordinates, SourceRequest
+from ghimera.visual_evidence import graph_visual_readings, project_visuals
 from ghimera.visual_stage import VisualStage
 from ghimera.visual_types import ImageEvidence
 
@@ -954,7 +955,7 @@ class GoalLoop:
                         )
                     )
         document_node_id = None
-        if graph is not None:
+        if graph is not None and self._visuals is None:
             document_node_id = await graph.document(
                 page.final_url,
                 page.body,
@@ -980,7 +981,11 @@ class GoalLoop:
         if verdict is not None and verdict.decision == "accept":
             digest = hashlib.sha256(page.body).hexdigest()
             images: tuple[ImageEvidence, ...] = ()
-            if self._visuals is not None and active_scope is not None:
+            if (
+                self._visuals is not None
+                and active_scope is not None
+                and not page.body.startswith(b"%PDF-")
+            ):
                 async with session._slots.slot("visual"):
                     images = await self._visuals.collect(
                         goal=goal,
@@ -1006,6 +1011,33 @@ class GoalLoop:
                 human_browser=page.human_browser,
                 images=images,
             )
+            if self._visuals is not None and page.body.startswith(b"%PDF-"):
+                async with session._slots.slot("visual"):
+                    images = await self._visuals.collect_pdf(
+                        goal=goal,
+                        document=candidate,
+                        budget=budget,
+                        ledger=ledger,
+                        language_hint=extracted.language,
+                    )
+                candidate = candidate.model_copy(update={"images": images})
+            if graph is not None and document_node_id is None:
+                document_node_id = await graph.document(
+                    page.final_url,
+                    page.body,
+                    extracted.text,
+                    self._extraction_revision(extracted),
+                    transport=page.transport,
+                    local_input=page.local_input,
+                    human_browser=page.human_browser,
+                    source_refresh=page.source_refresh,
+                    pdf_reading=extracted.pdf_transcription.graph_reading()
+                    if extracted.pdf_transcription is not None
+                    else None,
+                    visual_readings=graph_visual_readings(images),
+                )
+                if graph.visual_projection is not None:
+                    await project_visuals(graph, document_node_id, graph.visual_projection)
             content = session._content
             matched = content.match(candidate) if content is not None else None
             drift = content.drift(candidate) if content is not None else None
@@ -1091,6 +1123,20 @@ class GoalLoop:
                         parent_hops,
                         origin_url=session.reference_origin(url),
                     )
+        if graph is not None and document_node_id is None:
+            document_node_id = await graph.document(
+                page.final_url,
+                page.body,
+                extracted.text,
+                self._extraction_revision(extracted),
+                transport=page.transport,
+                local_input=page.local_input,
+                human_browser=page.human_browser,
+                source_refresh=page.source_refresh,
+                pdf_reading=extracted.pdf_transcription.graph_reading()
+                if extracted.pdf_transcription is not None
+                else None,
+            )
         reference_targets = {item.target_url for item in extracted.references}
         for link in ranked[: self._config.max_links_per_page]:
             if link.url in reference_targets:
@@ -1257,6 +1303,7 @@ class GoalLoop:
                 pdf_reading=source.extracted.pdf_transcription.graph_reading()
                 if source.extracted.pdf_transcription is not None
                 else None,
+                visual_readings=graph_visual_readings(source.images),
             )
             await graph.discovered(link.url, parent)
         return True
@@ -1342,7 +1389,10 @@ class GoalLoop:
             source_refresh=document.source_refresh,
             pdf_reading=reading.graph_reading() if reading else None,
             retained_source=original.origin,
+            visual_readings=graph_visual_readings(document.images),
         )
+        if graph.visual_projection is not None:
+            await project_visuals(graph, document_id, graph.visual_projection)
         session.ledger.append(
             LedgerRow(
                 sequence=session.ledger.next_sequence,

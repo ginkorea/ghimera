@@ -80,6 +80,9 @@ class ModelCallEvidence(BaseModel):
     input_chars: Count
     context_sha256: Digest
     selected_spans: tuple[tuple[str, int, int], ...]
+    selected_visual_citation_ids: SkipJsonSchema[
+        tuple[Annotated[str, Field(pattern=r"^cite:[0-9a-f]{64}$")], ...]
+    ] = Field(default=(), exclude_if=lambda value: not value)
     omitted_document_ids: tuple[str, ...]
     omitted_chars: Count
     outcome: Literal["success", "refused", "cancelled"]

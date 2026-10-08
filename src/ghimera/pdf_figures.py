@@ -10,7 +10,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ghimera.models import Document
+from ghimera.models import Document, DocumentSource
 from ghimera.passive_worker import PassiveWorker
 from ghimera.pdf_figure_config import PdfFigureConfig
 from ghimera.visual_config import VisualConfig
@@ -42,7 +42,7 @@ def _number(value: object) -> float:
     return float(value)
 
 
-def select_figures(document: Document, policy: PdfFigureConfig) -> FigureSelections:
+def select_figures(document: DocumentSource, policy: PdfFigureConfig) -> FigureSelections:
     native = document.extracted
     if native.pdf_transcription is not None:
         native = native.pdf_transcription.native_reading or native
@@ -220,7 +220,7 @@ class PdfFigureCropper:
         return result.crops
 
 
-def validate_pdf_images(document: Document, config: VisualConfig) -> None:
+def validate_pdf_images(document: DocumentSource, config: VisualConfig) -> None:
     """Synchronous archive admission; exact pixels are produced by the owned render worker."""
     crops = tuple(image for image in document.images if image.candidate.pdf_crop is not None)
     if not crops:

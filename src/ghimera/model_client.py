@@ -90,6 +90,7 @@ PROMPT_REVISION = "chimera-research-prompts/1"
 CITATION_PROMPT_REVISION = "chimera-research-prompts/2"
 GRADE_PROMPT_REVISION = "chimera-collection-grade/2"
 RETAINED_PROMPT_REVISION = "ghimera-retained-research-prompts/1"
+VISUAL_PROMPT_REVISION = "ghimera-visual-evidence-prompts/1"
 INSTRUCTIONS = MappingProxyType(
     {
         "semantic_review": (
@@ -481,6 +482,10 @@ class SelfHostedModel:
         usage = None
         completion: CompletionShape | None = None
         context = prompt.evidence
+        visual_context = any(
+            window.citation.basis in {"image_ocr", "reviewed_visual_claim"}
+            for window in context.windows
+        )
         semantic = prompt.semantic_recipe
         if prompt.task == "semantic_extract" and semantic is None:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -501,6 +506,8 @@ class SelfHostedModel:
                 if prompt.task == "semantic_review"
                 else planning_call_revision(self._config, prompt.graph_context)
                 if prompt.task == "plan" and prompt.graph_context is not None
+                else VISUAL_PROMPT_REVISION
+                if visual_context
                 else GRADE_PROMPT_REVISION
                 if prompt.task == "grade"
                 else RETAINED_PROMPT_REVISION
@@ -519,6 +526,11 @@ class SelfHostedModel:
                 selected_spans=tuple(
                     (window.citation.document_id, window.citation.start, window.citation.end)
                     for window in context.windows
+                ),
+                selected_visual_citation_ids=tuple(
+                    window.citation_id
+                    for window in context.windows
+                    if window.citation.basis in {"image_ocr", "reviewed_visual_claim"}
                 ),
                 omitted_document_ids=tuple(item.document_id for item in context.omitted_documents),
                 omitted_chars=sum(item.omitted_chars for item in context.documents)
@@ -611,6 +623,19 @@ class SelfHostedModel:
                     if prompt.task == "semantic_review"
                     and prompt.semantic_review_selection is not None
                     else INSTRUCTIONS[prompt.task]
+                    .replace("retained native evidence", "retained evidence")
+                    .replace("supplied native evidence", "supplied evidence")
+                    if visual_context
+                    else INSTRUCTIONS[prompt.task]
+                )
+                + (
+                    "Visual citation templates name retained derived readings, not native "
+                    "document text. Copy their basis and visual_anchor unchanged. OCR "
+                    "observations support only their retained labels; they do not establish "
+                    "arrows, organizational affiliation or relationships. Reviewed visual "
+                    "claims remain model assertions, not independent corroboration. "
+                    if visual_context
+                    else ""
                 )
                 + (
                     (
@@ -758,7 +783,12 @@ class SelfHostedModel:
                     " For assessment and answer citations, return only objects containing "
                     "citation_id copied exactly from the supplied evidence windows. "
                     "Never shorten/rewrite quotes, calculate offsets, invent IDs or use "
-                    "a citation not supplied in this call. The client restores native spans."
+                    "a citation not supplied in this call. "
+                    + (
+                        "The client restores exact retained spans and their reading basis."
+                        if visual_context
+                        else "The client restores native spans."
+                    )
                     if service.citation_format == "template_ids"
                     else ""
                 )

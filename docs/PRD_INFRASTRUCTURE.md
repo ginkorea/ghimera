@@ -197,6 +197,35 @@ public PDF capture passed. Original public 0.4.4 artifact byte equality is recor
 in RELEASE_044.md. Representative publisher/Tor acceptance remains required;
 this is not full I08 closure.
 
+## Integrated core candidate (not yet published)
+
+The next independent-package candidate combines native implementation lanes,
+not replacement storage/model/browser stacks. Its version remains unreleased
+until the combined gate and installed-package acceptance succeed.
+
+| Requirement | Implemented in the combined candidate | Acceptance still required |
+|---|---|---|
+| I03 | Bounded original model returns, exact journal-sequence replay and restored phase quotas | Arbitrary interrupted research-control adoption, unknown-call decisions and graph reconciliation |
+| I04 / I12 | Configured collection service/API, durable manifests, native round pause/resume, archive-only corpus/outbox retries | Off-host supervisor/TLS deployment, representative scale and interrupted-operation reconciliation |
+| I05 | Native-script lexical/vector candidate union, bounded weighted reciprocal-rank fusion and exact reader policy binding | Representative multilingual retrieval and omission measurements |
+| I06 / I07 | Source-backed reversible merge/split/retract history and dated identity views; visual evidence remains distinct from native text | Semantic organization/identity accuracy, automatic reviewer/resolver and planning over resolved identity |
+| I08 | Same-page guarded pagination with caller assistance; Chromium Tor admission and uncached route-proof receipts | Actual Tor/onion investigation and entitled publisher workflows |
+| I10 | Native-layout PDF figure admission and bounded crops; accepted-image OCR/reviewed claims carried through collector, graph and answer citation templates | Real multilingual scanned-PDF/infographic quality, including Simplified Chinese; absent native figure observations remain an explicit gap |
+| I11 | Native guarded remote PUT/readback delivery, age retention, bounded audit rotation and optional SQLite compaction | Off-host destination durability, outage/scale acceptance and capacity rollover policy |
+| I13 | Configured JSON API result/reference/cited-by/next-page mappings on the existing source frontier | Representative connector deployment and relationship entailment; a configured link is not a model-certified citation |
+| I09 | Existing Ahmia lead adapter retained | Independently hosted maintained index remains deliberately deferred by the owner |
+| I14 | Actual public Crossref intake/replay, native OCR/figure rendering and controlled service/browser/model-wire witnesses | Served-model English/Chinese research, organization expansion, live onion evidence and independently inspected output quality |
+
+The row states above supersede the older tracker only for this development
+candidate, not for the published 0.4.9 artifact. Detailed bounds, contracts and
+native evidence are in [operations](OPERATIONS_CANDIDATE.md),
+[discovery/browser](DISCOVERY_BROWSER_CANDIDATE.md),
+[evidence/graph](EVIDENCE_GRAPH_CANDIDATE.md) and [model work](MODEL_WORK.md).
+The merged collector enriches an accepted document once with exact image
+readings, rather than appending a second unqualified parent. OCR labels do not
+establish diagram arrows or affiliations; reviewed visual claims remain model
+assertions with exact region anchors, not independent corroboration.
+
 ## Delivery and release discipline
 
 Implement and commit bounded rows with tests for their owning contracts and

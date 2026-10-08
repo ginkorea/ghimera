@@ -22,6 +22,7 @@ from ghimera.graph_types import (
     GraphReadingPage,
     GraphRetainedOrigin,
     GraphSnapshot,
+    GraphVisualReading,
 )
 from ghimera.human_browser_types import (
     AssistanceObservation,
@@ -449,6 +450,9 @@ class DocumentSource(Record):
             if config.visuals is None:
                 raise ValueError("retained images require the effective visual recipe")
             visual_digest = hashlib.sha256(config.visuals.model_dump_json().encode()).hexdigest()
+            from ghimera.pdf_figures import validate_pdf_images
+
+            validate_pdf_images(self, config.visuals)
             if len(self.images) > config.visuals.max_images_per_page or any(
                 image.config_sha256 != visual_digest
                 or len(image.raw) > config.visuals.max_image_bytes
@@ -459,6 +463,8 @@ class DocumentSource(Record):
                 raise ValueError("visual evidence must bind its exact policy and limits")
             selections: dict[str, tuple[ImageCandidate, ...]] = {}
             for image in self.images:
+                if image.candidate.pdf_crop is not None:
+                    continue
                 selected = image.candidate.responsive
                 if selected is None:
                     if config.visuals.responsive is not None:
@@ -1349,6 +1355,9 @@ class Harvest(Record):
             if config is None or self.graph.config_digest != config.content_digest():
                 raise ValueError("graph must bind the effective configuration")
             source_readings: dict[tuple[str, str, str], list[GraphPdfReading | None]] = {}
+            source_visuals: dict[tuple[str, str, str], list[tuple[GraphVisualReading, ...]]] = {}
+            from ghimera.visual_evidence import graph_visual_readings
+
             for source in self.graph_source_documents:
                 source_reading_key = (
                     source.url,
@@ -1359,6 +1368,9 @@ class Harvest(Record):
                     source.extracted.pdf_transcription.graph_reading()
                     if source.extracted.pdf_transcription is not None
                     else None
+                )
+                source_visuals.setdefault(source_reading_key, []).append(
+                    graph_visual_readings(source.images)
                 )
             for node in self.graph.nodes:
                 if node.source_refresh is not None and node.retained_source is None:
@@ -1382,6 +1394,16 @@ class Harvest(Record):
                         raise ValueError(
                             "graph document must preserve the actual PDF reading evidence"
                         )
+                    if node.visual_readings and (
+                        node_reading_key not in source_visuals
+                        or node.visual_readings not in source_visuals[node_reading_key]
+                    ):
+                        raise ValueError("graph visual readings must bind retained source images")
+                    if (
+                        node_reading_key in source_visuals
+                        and node.visual_readings not in source_visuals[node_reading_key]
+                    ):
+                        raise ValueError("graph document must preserve its visual readings")
                 if node.local_input is not None and node.retained_source is None:
                     node.local_input.validate_policy(input_policy)
                     if not any(row.local_input == node.local_input for row in inputs):
