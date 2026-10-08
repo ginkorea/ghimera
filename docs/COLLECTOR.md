@@ -139,6 +139,21 @@ private model-control calls through Tor.
 deployment DNS or controlled acceptance. It cannot disable the existing address,
 port, redirect or source-session validation.
 
+Unreleased source also accepts optional `model_http` in `Collector`,
+`Collector.from_toml` and `SelfHostedModels.from_config`. This narrow mapping
+uses role keys `planner`, `analyst`, `reviewer`, `judge`, not endpoint keys:
+roles sharing an endpoint may still have different immutable service policies.
+Each value implements `ghimera.model_http.ModelHttpPort` and must expose the
+exact configured policy for that role. Unknown roles or policy drift refuse
+at construction. Omitted roles retain their existing native `PinnedModelHttp`.
+Injected transports own credentials; a `model_credentials` entry targeting
+any injected role's endpoint is refused, including endpoints shared by roles.
+The application owns the injected transport's lifecycle. Its wrapper can
+delegate unchanged requests to `PinnedModelHttp`; native prompt construction,
+response validation, evidence, accounting and recovery remain in Ghimera.
+Injection adds no TOML fields or serialized configuration and supplies no
+lease renewal, serving lifecycle, retry or UNKNOWN reconciliation policy.
+
 Unreleased `human_assistant` is a narrow application-owned interaction port, not
 a cookie import or credential-discovery route. The explicit `[human_browser]`
 recipe binds one dedicated local Chromium target. Collection after assistance

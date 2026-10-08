@@ -29,6 +29,7 @@ from ghimera.loop import GoalLoop
 from ghimera.mcp_lead_config import McpLeadConfig
 from ghimera.mcp_leads import McpLeadClient, McpLeadSearch
 from ghimera.model_client import SelfHostedModels
+from ghimera.model_http import ModelHttpPort
 from ghimera.model_reconciliation_types import (
     ModelAttemptAuthorization,
     ModelReconciliationDecision,
@@ -61,7 +62,8 @@ class Collector:
     """One reusable configuration, fresh run state, and existing invariant-owning ports.
 
     Ports remain available through their lower-level APIs for alternate providers.
-    This facade assembles only concrete, shipped adapters, never test doubles.
+    This facade assembles shipped adapters; explicit model transports retain
+    the same native model-client and exact role-policy admission.
     """
 
     def __init__(
@@ -70,6 +72,8 @@ class Collector:
         *,
         references: EmbeddingReferences | None = None,
         model_credentials: Mapping[str, SecretStr] | None = None,
+        model_http: Mapping[Literal["planner", "analyst", "reviewer", "judge"], ModelHttpPort]
+        | None = None,
         encoder_credential: SecretStr | None = None,
         query_encoder_credential: SecretStr | None = None,
         source_credentials: Mapping[str, SourceCredentials] | None = None,
@@ -225,7 +229,9 @@ class Collector:
                 SearxHtmlSearch if config.search.response_format == "html" else SearxSearch
             )
             search = search_type(config, config.search, resolver=source_resolver)
-        models = SelfHostedModels.from_config(config, credentials=model_credentials)
+        models = SelfHostedModels.from_config(
+            config, credentials=model_credentials, model_http=model_http
+        )
         encoder = SelfHostedEncoder(config.scoring.encoder, credential=encoder_credential)
         if config.scoring.query_encoder is None and query_encoder_credential is not None:
             raise ValueError("query credentials require an explicit query encoder policy")
@@ -319,6 +325,8 @@ class Collector:
         max_config_bytes: int,
         references: EmbeddingReferences | None = None,
         model_credentials: Mapping[str, SecretStr] | None = None,
+        model_http: Mapping[Literal["planner", "analyst", "reviewer", "judge"], ModelHttpPort]
+        | None = None,
         encoder_credential: SecretStr | None = None,
         source_credentials: Mapping[str, SourceCredentials] | None = None,
         source_resolver: Resolver | None = None,
@@ -340,6 +348,7 @@ class Collector:
             GhimeraConfig.from_toml(path, max_bytes=max_config_bytes),
             references=references,
             model_credentials=model_credentials,
+            model_http=model_http,
             encoder_credential=encoder_credential,
             source_credentials=source_credentials,
             source_resolver=source_resolver,

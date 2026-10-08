@@ -1427,16 +1427,39 @@ class SelfHostedModels:
         config: GhimeraConfig,
         *,
         credentials: Mapping[str, SecretStr] | None = None,
+        model_http: Mapping[Literal["planner", "analyst", "reviewer", "judge"], ModelHttpPort]
+        | None = None,
     ) -> "SelfHostedModels":
         if config.models is None:
             raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
         bindings = config.models
-        services = (bindings.planner, bindings.analyst, bindings.reviewer, bindings.judge)
-        supplied = credentials or {}
-        if not set(supplied) <= {service.endpoint for service in services}:
+        services: dict[Literal["planner", "analyst", "reviewer", "judge"], ModelServiceConfig] = {
+            "planner": bindings.planner,
+            "analyst": bindings.analyst,
+            "reviewer": bindings.reviewer,
+            "judge": bindings.judge,
+        }
+        supplied = dict(credentials or {})
+        transports = dict(model_http or {})
+        if not set(supplied) <= {service.endpoint for service in services.values()}:
             raise ValueError("credentials may target only configured model-service endpoints")
+        if not set(transports) <= set(services):
+            raise ValueError("model transports may target only configured model roles")
+        # Admit the entire map before constructing any role. Roles may share an
+        # endpoint while retaining different context, generation or model pins.
+        for role, transport in transports.items():
+            service = services[role]
+            if transport.config != service:
+                raise ValueError("model transport must share the exact role service policy")
+            if service.endpoint in supplied:
+                raise ValueError("injected model transports own their credential boundary")
         instances = tuple(
-            SelfHostedModel(config, service, credential=supplied.get(service.endpoint))
-            for service in services
+            SelfHostedModel(
+                config,
+                service,
+                credential=supplied.get(service.endpoint),
+                http=transports.get(role),
+            )
+            for role, service in services.items()
         )
         return cls(instances[0], instances[1], instances[2], instances[3])
