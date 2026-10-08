@@ -255,10 +255,14 @@ reconciliation; unknown model/encoding outcomes are never automatically retried.
 Explicit command recovery is implemented through command /4 and execution /2;
 it verifies the same original request/recipe and reserved output before invoking
 the native recovery owner. The command's original native result archive remains
-its output contract. Unattended service restart adoption, the combined final
-gate and independently installed acceptance remain separate from these
-implementation claims. Real
-model and multilingual quality acceptance remains open.
+its output contract. Optional service /2 restart admission now reuses those
+owners, bounds original adoption attempts across restarts, preserves cancelled
+and failed outcomes and holds policy/recipe/identity drift. A verified completed
+native archive can finish its original corpus/outbox handoff without recollection
+even after the model-adoption allowance is exhausted. See
+[service recovery](SERVICE_RECOVERY.md). The combined final source gate,
+independently installed acceptance and live service/model quality remain separate
+from these implementation claims; real multilingual quality is still open.
 
 ## Delivery and release discipline
 

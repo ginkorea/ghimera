@@ -138,8 +138,10 @@ authenticate a malicious owner's rewrite and is not a multi-process database.
 This substrate deliberately refuses interruptions with later collection,
 retrieval, discovery or graph mutations. Such work needs its own acknowledged
 control boundary before it can resume safely. There is no transparent retry of
-arbitrary mid-collection work. Unattended service recovery wiring and service/model
-acceptance remain separate; storage or command fixture checks alone do not establish
+arbitrary mid-collection work. Optional configured service restart admission is
+documented in [service recovery](SERVICE_RECOVERY.md); it reuses these native
+boundaries, original identities and persistent attempt bounds. Deployment and
+service/model acceptance remain separate; storage or command fixture checks alone do not establish
 live recovery or model quality. The explicit command does not imply that a
 deployed supervisor automatically invokes it or reconciles unknown calls.
 

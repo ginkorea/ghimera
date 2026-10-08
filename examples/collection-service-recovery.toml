@@ -21,7 +21,8 @@ shutdown_grace_seconds = 30.0
 
 [service.recovery]
 schema = "ghimera.service-recovery/1"
-# Safe default: retain an interrupted job for explicit authenticated recovery.
+# Safe default: retain unfinished research for explicit authenticated recovery.
+# Sealed original outputs still resume their existing corpus/outbox handoff.
 # Set adopt_acknowledged before original job admission for bounded restart adoption.
 on_restart = "hold"
 max_adoption_attempts = 1

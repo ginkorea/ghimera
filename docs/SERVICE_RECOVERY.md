@@ -3,7 +3,10 @@
 Service `/1` is unchanged: interrupted work is held, not blindly restarted.
 `examples/collection-service-recovery.toml` uses service `/2` and an explicit
 `ghimera.service-recovery/1` policy. Its safe example selects `on_restart = "hold"`;
-`adopt_acknowledged` enables bounded automatic admission after restart. Configure
+`adopt_acknowledged` enables bounded automatic research admission after restart.
+This switch governs unfinished research, not delivery of a proved completed
+result: an existing sealed original archive can resume its already configured
+handoff in either mode, without source or research-model calls. Configure
 this policy **before** submitting the original jobs. Changing the service policy
 or collector recipe does not migrate existing jobs into a new run.
 
