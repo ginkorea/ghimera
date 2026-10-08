@@ -3,6 +3,7 @@
 from ghimera.config import GhimeraConfig
 from ghimera.graph import MemoryGraphSink, ResearchGraph
 from ghimera.models import Harvest, LedgerRow, RetainedOriginal
+from ghimera.visual_evidence import graph_visual_readings
 
 
 def validate_original(config: GhimeraConfig, item: RetainedOriginal) -> None:
@@ -97,6 +98,7 @@ def validate_harvest(harvest: Harvest) -> None:
             source_refresh=document.source_refresh,
             pdf_reading=reading.graph_reading() if reading else None,
             retained_source=origin,
+            visual_readings=graph_visual_readings(document.images),
         )
         actual = next(node for node in nodes if node.retained_source == origin)
         if actual != expected:

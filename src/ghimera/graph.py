@@ -9,6 +9,7 @@ import hashlib
 import os
 import re
 import tempfile
+from datetime import date
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -20,12 +21,20 @@ from ghimera.graph_types import (
     GraphConfig,
     GraphEdge,
     GraphEvidence,
+    GraphIdentityDecision,
     GraphNode,
     GraphPdfReading,
     GraphRetainedOrigin,
     GraphSnapshot,
+    GraphVisualReading,
+    VisualProjectionConfig,
 )
 from ghimera.human_browser_types import BrowserSourceEvidence
+from ghimera.identity_resolution import (
+    IdentityResolutionView,
+    resolve_identities,
+    validate_decisions,
+)
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.owned_worker import off_loop
 from ghimera.refusals import GhimeraRefused, RefusalCode
@@ -128,7 +137,12 @@ class DirectoryGraphSink:
         if not self._path.exists():
             return ()
         files = sorted(self._path.glob("*.json"))
-        if len(files) > self._config.max_nodes + self._config.max_edges:
+        decision_limit = (
+            self._config.identity_resolution.max_decisions
+            if self._config.identity_resolution
+            else 0
+        )
+        if len(files) > self._config.max_nodes + self._config.max_edges + decision_limit:
             raise GhimeraRefused(RefusalCode.GRAPH_SINK_FAILED)
         result: list[GraphBatch] = []
         for sequence, path in enumerate(files):
@@ -158,6 +172,7 @@ class ResearchGraph:
         self._nodes: dict[str, GraphNode] = {}
         self._edges: dict[str, GraphEdge] = {}
         self._checkpoint: GraphCheckpoint | None = None
+        self._identity_decisions: dict[str, GraphIdentityDecision] = {}
         self._lock = asyncio.Lock()
         self._started = False
         self._intent_id: str | None = None
@@ -165,6 +180,10 @@ class ResearchGraph:
     @property
     def config_digest(self) -> str:
         return self._config.content_digest()
+
+    @property
+    def visual_projection(self) -> VisualProjectionConfig | None:
+        return self._config.visual_projection
 
     @property
     def intent_id(self) -> str:
@@ -180,6 +199,12 @@ class ResearchGraph:
             nodes=tuple(self._nodes.values()),
             edges=tuple(self._edges.values()),
             checkpoint=self._checkpoint,
+            identity_decisions=tuple(self._identity_decisions.values()),
+        )
+
+    def identity_view(self, *, as_of: date | None = None) -> IdentityResolutionView:
+        return resolve_identities(
+            tuple(self._nodes.values()), tuple(self._identity_decisions.values()), as_of=as_of
         )
 
     def _identity(self, role: str, identity: str) -> str:
@@ -320,21 +345,39 @@ class ResearchGraph:
                     or doc.text is None
                     or doc.content_sha256 is None
                     or not evidence.matches_reading(
-                        doc.content_sha256, doc.text, pdf_reading=doc.pdf_reading
+                        doc.content_sha256,
+                        doc.text,
+                        pdf_reading=doc.pdf_reading,
+                        visual_readings=doc.visual_readings,
                     )
                 ):
                     raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
             edges[edge.id] = edge
+        try:
+            validate_decisions(
+                self._config.identity_resolution,
+                tuple(nodes.values()),
+                tuple(edges.values()),
+                tuple(self._identity_decisions.values()),
+                batch.identity_decisions,
+            )
+        except ValueError:
+            raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT) from None
         if len(nodes) > self._config.max_nodes or len(edges) > self._config.max_edges:
             raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
 
     def _apply(self, batch: GraphBatch) -> None:
         self._nodes.update((node.id, node) for node in batch.nodes)
         self._edges.update((edge.id, edge) for edge in batch.edges)
+        self._identity_decisions.update((item.id, item) for item in batch.identity_decisions)
         self._checkpoint = GraphCheckpoint(sequence=batch.sequence, digest=batch.content_digest())
 
     async def append(
-        self, *, nodes: tuple[GraphNode, ...] = (), edges: tuple[GraphEdge, ...] = ()
+        self,
+        *,
+        nodes: tuple[GraphNode, ...] = (),
+        edges: tuple[GraphEdge, ...] = (),
+        identity_decisions: tuple[GraphIdentityDecision, ...] = (),
     ) -> None:
         async with self._lock:
             if not self._started:
@@ -342,7 +385,10 @@ class ResearchGraph:
             # An identical observation is a no-op. Conflicting identity is refused.
             nodes = tuple(node for node in nodes if self._nodes.get(node.id) != node)
             edges = tuple(edge for edge in edges if self._edges.get(edge.id) != edge)
-            if not nodes and not edges:
+            identity_decisions = tuple(
+                item for item in identity_decisions if self._identity_decisions.get(item.id) != item
+            )
+            if not nodes and not edges and not identity_decisions:
                 return
             batch = GraphBatch(
                 schema="chimera.graph-batch/1",
@@ -352,6 +398,7 @@ class ResearchGraph:
                 previous_digest=self._checkpoint.digest if self._checkpoint else None,
                 nodes=nodes,
                 edges=edges,
+                identity_decisions=identity_decisions,
             )
             try:
                 self._validate_batch(batch)
@@ -378,6 +425,37 @@ class ResearchGraph:
             if cancelled:
                 raise asyncio.CancelledError
 
+    async def decide_identity(
+        self,
+        *,
+        operation: Literal["merge", "split", "retract"],
+        members: tuple[str, ...],
+        evidence: tuple[GraphEvidence, ...],
+        authority: str,
+        revision: str,
+        reason: str,
+        retracts: tuple[str, ...] = (),
+        valid_from: date | None = None,
+        valid_to: date | None = None,
+    ) -> GraphIdentityDecision:
+        decision = GraphIdentityDecision(
+            schema="ghimera.identity-decision/1",
+            id="resolution:" + "0" * 64,
+            operation=operation,
+            members=tuple(sorted(members)),
+            retracts=tuple(sorted(retracts)),
+            evidence=evidence,
+            authority=authority,
+            revision=revision,
+            reason=reason,
+            basis="human_reviewed",
+            valid_from=valid_from,
+            valid_to=valid_to,
+        )
+        decision = decision.model_copy(update={"id": "resolution:" + decision.content_digest()})
+        await self.append(identity_decisions=(decision,))
+        return decision
+
     async def discovered(self, url: str, parent_id: str) -> str:
         source = self.node("source", url, url, self._config.profile_version)
         edge = self.edge("discovered", source.id, parent_id, self._config.profile_version)
@@ -397,6 +475,7 @@ class ResearchGraph:
         pdf_reading: GraphPdfReading | None = None,
         retained_source: GraphRetainedOrigin | None = None,
         source_refresh: SourceRefreshUse | None = None,
+        visual_readings: tuple[GraphVisualReading, ...] = (),
     ) -> GraphNode:
         content_digest = hashlib.sha256(raw).hexdigest()
         text_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -410,6 +489,7 @@ class ResearchGraph:
             pdf_reading=pdf_reading,
             retained_source=retained_source,
             source_refresh=source_refresh,
+            visual_readings=visual_readings,
         )
         kind = next(role.kind for role in self._config.roles if role.name == "document")
         return GraphNode(
@@ -431,6 +511,7 @@ class ResearchGraph:
             pdf_reading=pdf_reading,
             retained_source=retained_source,
             source_refresh=source_refresh,
+            visual_readings=visual_readings,
         )
 
     async def document(
@@ -446,6 +527,7 @@ class ResearchGraph:
         pdf_reading: GraphPdfReading | None = None,
         retained_source: GraphRetainedOrigin | None = None,
         source_refresh: SourceRefreshUse | None = None,
+        visual_readings: tuple[GraphVisualReading, ...] = (),
     ) -> str:
         doc = self.document_node(
             url,
@@ -458,6 +540,7 @@ class ResearchGraph:
             pdf_reading=pdf_reading,
             retained_source=retained_source,
             source_refresh=source_refresh,
+            visual_readings=visual_readings,
         )
         source = self.node("source", url, url, self._config.profile_version)
         await self.append(

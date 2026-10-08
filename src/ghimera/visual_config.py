@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.model_config import ModelServiceConfig
+from ghimera.pdf_figure_config import PdfFigureConfig
 from ghimera.responsive_config import ResponsiveImageConfig
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
@@ -48,11 +49,18 @@ class VisualConfig(BaseModel):
     vision: ModelServiceConfig | None = None
     reviewer: ModelServiceConfig | None = None
     responsive: ResponsiveImageConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    pdf_figures: PdfFigureConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def coherent(self) -> "VisualConfig":
         if self.max_images_per_page > self.max_candidates_per_page:
             raise ValueError("image budget must fit candidate budget")
+        if self.pdf_figures is not None and (
+            self.pdf_figures.max_figures > self.max_images_per_page
+            or self.pdf_figures.max_crop_bytes > self.max_image_bytes
+            or self.pdf_figures.max_crop_pixels > self.max_pixels
+        ):
+            raise ValueError("PDF crop bounds must fit the existing visual image bounds")
         if self.min_width * self.min_height > self.max_pixels:
             raise ValueError("minimum dimensions must fit decoded pixel limit")
         if any(

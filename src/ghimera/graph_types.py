@@ -3,6 +3,7 @@
 import hashlib
 import json
 import tomllib
+from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -12,6 +13,7 @@ from ghimera.human_browser_types import BrowserSourceEvidence
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.source_refresh_types import SourceRefreshUse
 from ghimera.transport_types import TransportEvidence
+from ghimera.visual_types import ImageRegion
 
 Name = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]*$")]
 Text = Annotated[str, Field(min_length=1)]
@@ -50,6 +52,33 @@ class GraphRelation(GraphRecord):
     semantic: bool
 
 
+class IdentityResolutionConfig(GraphRecord):
+    schema_version: Literal["ghimera.identity-resolution/1"] = Field(alias="schema")
+    roles: Annotated[tuple[Name, ...], Field(min_length=1)]
+    max_decisions: Positive
+    max_members_per_decision: Annotated[int, Field(strict=True, ge=2)]
+    max_evidence_per_decision: Positive
+    max_reason_chars: Positive
+
+    @model_validator(mode="after")
+    def distinct(self) -> "IdentityResolutionConfig":
+        if len(set(self.roles)) != len(self.roles) or set(self.roles) & {
+            "intent",
+            "source",
+            "document",
+        }:
+            raise ValueError("resolution requires distinct source-local entity roles")
+        return self
+
+
+class VisualProjectionConfig(GraphRecord):
+    schema_version: Literal["ghimera.visual-projection/1"] = Field(alias="schema")
+    observation_role: Name
+    evidence_rule: Name
+    max_spans_per_image: Positive
+    max_reading_chars: Positive
+
+
 class GraphConfig(GraphRecord):
     schema_version: Literal["chimera.graph-config/1"] = Field(alias="schema")
     enabled: bool
@@ -68,6 +97,12 @@ class GraphConfig(GraphRecord):
     handling_labels: tuple[Text, ...]
     roles: Annotated[tuple[GraphRole, ...], Field(min_length=1)]
     relations: tuple[GraphRelation, ...]
+    identity_resolution: IdentityResolutionConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    visual_projection: VisualProjectionConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @classmethod
     def from_toml(cls, path: Path) -> "GraphConfig":
@@ -77,6 +112,11 @@ class GraphConfig(GraphRecord):
     @model_validator(mode="after")
     def coherent(self) -> "GraphConfig":
         roles = {role.name for role in self.roles}
+        if (
+            self.identity_resolution is not None
+            and not set(self.identity_resolution.roles) <= roles
+        ):
+            raise ValueError("identity resolution names an unknown graph role")
         if len(roles) != len(self.roles) or not {"intent", "source", "document"} <= roles:
             raise ValueError("graph requires unique intent/source/document roles")
         names = {relation.name for relation in self.relations}
@@ -96,6 +136,22 @@ class GraphConfig(GraphRecord):
                 "document" not in relation.source_roles or "source" not in relation.target_roles
             ):
                 raise ValueError("retrieved rule must support document to source")
+        if self.visual_projection is not None:
+            visual = self.visual_projection
+            rule = next(
+                (item for item in self.relations if item.name == visual.evidence_rule), None
+            )
+            if (
+                visual.observation_role in {"intent", "source", "document"}
+                or visual.observation_role not in roles
+                or rule is None
+                or rule.semantic
+                or "document" not in rule.source_roles
+                or visual.observation_role not in rule.target_roles
+            ):
+                raise ValueError(
+                    "visual projection requires an explicit observation role and trace rule"
+                )
         if not self.sink_path.is_absolute():
             raise ValueError("graph sink path must be explicit and absolute")
         if not self.identity_namespace.strip() or not self.profile_version.strip():
@@ -168,6 +224,57 @@ class GraphRetainedOrigin(GraphRecord):
     source_age: Literal["unknown"] = "unknown"
 
 
+class GraphVisualSpan(GraphRecord):
+    start: Count
+    end: Positive
+    quote: Text
+    basis: Literal["image_ocr", "reviewed_visual_claim"]
+    regions: Annotated[tuple[ImageRegion, ...], Field(min_length=1)]
+
+
+class GraphVisualReading(GraphRecord):
+    """Compact derived reading; geometry and model references stay source-bound."""
+
+    schema_version: Literal["ghimera.graph-visual-reading/1"] = Field(alias="schema")
+    image_sha256: Digest
+    parent_sha256: Digest
+    parent_url: Text
+    source_url: Text
+    config_sha256: Digest
+    ocr_sha256: Digest
+    interpretation_sha256: Digest | None
+    text: Text
+    spans: Annotated[tuple[GraphVisualSpan, ...], Field(min_length=1)]
+    pdf_page_index: Count | None = Field(default=None, exclude_if=lambda v: v is None)
+    pdf_region: ImageRegion | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @model_validator(mode="after")
+    def bound(self) -> "GraphVisualReading":
+        cursor = 0
+        for span in self.spans:
+            if (
+                span.start != cursor
+                or span.end != span.start + len(span.quote)
+                or self.text[span.start : span.end] != span.quote
+                or (cursor and self.text[cursor - 2 : cursor] != "\n\n")
+                or (span.basis == "reviewed_visual_claim" and self.interpretation_sha256 is None)
+            ):
+                raise ValueError("visual spans require exact ordered derived text and review")
+            cursor = span.end + 2
+        if cursor - 2 != len(self.text) or (self.pdf_page_index is None) != (
+            self.pdf_region is None
+        ):
+            raise ValueError("visual reading requires complete text and paired PDF crop anchors")
+        return self
+
+
+class GraphVisualAnchor(GraphRecord):
+    reading_sha256: Digest
+    image_sha256: Digest
+    span_index: Count
+    regions: Annotated[tuple[ImageRegion, ...], Field(min_length=1)]
+
+
 class GraphNode(GraphRecord):
     id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]*:[0-9a-f]{64}$")]
     role: Name
@@ -194,6 +301,7 @@ class GraphNode(GraphRecord):
     retained_source: GraphRetainedOrigin | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    visual_readings: tuple[GraphVisualReading, ...] = Field(default=(), exclude_if=lambda v: not v)
 
     @staticmethod
     def document_identity(
@@ -206,6 +314,7 @@ class GraphNode(GraphRecord):
         pdf_reading: GraphPdfReading | None = None,
         retained_source: GraphRetainedOrigin | None = None,
         source_refresh: SourceRefreshUse | None = None,
+        visual_readings: tuple[GraphVisualReading, ...] = (),
     ) -> str:
         identity = f"{len(source_url)}:{source_url}:{content_sha256}:{text_sha256}:{revision}"
         if human_browser is not None:
@@ -216,10 +325,34 @@ class GraphNode(GraphRecord):
             identity += f":{retained_source.content_digest()}"
         if source_refresh is not None:
             identity += f":{hashlib.sha256(source_refresh.model_dump_json().encode()).hexdigest()}"
+        if visual_readings:
+            identity += ":visual:" + ":".join(item.content_digest() for item in visual_readings)
         return identity
 
     @model_validator(mode="after")
     def content_bound(self) -> "GraphNode":
+        if self.visual_readings and (
+            self.role != "document"
+            or len({item.image_sha256 for item in self.visual_readings})
+            != len(self.visual_readings)
+            or any(
+                item.parent_sha256 != self.content_sha256 or item.parent_url != self.source_url
+                for item in self.visual_readings
+            )
+            or self.identity
+            != self.document_identity(
+                self.source_url or "",
+                self.content_sha256 or "",
+                self.text_sha256 or "",
+                self.revision,
+                human_browser=self.human_browser,
+                pdf_reading=self.pdf_reading,
+                retained_source=self.retained_source,
+                source_refresh=self.source_refresh,
+                visual_readings=self.visual_readings,
+            )
+        ):
+            raise ValueError("visual graph readings require their exact parent representation")
         if self.source_refresh is not None and (
             self.role != "document"
             or self.source_url != self.source_refresh.source_url
@@ -236,6 +369,7 @@ class GraphNode(GraphRecord):
                 pdf_reading=self.pdf_reading,
                 retained_source=self.retained_source,
                 source_refresh=self.source_refresh,
+                visual_readings=self.visual_readings,
             )
         ):
             raise ValueError("refreshed graph documents require their exact reuse representation")
@@ -272,6 +406,7 @@ class GraphNode(GraphRecord):
                     pdf_reading=self.pdf_reading,
                     retained_source=self.retained_source,
                     source_refresh=self.source_refresh,
+                    visual_readings=self.visual_readings,
                 ):
                     raise ValueError(
                         "graph PDF reading must bind its exact representation identity"
@@ -292,6 +427,7 @@ class GraphNode(GraphRecord):
                 pdf_reading=self.pdf_reading,
                 retained_source=self.retained_source,
                 source_refresh=self.source_refresh,
+                visual_readings=self.visual_readings,
             )
         ):
             raise ValueError("retained graph origin must bind its document representation")
@@ -305,11 +441,36 @@ class GraphEvidence(GraphRecord):
     start: Count
     end: Positive
     quote: Text
-    basis: Literal["native", "reviewed_pdf_transcription"] = Field(
-        default="native", exclude_if=lambda v: v == "native"
+    basis: Literal["native", "reviewed_pdf_transcription", "image_ocr", "reviewed_visual_claim"] = (
+        Field(default="native", exclude_if=lambda v: v == "native")
     )
     page_indices: tuple[Count, ...] = Field(default=(), exclude_if=lambda v: not v)
     reading_sha256: Digest | None = Field(default=None, exclude_if=lambda v: v is None)
+    visual_anchor: GraphVisualAnchor | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @classmethod
+    def from_visual(
+        cls, document_id: str, reading: GraphVisualReading, span_index: int
+    ) -> "GraphEvidence":
+        if not 0 <= span_index < len(reading.spans):
+            raise ValueError("visual span is outside the retained reading")
+        span = reading.spans[span_index]
+        return cls(
+            document_id=document_id,
+            document_sha256=reading.parent_sha256,
+            text_sha256=hashlib.sha256(reading.text.encode()).hexdigest(),
+            start=span.start,
+            end=span.end,
+            quote=span.quote,
+            basis=span.basis,
+            page_indices=(reading.pdf_page_index,) if reading.pdf_page_index is not None else (),
+            visual_anchor=GraphVisualAnchor(
+                reading_sha256=reading.content_digest(),
+                image_sha256=reading.image_sha256,
+                span_index=span_index,
+                regions=span.regions,
+            ),
+        )
 
     @classmethod
     def from_reading(
@@ -346,7 +507,25 @@ class GraphEvidence(GraphRecord):
         text: str,
         *,
         pdf_reading: GraphPdfReading | None = None,
+        visual_readings: tuple[GraphVisualReading, ...] = (),
     ) -> bool:
+        if self.visual_anchor is not None:
+            reading = next(
+                (
+                    item
+                    for item in visual_readings
+                    if item.content_digest() == self.visual_anchor.reading_sha256
+                ),
+                None,
+            )
+            if reading is None or reading.parent_sha256 != document_sha256:
+                return False
+            try:
+                return self == self.from_visual(
+                    self.document_id, reading, self.visual_anchor.span_index
+                )
+            except ValueError:
+                return False
         try:
             expected = self.from_reading(
                 self.document_id,
@@ -365,12 +544,66 @@ class GraphEvidence(GraphRecord):
         if self.end <= self.start:
             raise ValueError("evidence span must be nonempty")
         reviewed = self.basis == "reviewed_pdf_transcription"
+        visual = self.basis in {"image_ocr", "reviewed_visual_claim"}
+        if visual:
+            if (
+                self.visual_anchor is None
+                or self.reading_sha256 is not None
+                or len(self.page_indices) > 1
+            ):
+                raise ValueError(
+                    "visual evidence requires geometry rather than native reading offsets"
+                )
+            return self
         if (
             reviewed != bool(self.page_indices)
             or reviewed != (self.reading_sha256 is not None)
             or tuple(sorted(set(self.page_indices))) != self.page_indices
+            or self.visual_anchor is not None
         ):
             raise ValueError("graph evidence must distinguish native and reviewed page readings")
+        return self
+
+
+class GraphIdentityDecision(GraphRecord):
+    """Append-only reviewed identity decision, never destructive source-node replacement."""
+
+    schema_version: Literal["ghimera.identity-decision/1"] = Field(alias="schema")
+
+    id: Annotated[str, Field(pattern=r"^resolution:[0-9a-f]{64}$")]
+    operation: Literal["merge", "split", "retract"]
+    members: tuple[Text, ...]
+    retracts: tuple[Text, ...]
+    evidence: Annotated[tuple[GraphEvidence, ...], Field(min_length=1)]
+    authority: Text
+    revision: Text
+    reason: Text
+    basis: Literal["human_reviewed"]
+    valid_from: date | None
+    valid_to: date | None
+
+    @model_validator(mode="after")
+    def coherent(self) -> "GraphIdentityDecision":
+        if (
+            len(set(self.members)) != len(self.members)
+            or len(set(self.retracts)) != len(self.retracts)
+            or len({e.content_digest() for e in self.evidence}) != len(self.evidence)
+            or (self.operation != "retract" and len(self.members) < 2)
+            or (self.operation == "retract" and (self.members or not self.retracts))
+            or (
+                self.operation == "retract"
+                and (self.valid_from is not None or self.valid_to is not None)
+            )
+            or (
+                self.valid_from is not None
+                and self.valid_to is not None
+                and self.valid_from > self.valid_to
+            )
+            or not all(value.strip() for value in (self.authority, self.revision, self.reason))
+        ):
+            raise ValueError(
+                "identity decisions require distinct members, evidence and valid dates"
+            )
         return self
 
 
@@ -409,10 +642,13 @@ class GraphBatch(GraphRecord):
     previous_digest: Digest | None
     nodes: tuple[GraphNode, ...]
     edges: tuple[GraphEdge, ...]
+    identity_decisions: tuple[GraphIdentityDecision, ...] = Field(
+        default=(), exclude_if=lambda v: not v
+    )
 
     @model_validator(mode="after")
     def nonempty(self) -> "GraphBatch":
-        if not self.nodes and not self.edges:
+        if not self.nodes and not self.edges and not self.identity_decisions:
             raise ValueError("empty graph batch")
         if (self.sequence == 0) != (self.previous_digest is None):
             raise ValueError("first graph batch alone has no predecessor")
@@ -431,3 +667,6 @@ class GraphSnapshot(GraphRecord):
     nodes: tuple[GraphNode, ...]
     edges: tuple[GraphEdge, ...]
     checkpoint: GraphCheckpoint | None
+    identity_decisions: tuple[GraphIdentityDecision, ...] = Field(
+        default=(), exclude_if=lambda v: not v
+    )

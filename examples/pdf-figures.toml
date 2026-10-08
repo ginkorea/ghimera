@@ -1,0 +1,28 @@
+# Non-active VisualConfig.pdf_figures section. Match the enclosing visual limits.
+# Terms admit native caption evidence; unknown/uncaptioned regions remain gaps.
+schema = "ghimera.pdf-figures/1"
+max_candidates = 100
+max_figures = 4
+max_layout_bytes = 8388608
+max_crop_pixels = 4000000
+max_crop_bytes = 1048576
+candidate_terms = ["chart", "diagram", "organization", "組織", "组织", "port"]
+excluded_terms = ["logo", "icon", "watermark"]
+
+[renderer]
+schema = "ghimera.page-render/1"
+worker_python = "/path/to/owned/pdf-render-venv/bin/python"
+work_directory = "/path/to/owned/pdf-figure-scratch"
+renderer_package_version = "5.14.0"
+image_package_version = "12.3.0"
+scale = 2.0
+max_input_bytes = 16777216
+max_pages = 50
+max_pixels_per_page = 16000000
+max_image_bytes = 4194304
+max_total_image_bytes = 67108864
+max_workers = 2
+timeout_seconds = 90.0
+cleanup_timeout_seconds = 5.0
+max_output_bytes = 100663296
+max_diagnostic_bytes = 65536

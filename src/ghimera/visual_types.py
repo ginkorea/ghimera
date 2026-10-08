@@ -1,5 +1,7 @@
 """Visual evidence is not native page text or an unreviewed diagram claim."""
 
+from __future__ import annotations
+
 import hashlib
 from typing import Annotated, Literal
 
@@ -37,7 +39,7 @@ class ResponsiveSelection(VisualRecord):
     omissions: tuple[str, ...]
 
     @model_validator(mode="after")
-    def descriptor(self) -> "ResponsiveSelection":
+    def descriptor(self) -> ResponsiveSelection:
         if self.width is not None and self.density is not None:
             raise ValueError("one source cannot claim both width and density descriptors")
         if self.attribute in {"src", "data-src"} and any(
@@ -57,9 +59,16 @@ class ImageCandidate(VisualRecord):
     declared_width: Annotated[int, Field(strict=True, ge=0)] | None
     declared_height: Annotated[int, Field(strict=True, ge=0)] | None
     responsive: ResponsiveSelection | None = Field(default=None, exclude_if=lambda v: v is None)
+    pdf_crop: PdfFigureAnchor | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
-    def selected_url(self) -> "ImageCandidate":
+    def selected_url(self) -> ImageCandidate:
+        if self.pdf_crop is not None and (
+            self.pdf_crop.source_sha256 != self.parent_sha256
+            or self.responsive is not None
+            or self.url != self.parent_url + "#ghimera-figure=" + str(self.element_index)
+        ):
+            raise ValueError("PDF figure candidates require exact source and figure locator")
         if self.responsive is not None:
             from ghimera.responsive_images import safe_image_url
 
@@ -77,10 +86,21 @@ class ImageRegion(VisualRecord):
     bottom: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 
     @model_validator(mode="after")
-    def ordered(self) -> "ImageRegion":
+    def ordered(self) -> ImageRegion:
         if self.left >= self.right or self.top >= self.bottom:
             raise ValueError("region must have positive area")
         return self
+
+
+class PdfFigureAnchor(VisualRecord):
+    schema_version: Literal["ghimera.pdf-figure-anchor/1"] = Field(alias="schema")
+    source_sha256: Digest
+    layout_sha256: Digest
+    page_index: Annotated[int, Field(strict=True, ge=0)]
+    region: ImageRegion
+    page_image_sha256: Digest
+    render_policy_sha256: Digest
+    crop_policy_sha256: Digest
 
 
 class OcrSpan(VisualRecord):
@@ -135,7 +155,7 @@ class ImageEvidence(VisualRecord):
     relevance_reason: str
 
     @model_validator(mode="after")
-    def bound(self) -> "ImageEvidence":
+    def bound(self) -> ImageEvidence:
         if (
             self.sha256 != hashlib.sha256(self.raw).hexdigest()
             or self.ocr.image_sha256 != self.sha256
@@ -146,3 +166,6 @@ class ImageEvidence(VisualRecord):
         ):
             raise ValueError("only relevant, reviewed interpretations may be retained")
         return self
+
+
+ImageCandidate.model_rebuild()

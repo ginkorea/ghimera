@@ -1,0 +1,7 @@
+# Non-active GraphConfig.visual_projection section. Declare this observation
+# role and a nonsemantic document->visual_observation rule in the graph ontology.
+schema = "ghimera.visual-projection/1"
+observation_role = "visual_observation"
+evidence_rule = "visual_evidence"
+max_spans_per_image = 1000
+max_reading_chars = 20000

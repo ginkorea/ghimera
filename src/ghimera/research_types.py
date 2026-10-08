@@ -14,6 +14,7 @@ from ghimera.corpus_search_wire import CorpusSearchWire
 from ghimera.corpus_types import BoundCorpusDocument
 from ghimera.discovery_config import DiscoveryProgress
 from ghimera.graph_planning_types import PlanningGraph
+from ghimera.graph_types import GraphVisualAnchor
 from ghimera.local_input_types import LocalDocumentSeed
 from ghimera.model_types import ModelCallEvidence
 from ghimera.models import Document, Harvest, ModelIdentity, Record
@@ -86,10 +87,42 @@ class Citation(ResearchRecord):
     start: Index
     end: Annotated[int, Field(strict=True, gt=0)]
     quote: Text
-    basis: Literal["native", "reviewed_pdf_transcription"] = Field(
-        default="native", exclude_if=lambda value: value == "native"
+    basis: Literal["native", "reviewed_pdf_transcription", "image_ocr", "reviewed_visual_claim"] = (
+        Field(default="native", exclude_if=lambda value: value == "native")
     )
     page_indices: tuple[Index, ...] = Field(default=(), exclude_if=lambda value: not value)
+    visual_anchor: GraphVisualAnchor | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @classmethod
+    def from_image(cls, document: Document, image_index: int, span_index: int) -> "Citation":
+        from ghimera.graph_types import GraphEvidence
+        from ghimera.visual_evidence import image_reading
+
+        if not 0 <= image_index < len(document.images):
+            raise ValueError("image citation requires a retained original")
+        image = document.images[image_index]
+        if (
+            hashlib.sha256(document.raw).hexdigest() != document.sha256
+            or image.candidate.parent_url != document.url
+            or image.candidate.parent_sha256 != document.sha256
+        ):
+            raise ValueError("image citation must bind its exact retained parent source")
+        reading = image_reading(image)
+        if reading is None:
+            raise ValueError("image has no accepted derived reading")
+        evidence = GraphEvidence.from_visual("doc:" + document.sha256, reading, span_index)
+        return cls(
+            document_id=evidence.document_id,
+            source_url=document.url,
+            document_sha256=document.sha256,
+            text_sha256=evidence.text_sha256,
+            start=evidence.start,
+            end=evidence.end,
+            quote=evidence.quote,
+            basis=evidence.basis,
+            page_indices=evidence.page_indices,
+            visual_anchor=evidence.visual_anchor,
+        )
 
     @classmethod
     def from_document(cls, document: Document, start: int, end: int) -> "Citation":
@@ -111,9 +144,24 @@ class Citation(ResearchRecord):
     def nonempty(self) -> "Citation":
         if self.end <= self.start:
             raise ValueError("citation needs a nonempty character span")
+        if (self.basis in {"image_ocr", "reviewed_visual_claim"}) != (
+            self.visual_anchor is not None
+        ):
+            raise ValueError("visual citations require retained image-region anchors")
         return self
 
     def matches(self, document: Document) -> bool:
+        if self.visual_anchor is not None:
+            for image_index, image in enumerate(document.images):
+                if image.sha256 != self.visual_anchor.image_sha256:
+                    continue
+                try:
+                    return self == self.from_image(
+                        document, image_index, self.visual_anchor.span_index
+                    )
+                except ValueError:
+                    return False
+            return False
         text = document.extracted.text
         transcription = document.extracted.pdf_transcription
         return (

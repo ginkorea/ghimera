@@ -28,6 +28,7 @@ from ghimera.models import Document, LedgerRow
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.semantic_grounding import validate_coverage_findings
 from ghimera.semantic_types import BatchedSemanticReview, GroundedSemanticReview, OmittedMention
+from ghimera.visual_evidence import graph_visual_readings
 
 
 class Population(GraphRecord):
@@ -321,6 +322,7 @@ def validate_context(
                 pdf_reading=doc.extracted.pdf_transcription.graph_reading()
                 if doc.extracted.pdf_transcription is not None
                 else None,
+                visual_readings=graph_visual_readings(doc.images),
             )
             for doc in docs[span.document_id]
         ):

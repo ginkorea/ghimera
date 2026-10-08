@@ -1,0 +1,8 @@
+# Non-active GraphConfig.identity_resolution section. Human review is explicit;
+# names, semantic scores and lexical/vector similarity never authorize merging.
+schema = "ghimera.identity-resolution/1"
+roles = ["organization", "person", "office"]
+max_decisions = 1000
+max_members_per_decision = 20
+max_evidence_per_decision = 20
+max_reason_chars = 4096

@@ -12,6 +12,7 @@ from ghimera.model_config import EvidenceContextConfig
 from ghimera.models import Document, Record
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_types import Citation
+from ghimera.visual_evidence import image_reading
 
 
 class ContextWindow(Record):
@@ -37,6 +38,9 @@ class ContextDocument(Record):
     text_chars: int
     selected_chars: int
     omitted_chars: int
+    visual_chars: int = Field(default=0, exclude_if=lambda v: v == 0)
+    selected_visual_chars: int = Field(default=0, exclude_if=lambda v: v == 0)
+    omitted_visual_chars: int = Field(default=0, exclude_if=lambda v: v == 0)
 
 
 class ContextOmission(Record):
@@ -78,7 +82,11 @@ class ContextSelector:
             if doc is None:
                 raise GhimeraRefused(RefusalCode.UNSUPPORTED_ANSWER)
             identity = BoundCorpusDocument(doc).identity
-            key = (identity, citation.start, citation.end)
+            # Derived readings have their own offset space; native and each image never collide.
+            reading_id = (
+                ":" + citation.visual_anchor.reading_sha256 if citation.visual_anchor else ""
+            )
+            key = (identity + reading_id, citation.start, citation.end)
             if key in windows:
                 continue
             if used + len(citation.quote) > self._policy.max_chars:
@@ -98,6 +106,44 @@ class ContextSelector:
             if identity not in chosen and len(chosen) >= self._policy.max_documents:
                 continue
             text = doc.extracted.text
+            # Rank visual observations alongside native windows under the same explicit limits.
+            visual_candidates = [
+                Citation.from_image(doc, image_index, span_index)
+                for image_index, image in enumerate(doc.images)
+                if (reading := image_reading(image)) is not None
+                for span_index in range(len(reading.spans))
+            ]
+            visual_candidates.sort(
+                key=lambda citation: (
+                    -sum(
+                        bool(re.search(re.escape(term), citation.quote, re.IGNORECASE))
+                        for term in terms
+                    ),
+                    citation.basis != "reviewed_visual_claim",
+                    citation_id(citation),
+                )
+            )
+            for citation in visual_candidates:
+                if citation.visual_anchor is None:
+                    raise ValueError("visual context lost its region anchor")
+                key = (
+                    identity + ":" + citation.visual_anchor.reading_sha256,
+                    citation.start,
+                    citation.end,
+                )
+                if key in windows:
+                    continue
+                count = sum(
+                    key[0] == identity or key[0].startswith(identity + ":") for key in windows
+                )
+                if (
+                    count >= self._policy.max_windows_per_document
+                    or used + len(citation.quote) > self._policy.max_chars
+                ):
+                    break
+                windows[key] = ContextWindow.from_citation(citation)
+                chosen[identity] = doc
+                used += len(citation.quote)
             starts = {0}
             for term in terms:
                 for hit in re.finditer(re.escape(term), text, re.IGNORECASE):
@@ -120,7 +166,9 @@ class ContextSelector:
                 ),
             )
             for start in ranked:
-                count = sum(key[0] == identity for key in windows)
+                count = sum(
+                    key[0] == identity or key[0].startswith(identity + ":") for key in windows
+                )
                 if count >= self._policy.max_windows_per_document:
                     break
                 room = self._policy.max_chars - used
@@ -156,6 +204,27 @@ class ContextSelector:
                     text_chars=len(doc.extracted.text),
                     selected_chars=covered,
                     omitted_chars=len(doc.extracted.text) - covered,
+                    visual_chars=sum(
+                        len(reading.text)
+                        for image in doc.images
+                        if (reading := image_reading(image)) is not None
+                    ),
+                    selected_visual_chars=sum(
+                        len(window.citation.quote)
+                        for key, window in windows.items()
+                        if key[0].startswith(identity + ":")
+                    ),
+                    omitted_visual_chars=sum(
+                        len(span.quote)
+                        for image in doc.images
+                        if (reading := image_reading(image)) is not None
+                        for span in reading.spans
+                    )
+                    - sum(
+                        len(window.citation.quote)
+                        for key, window in windows.items()
+                        if key[0].startswith(identity + ":")
+                    ),
                 )
             )
         return EvidenceContext(
