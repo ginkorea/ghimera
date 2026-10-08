@@ -1250,66 +1250,104 @@ class GoalLoop:
         ):
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         with session.operation():
-            document = original.document
-            reading = document.extracted.pdf_transcription
-            document_id = await graph.document(
-                document.url,
-                document.raw,
-                document.extracted.text,
-                original.revision,
-                transport=document.transport,
-                local_input=document.local_input,
-                human_browser=document.human_browser,
-                pdf_reading=reading.graph_reading() if reading else None,
+            work, token = session.source_work, None
+            if work is not None:
+                token = work.capture_retained(original, session.ledger.next_sequence)
+                work.processing(token)
+            try:
+                await self._project_retained(session, original)
+            except (GhimeraRefused, TimeoutError, asyncio.CancelledError) as exc:
+                code = (
+                    exc.code
+                    if isinstance(exc, GhimeraRefused)
+                    else RefusalCode.BUDGET_EXHAUSTED
+                    if isinstance(exc, TimeoutError)
+                    else RefusalCode.SEMANTIC_EXTRACTION_FAILED
+                )
+                if (
+                    work is not None
+                    and token is not None
+                    and key in session._retained_sources
+                    and code not in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}
+                ):
+                    work.refused(
+                        token,
+                        code.value,
+                        session.ledger.next_sequence,
+                        cancelled=isinstance(exc, asyncio.CancelledError),
+                    )
+                # A lost graph admission/projection acknowledgement remains unresolved.
+                raise
+            if work is not None and token is not None:
+                work.completed_retained(token, session.ledger.next_sequence)
+
+    async def _project_retained(
+        self, session: CollectionSession, original: RetainedOriginal
+    ) -> None:
+        """Current graph/model work only; the historical capsule keeps its own calls."""
+        graph = session.graph
+        if graph is None:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        document = original.document
+        reading = document.extracted.pdf_transcription
+        document_id = await graph.document(
+            document.url,
+            document.raw,
+            document.extracted.text,
+            original.revision,
+            transport=document.transport,
+            local_input=document.local_input,
+            human_browser=document.human_browser,
+            pdf_reading=reading.graph_reading() if reading else None,
+            retained_source=original.origin,
+        )
+        session.ledger.append(
+            LedgerRow(
+                sequence=session.ledger.next_sequence,
+                event="retained_source",
+                url=document.url,
+                reason="retained_original_admitted",
                 retained_source=original.origin,
             )
-            session.ledger.append(
-                LedgerRow(
-                    sequence=session.ledger.next_sequence,
-                    event="retained_source",
-                    url=document.url,
-                    reason="retained_original_admitted",
-                    retained_source=original.origin,
+        )
+        session._retained_sources[original.origin.document_sha256] = original
+        if self._semantics is not None:
+            lock = session._semantic_locks.setdefault(document_id, asyncio.Lock())
+            try:
+                async with asyncio.timeout(session.budget.remaining_seconds), lock:
+                    if document_id not in session._semantic_sources:
+                        async with session._slots.slot("semantic"):
+                            await self._semantics.extract(
+                                session.goal.text,
+                                document,
+                                document_id,
+                                graph,
+                                session.budget,
+                                session.ledger,
+                                record_terminal_refusal=True,
+                            )
+                        session._semantic_sources.add(document_id)
+            except (GhimeraRefused, TimeoutError, asyncio.CancelledError) as exc:
+                code = (
+                    exc.code
+                    if isinstance(exc, GhimeraRefused)
+                    else RefusalCode.BUDGET_EXHAUSTED
+                    if isinstance(exc, TimeoutError)
+                    else RefusalCode.SEMANTIC_EXTRACTION_FAILED
                 )
-            )
-            session._retained_sources[key] = original
-            if self._semantics is not None:
-                lock = session._semantic_locks.setdefault(document_id, asyncio.Lock())
-                try:
-                    async with asyncio.timeout(session.budget.remaining_seconds), lock:
-                        if document_id not in session._semantic_sources:
-                            async with session._slots.slot("semantic"):
-                                await self._semantics.extract(
-                                    session.goal.text,
-                                    document,
-                                    document_id,
-                                    graph,
-                                    session.budget,
-                                    session.ledger,
-                                    record_terminal_refusal=True,
-                                )
-                            session._semantic_sources.add(document_id)
-                except (GhimeraRefused, TimeoutError, asyncio.CancelledError) as exc:
-                    code = (
-                        exc.code
-                        if isinstance(exc, GhimeraRefused)
-                        else RefusalCode.BUDGET_EXHAUSTED
-                        if isinstance(exc, TimeoutError)
-                        else RefusalCode.SEMANTIC_EXTRACTION_FAILED
+                session.ledger.append(
+                    LedgerRow(
+                        sequence=session.ledger.next_sequence,
+                        event="refusal",
+                        url=document.url,
+                        refusal=code,
+                        reason="retained_semantics_refused",
+                        retained_failure=original.origin,
                     )
-                    session.ledger.append(
-                        LedgerRow(
-                            sequence=session.ledger.next_sequence,
-                            event="refusal",
-                            url=document.url,
-                            refusal=code,
-                            reason="retained_semantics_refused",
-                            retained_failure=original.origin,
-                        )
-                    )
-                    if isinstance(exc, TimeoutError):
-                        raise GhimeraRefused(code) from None
-                    raise
+                )
+                if isinstance(exc, TimeoutError):
+                    raise GhimeraRefused(code) from None
+                raise
 
     def finish(self, session: CollectionSession, stop: StopReason) -> Harvest:
         if session._closed or session._operating or session.budget.config != self._config:

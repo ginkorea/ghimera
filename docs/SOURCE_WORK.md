@@ -1,6 +1,6 @@
 # Durable source-operation evidence
 
-This candidate adds durable capture to the existing web collector, not another
+This candidate adds durable capture to the existing collector, not another
 crawler or a claim that arbitrary interrupted research can already resume.
 
 Append `examples/source-work.toml` to a collector configuration that already has
@@ -104,9 +104,9 @@ refetch; writer exclusion; capacity refusal; recipe/digest/symlink/journal
 mutation; and bounded CLI output. Fixtures test recovery contracts, not real
 language or model accuracy. Full release acceptance is still required.
 
-I03 remains open: the queued frontier and local-import candidates below still need release
-acceptance; integrate explicit uncertain model/graph reconciliation and reservation accounting,
-cover retained-source operations, and reconstruct a
+I03 remains open: these candidates still need release acceptance; integrate
+explicit uncertain model/graph reconciliation and reservation accounting,
+cover pending local batches and retained-reader control state, and reconstruct a
 whole resumed collection/research session without losing queued links or
 inventing exact unknown spend. This web-operation capture is a necessary part
 of that path, not an automatic replay engine or a replacement for I12's
@@ -140,7 +140,7 @@ No queued or unresolved item is automatically refetched or replayed by inspectio
 
 This candidate closes capture of queued web intents, not the full I03: interrupted
 whole-session adoption still needs explicit uncertain model/graph reconciliation,
-budget reservations, retained operation coverage and durable research
+budget reservations, pending local batches and durable research
 control state. It is not yet a published release or real model-quality acceptance.
 
 ## Owned local document capture candidate
@@ -173,3 +173,37 @@ whole local seed batch and research control state are not yet durable pending
 frontiers, and resuming an interrupted operation still requires explicit
 reconciliation. No OCR or semantic-language quality claim follows from capturing
 a pinned PDF correctly.
+
+## Retained-original admission candidate
+
+A retained corpus read produces a `RetainedOriginal`: its exact historical
+`Document`, corpus/configuration/generation/bundle origin, and the current query
+and encoding-call evidence. When source work is configured, admission commits
+that capsule before any current graph projection or semantic model work. It
+shares the native database, writer lease, operation sequence and reservation
+limits. It does not manufacture a `Page`, HTTP response, fresh fetch or local
+file read. The explicit `ghimera.retained-source-operation/1` discriminator keeps
+historical admission distinct from `ghimera.source-operation/1` acquisition.
+
+The operation starts at `acquired`, with a local admission observation time,
+then moves through `processing` to `processed` or an acknowledged refusal or
+cancellation. A lost graph acknowledgement leaves the operation unresolved,
+with its original still inspectable. Completion acknowledges only the current
+projection; the old document is neither re-extracted nor silently judged under
+a new recipe. Existing OCR/model/transport evidence stays in the capsule. Only
+actual current calls enter this run's native spend ledger. Admitting the same
+exact original twice in one session does not duplicate projection or calls.
+
+`max_page_bytes` bounds the complete serialized retained capsule, including its
+provenance, not merely the historical raw bytes. An active admission reserves
+the same full envelope capacity before current graph/model side effects. The
+already-completed corpus query/read/encoding precedes this boundary: this
+candidate does **not** durably reserve or reconcile those upstream operations.
+That remaining research-control requirement must not be described as solved by
+capturing an already-read original.
+
+Acceptance witnesses cover native and reviewed-PDF historical evidence, actual
+SQLite/FAISS retrieval, fresh-process inspection, capacity refusal before
+projection, and process termination before/after graph acknowledgement and a
+completed journal prefix. Model responses in these witnesses are protocol
+fixtures, not Chinese OCR or organization-extraction quality measurements.
