@@ -496,7 +496,11 @@ class SelfHostedModel:
         ):
             raise ValueError("model service differs from the recorded role bindings")
         self._config, self._service = config, service
-        self._http = http or PinnedModelHttp(service, credential=credential, resolver=resolver)
+        self._http = (
+            http
+            if http is not None
+            else PinnedModelHttp(service, credential=credential, resolver=resolver)
+        )
         if self._http.config != service:
             raise ValueError("model transport must share the exact service policy")
         if http is not None and credential is not None:

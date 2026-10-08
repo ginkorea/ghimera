@@ -38,13 +38,21 @@ class RecordingHttp:
         return await self.delegate.post(body)
 
 
+class FalseyRecordingHttp(RecordingHttp):
+    def __bool__(self) -> bool:
+        return False
+
+
+@pytest.mark.parametrize(
+    "http_type", [RecordingHttp, FalseyRecordingHttp], ids=["ordinary", "falsey"]
+)
 def test_public_collector_dispatches_all_roles_through_exact_native_delegates(
-    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint
+    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint, http_type
 ):
     cfg, _ = assembled(tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint)
     original = cfg.model_dump_json()
     ports = {
-        role: RecordingHttp(cfg.models.service(role))
+        role: http_type(cfg.models.service(role))
         for role in ("planner", "analyst", "reviewer", "judge")
     }
     collector = Collector(cfg, model_http=ports, source_resolver=ResolverFixture())
