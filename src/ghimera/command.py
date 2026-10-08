@@ -92,10 +92,8 @@ class CommandOptions(BaseModel):
     def paths(self) -> "CommandOptions":
         recovering = self.execution is not None and self.execution.operation == "recover"
         if self.schema_version == "ghimera.collector-command/4":
-            if not recovering or self.human_assistance is not None:
-                raise ValueError(
-                    "command /4 requires explicit recovery without terminal assistance"
-                )
+            if not recovering:
+                raise ValueError("command /4 requires explicit recovery")
         elif recovering:
             raise ValueError("model-boundary recovery requires command /4")
         elif self.schema_version == "ghimera.collector-command/3":

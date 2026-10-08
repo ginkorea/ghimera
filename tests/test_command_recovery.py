@@ -211,3 +211,14 @@ def test_recovery_example_uses_its_own_command_schema():
     ):
         with pytest.raises(ValidationError):
             CommandOptions.model_validate(dict(opts.model_dump(), **update))
+
+
+def test_explicit_human_assistance_remains_available_to_the_recovery_caller():
+    from tests.test_terminal_assistance import policy
+
+    example = Path(__file__).parents[1] / "examples" / "collector-recover.toml"
+    opts = CommandOptions.model_validate(tomllib.loads(example.read_text()))
+    interactive = CommandOptions.model_validate(dict(opts.model_dump(), human_assistance=policy()))
+    assert interactive.execution == opts.execution
+    assert interactive.human_assistance == policy()
+    assert CommandOptions.model_validate_json(interactive.model_dump_json()) == interactive

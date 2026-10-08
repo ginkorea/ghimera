@@ -9,6 +9,9 @@ max_input_bytes = 1000000
 max_result_bytes = 50000000
 # bindings_path = "/absolute/path/credential-bindings.json"
 # references_path = "/absolute/path/pinned-reference-vectors.json"
+# An interactive caller may explicitly include the existing [human_assistance]
+# policy from collector-interactive.toml when the SAME recipe binds its browser.
+# Never add terminal interaction to an unattended service.
 
 [execution]
 schema = "ghimera.command-execution/2"

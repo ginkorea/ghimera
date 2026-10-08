@@ -58,6 +58,12 @@ result through the same original private output writer. An existing complete
 or uncertain output, wrong digest or unknown model outcome is refused, not
 overwritten. Command /1 does not reserve interrupted outputs and cannot be
 adopted by this command. Existing command /1–/3 behavior remains unchanged.
+For an interactive caller, command /4 also accepts the existing explicit
+`human_assistance` policy. The same recipe must already bind its authorized
+browser; assistance remains exact-request/source scoped and does not solve
+challenges or expand access. It uses the same native terminal assistant or an
+explicitly injected assistant, rather than silently disabling human workflows
+on restart. Unattended service commands do not inherit terminal interaction.
 
 `ResearchControlSnapshot` carries `request`, partial `progress: ResearchResult`,
 `session: SessionState`, admitted hosts, the current phase and round number,
