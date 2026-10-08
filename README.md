@@ -6,6 +6,16 @@ result when the evidence or budget is insufficient.
 
 **Version 0.4.10 adds a standalone collection service and richer evidence workflows.**
 
+The 0.4.11 source candidate additionally preserves bounded research-model
+phase control and corpus encoding reservations across interruptions. Explicit
+recovery verifies original identities and budgets; acknowledged model results
+can replay locally, while unknown outcomes remain held. An explicit encoding
+decision can authorize one separately charged attempt without erasing the old
+uncertainty. See [research recovery](docs/RESEARCH_RECOVERY.md),
+[service recovery](docs/SERVICE_RECOVERY.md) and
+[encoding recovery](docs/ENCODING_RECOVERY.md). Candidate release acceptance
+is not implied by the published 0.4.10 checks below.
+
 It combines configured hybrid corpus retrieval, source API/reference expansion,
 guarded browser pagination and explicit Tor-browser route proof; native-layout
 PDF figure crops and visual graph/answer citations; reversible dated identity
@@ -244,13 +254,13 @@ Use a dedicated virtual environment:
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'ghimera==0.4.9'
+python -m pip install 'ghimera==0.4.10'
 ```
 
 Install the adapters you intend to configure:
 
 ```bash
-python -m pip install 'ghimera[html,documents,browser]==0.4.9'
+python -m pip install 'ghimera[html,documents,browser]==0.4.10'
 ```
 
 The base package contains the typed core, HTTP/Tor transport, research/search

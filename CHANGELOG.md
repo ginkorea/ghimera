@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.11 — candidate
+
+- Add bounded native recovery at retained research-model phase boundaries,
+  with original request, writer, budget and output-reservation checks. Retained
+  acknowledged returns replay locally; unknown outcomes remain held.
+- Extend native corpus encoding accounting with explicit caller-attributed
+  unknown-outcome decisions. One separately charged replacement attempt may
+  be authorized; the original uncertain attempt remains visible and charged.
+- Add explicit same-origin model-gateway configuration, including configured
+  shared-address scope, without changing legacy model-facing schema identities.
+- Candidate source, installed-artifact and live quality acceptance remain
+  separate. These changes do not establish whole-session interruption recovery,
+  representative multilingual extraction or validated scanned-PDF OCR.
+
 ## 0.4.10 — 2026-10-08
 
 - Add a configured authenticated collection service with durable run manifests,
