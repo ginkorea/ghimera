@@ -1,6 +1,6 @@
 # Ghimera 0.4.8 release acceptance
 
-Status: **SOURCE GATE PASSED; ARTIFACT ACCEPTANCE AND PUBLICATION PENDING**.
+Status: **PUBLISHED AND ORIGINAL ARTIFACTS VERIFIED**.
 This increment does not close the complete infrastructure PRD. Previous public
 release identities remain immutable and are not rebuilt, retagged or replaced.
 
@@ -24,19 +24,51 @@ gated source commit. Five metadata checks passed without skips under the same
 Python 3.11.16 interpreter/source binding; the offline lock check resolved the
 same 142 packages using that explicit interpreter.
 
-## Artifact and publication requirements
+## Independent artifact acceptance and publication
 
-Pending: offline source archive and wheel-from-archive
-build, complete archive membership/source-byte inspection, Twine validation,
-independent installed-wheel API/CLI and native acceptance, exact GitHub refs,
-official PyPI upload and original public artifact byte equality.
+- The source archive was built offline, then the wheel was built explicitly
+  from that archive using Python 3.11.16. Complete inspection compared all 176
+  wheel package members and 448 tracked source-archive members against the exact
+  release Git blobs, checked metadata/license, and rejected untracked or missing
+  contents. Both Twine checks passed under the private Python 3.11.16 tool runtime.
+- Release commit `d734ad007cd0d1d5802b1ac4ebeb32e06b3c5fe2` contains only
+  release metadata and documentation above the gated source. The real wheel
+  installed offline into a new private Python 3.11.16 environment,
+  `wheel-refresh-env/bin/python`, resolving its own site-packages. Existing
+  third-party dependencies were copied from the previously independent installed
+  environment; old project packages and editable hooks were excluded. This is
+  not admission of every optional extra. Both installed CLI entry points passed.
+- Actual loopback RSS collection across fresh child processes passed native 200,
+  real conditional 304, changed-original preservation, no-store tombstone and
+  subsequent full GET, native feed readback, private store modes and byte
+  accounting. Five target contacts produced four immutable version/invalidation
+  records. Robots denied the cached target before another target contact. No
+  source outside the controlled loopback server or model was contacted.
+- The first operator refresh probe incorrectly used an IP-literal crawl host
+  and refused before target contact. Correcting only the probe to use a declared
+  DNS alias pinned to the loopback server resolved it; production scope validation
+  and accepted artifact bytes were not changed.
+- Installed native graph cancellation waited through repeated caller cancellation
+  after a real file commit. Its live view retained the initial node until the
+  acknowledgement was released, then matched fresh disk replay with two nodes.
+  No external source/model call or semantic-quality measurement occurred.
+- GitHub main atomically fast-forwarded to the release commit together with
+  annotated `v0.4.8`, object `a7ae86085a86508f7c7f00f49a9d059903197a8e`.
+  Both remote refs and the tag's peeled release commit were independently read
+  back. This evidence-only follow-up does not move that tag.
+- Exactly the two accepted hash-pinned artifacts were uploaded to the official
+  PyPI destination using the existing named profile. TLS was verified, redirects
+  refused, and credentials were not logged or copied. Official metadata and both
+  original public files were independently read back: no yanks and exact local
+  byte equality.
 
-Required installed acceptance includes actual loopback RSS HTTP 200/304 across
-fresh processes, changed originals with retained history, content-free cache
-invalidation and subsequent full GET, robots refusal before target contact,
-private-store ownership and actual byte accounting. Repeated graph cancellation
-must preserve a real committed file, apply its exact acknowledgement and match
-fresh disk replay. These controlled checks do not establish semantic accuracy.
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `ghimera-0.4.8-py3-none-any.whl` | 412237 | `4c30ea62d781f4cc6d968e28b74443a8c5376f67b334665abcd609d59208c376` |
+| `ghimera-0.4.8.tar.gz` | 1173153 | `75c17857d5be45899280b4f1af7976e8c1300745c3d5b4bbf2cb650b47974b76` |
+
+These controlled checks establish package/lifecycle behavior, not representative
+publisher/onion coverage, multilingual semantic accuracy or unattended deployment.
 
 ## Capability increment and remaining scope
 
