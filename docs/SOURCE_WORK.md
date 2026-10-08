@@ -1,6 +1,6 @@
 # Durable source-operation evidence
 
-This candidate adds durable capture to the existing collector, not another
+Published in 0.4.7, this extension adds durable capture to the existing collector, not another
 crawler or a claim that arbitrary interrupted research can already resume.
 
 Append `examples/source-work.toml` to a collector configuration that already has
@@ -102,9 +102,11 @@ result; fresh-process readback; native byte ledger retention; out-of-order
 concurrent completion; cancellation; completed-round continuation without
 refetch; writer exclusion; capacity refusal; recipe/digest/symlink/journal
 mutation; and bounded CLI output. Fixtures test recovery contracts, not real
-language or model accuracy. Full release acceptance is still required.
+language or model accuracy. The complete gate, independently installed native
+capture/resume and original public artifact-byte verification passed for 0.4.7;
+see [release acceptance](RELEASE_047.md).
 
-I03 remains open: these candidates still need release acceptance; integrate
+I03 remains open despite accepted package publication: integrate
 explicit uncertain model/graph reconciliation and reservation accounting,
 cover retained-reader control state, and reconstruct a
 whole resumed collection/research session without losing queued links or
@@ -112,7 +114,7 @@ inventing exact unknown spend. This web-operation capture is a necessary part
 of that path, not an automatic replay engine or a replacement for I12's
 general unattended collection lifecycle.
 
-## Durable queued frontier candidate
+## Durable queued frontier
 
 `examples/source-frontier.toml` adds an explicit optional frontier policy to
 the existing source-work recipe. Seeds, scored ordinary links and admitted
@@ -138,12 +140,12 @@ addition to the separate queue bound. No physical disk quota is implied.
 Collection concurrency and the native spend ledger keep their existing owners.
 No queued or unresolved item is automatically refetched or replayed by inspection.
 
-This candidate closes capture of queued web intents, not the full I03: interrupted
+This extension closes capture of queued web intents, not the full I03: interrupted
 whole-session adoption still needs explicit uncertain model/graph reconciliation,
-budget reservations, pending local batches and durable research
-control state. It is not yet a published release or real model-quality acceptance.
+budget reservations and durable research control state. Pending local batches
+are implemented below. Publication is not real model-quality acceptance.
 
-## Owned local document capture candidate
+## Owned local document capture
 
 With source work enabled, `GoalLoop.import_local` and the research loop's
 `local_documents` use the same run-owned operation store. A typed
@@ -174,7 +176,7 @@ control state and resuming an interrupted operation still require explicit
 reconciliation. No OCR or semantic-language quality claim follows from capturing
 a pinned PDF correctly.
 
-## Retained-original admission candidate
+## Retained-original admission
 
 A retained corpus read produces a `RetainedOriginal`: its exact historical
 `Document`, corpus/configuration/generation/bundle origin, and the current query
@@ -208,7 +210,7 @@ projection, and process termination before/after graph acknowledgement and a
 completed journal prefix. Model responses in these witnesses are protocol
 fixtures, not Chinese OCR or organization-extraction quality measurements.
 
-## Atomic pending local batches candidate
+## Atomic pending local batches
 
 Enabling `[source_work.frontier]` now also captures a caller's complete local
 PDF/DOCX seed batch before the first read. The existing private frontier table,
