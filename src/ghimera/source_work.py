@@ -30,6 +30,7 @@ from ghimera.research_recovery_types import ResearchRecoveryModels
 from ghimera.research_types import ResearchRequest
 from ghimera.retained_graph import validate_original
 from ghimera.session_state import SessionState
+from ghimera.source_acquisition import SourceAcquisitionRead, SourceAcquisitionSnapshot
 from ghimera.source_completion import (
     SourceCompletionRead,
     SourceCompletionRuntime,
@@ -88,9 +89,13 @@ class SourceWorkStore:
         self._frontier: SourceFrontier | None = None
         recovery = config.research_recovery
         self._completion = recovery.source_completion if recovery is not None else None
+        self._acquisition = recovery.source_acquisition if recovery is not None else None
+        self._acquisition_bytes = 0
         self._completion_bytes = 0
         schema = (
-            "ghimera.source-work-store/2"
+            "ghimera.source-work-store/3"
+            if self._acquisition is not None
+            else "ghimera.source-work-store/2"
             if self._completion is not None
             else "ghimera.source-work-store/1"
         )
@@ -115,6 +120,11 @@ class SourceWorkStore:
                         " operation_id TEXT NOT NULL, operation_sha256 TEXT NOT NULL,"
                         " payload BLOB NOT NULL, sha256 TEXT NOT NULL)"
                     )
+                if self._acquisition is not None:
+                    self._private.db.execute(
+                        "CREATE TABLE source_acquisition(id INTEGER PRIMARY KEY CHECK(id=1),"
+                        " payload BLOB NOT NULL, sha256 TEXT NOT NULL)"
+                    )
                 self._private.db.commit()
             else:
                 row = self._private.db.execute(
@@ -132,6 +142,13 @@ class SourceWorkStore:
                     self._completion_bytes = row[0] if row is not None else 0
                     if self._completion_bytes > self._completion.max_capsule_bytes:
                         raise ValueError("source control exceeds its declared byte bound")
+                if self._acquisition is not None:
+                    row = self._private.db.execute(
+                        "SELECT length(payload) FROM source_acquisition WHERE id=1"
+                    ).fetchone()
+                    self._acquisition_bytes = row[0] if row is not None else 0
+                    if self._acquisition_bytes > self._acquisition.max_capsule_bytes:
+                        raise ValueError("acquisition control exceeds its declared byte bound")
             if self._policy.frontier is not None:
                 self._frontier = SourceFrontier(
                     self._private,
@@ -140,7 +157,10 @@ class SourceWorkStore:
                     input_policy=self._config.local_inputs,
                 )
                 if (
-                    self._reservation + self._frontier.payload_bytes + self._completion_bytes
+                    self._reservation
+                    + self._frontier.payload_bytes
+                    + self._completion_bytes
+                    + self._acquisition_bytes
                     > self._policy.max_store_bytes
                 ):
                     raise ValueError("source work and frontier exceed their shared capacity")
@@ -177,7 +197,14 @@ class SourceWorkStore:
         self._private.close()
 
     @classmethod
-    def resume(cls, config: GhimeraConfig, run_id: str, ledger_rows: int) -> "SourceWorkStore":
+    def resume(
+        cls,
+        config: GhimeraConfig,
+        run_id: str,
+        ledger_rows: int,
+        *,
+        acquisition: SourceAcquisitionRead | None = None,
+    ) -> "SourceWorkStore":
         """Adopt only a quiescent checkpoint, never guess at interrupted work."""
         store = cls(config, run_id, create=False)
         try:
@@ -190,6 +217,10 @@ class SourceWorkStore:
                 raise ValueError("only a clean, unsealed run can resume source work")
             if ledger_rows != len(journal.rows):
                 raise ValueError("source-work continuation needs the exact native journal prefix")
+            if acquisition is not None:
+                if store._read_acquisition(acquisition.sha256) != acquisition:
+                    raise ValueError("acquisition changed before writer-owned restoration")
+                return store
             if any(
                 item.ledger_end is None or item.ledger_end > ledger_rows
                 for item in store._operations.values()
@@ -279,6 +310,7 @@ class SourceWorkStore:
         *,
         new: bool,
         control: Callable[[], SourceCompletionSnapshot] | None = None,
+        acquisition_control: Callable[[SourceOperation], SourceAcquisitionSnapshot] | None = None,
     ) -> None:
         if not self._writing:
             raise SourceWorkFailure("source-work writer is not owned by this session")
@@ -297,7 +329,7 @@ class SourceWorkStore:
                     - (self._reserved(previous) if previous is not None else 0)
                 )
                 if (
-                    size + self._frontier_bytes + self._completion_bytes
+                    size + self._frontier_bytes + self._completion_bytes + self._acquisition_bytes
                     > self._policy.max_store_bytes
                 ):
                     raise ValueError("source-work byte capacity exhausted")
@@ -322,6 +354,35 @@ class SourceWorkStore:
                         "UPDATE binding SET operation_count=operation_count+1 WHERE id=1"
                     )
                 completion_bytes = self._completion_bytes
+                acquisition_bytes = self._acquisition_bytes
+                if acquisition_control is not None:
+                    if (
+                        self._acquisition is None
+                        or not isinstance(item, SourceOperation)
+                        or item.state != "acquired"
+                        or previous is None
+                    ):
+                        raise ValueError(
+                            "acquisition control requires its exact newly acquired original"
+                        )
+                    self._operations[item.operation_id] = item
+                    try:
+                        snapshot_acquired = acquisition_control(item)
+                        data_acquired = snapshot_acquired.model_dump_json().encode()
+                        self._validate_acquisition(snapshot_acquired, item)
+                    finally:
+                        self._operations[item.operation_id] = previous
+                    acquisition_bytes = len(data_acquired)
+                    if (
+                        acquisition_bytes > self._acquisition.max_capsule_bytes
+                        or size + self._frontier_bytes + completion_bytes + acquisition_bytes
+                        > self._policy.max_store_bytes
+                    ):
+                        raise ValueError("acquisition control exceeds original shared capacity")
+                    self._private.db.execute(
+                        "INSERT OR REPLACE INTO source_acquisition VALUES(1,?,?)",
+                        (data_acquired, hashlib.sha256(data_acquired).hexdigest()),
+                    )
                 if control is not None:
                     if self._completion is None or previous is None or item.state != "processed":
                         raise ValueError(
@@ -341,7 +402,7 @@ class SourceWorkStore:
                     completion_bytes = len(data)
                     if (
                         completion_bytes > self._completion.max_capsule_bytes
-                        or size + self._frontier_bytes + completion_bytes
+                        or size + self._frontier_bytes + completion_bytes + acquisition_bytes
                         > self._policy.max_store_bytes
                     ):
                         raise ValueError(
@@ -359,6 +420,7 @@ class SourceWorkStore:
             self._operations[item.operation_id] = item
             self._reservation = size
             self._completion_bytes = completion_bytes
+            self._acquisition_bytes = acquisition_bytes
         except (OSError, ValueError, sqlite3.Error, GhimeraRefused) as exc:
             raise SourceWorkFailure("source work was not durably acknowledged") from exc
 
@@ -373,6 +435,7 @@ class SourceWorkStore:
             - self._reservation
             - self._frontier_bytes
             - self._completion_bytes
+            - self._acquisition_bytes
         )
 
     def enqueue(self, request: SourceCoordinates, priority: float, ledger_start: int) -> None:
@@ -501,14 +564,174 @@ class SourceWorkStore:
         except KeyError:
             raise SourceWorkFailure("source-work identity is missing") from None
 
-    def acquired(self, token: SourceWorkToken, page: Page) -> None:
+    def acquired(
+        self,
+        token: SourceWorkToken,
+        page: Page,
+        *,
+        control: Callable[[SourceOperation], SourceAcquisitionSnapshot] | None = None,
+    ) -> None:
         item = self._get(token)
         if not isinstance(item, SourceOperation) or item.state != "fetching":
             raise SourceWorkFailure("source original was already acknowledged")
         updated = SourceOperation.model_validate(
             dict(item.model_dump(), state="acquired", page=page, acquired_at=time.time())
         )
-        self._write(updated, new=False)
+        self._write(updated, new=False, acquisition_control=control)
+
+    def acquired_operation(self, token: SourceWorkToken) -> SourceOperation:
+        item = self._get(token)
+        if not isinstance(item, SourceOperation) or item.state != "acquired" or item.page is None:
+            raise SourceWorkFailure("only exact acquired original can enter processing")
+        return item
+
+    def admitted_token(self, admission: SourceAcquisitionRead) -> SourceWorkToken:
+        if not self._writing or self._read_acquisition(admission.sha256) != admission:
+            raise SourceWorkFailure("acquisition admission changed under its owning writer")
+        return SourceWorkToken(admission.operation.operation_id, self._header)
+
+    def pending_operation(self, token: SourceWorkToken) -> SourceOperation:
+        item = self._get(token)
+        if not isinstance(item, SourceOperation) or item.state != "fetching":
+            raise SourceWorkFailure("acquisition requires its exact pending original")
+        return item
+
+    def acquisition_state(self, operation_id: str) -> None:
+        active = tuple(item for item in self._operations.values() if item.ledger_end is None)
+        if (
+            len(active) != 1
+            or active[0].operation_id != operation_id
+            or active[0].state != "acquired"
+        ):
+            raise SourceWorkFailure("acquisition capture requires exactly its one active original")
+
+    def _validate_acquisition(
+        self, snapshot: SourceAcquisitionSnapshot, item: SourceOperation
+    ) -> None:
+        snapshot = SourceAcquisitionSnapshot.model_validate(snapshot.model_dump())
+        self.acquisition_state(item.operation_id)
+        journal = (
+            read_journal(self._config.journal, self._run_id)
+            if self._config.journal is not None
+            else None
+        )
+        h = snapshot.progress.harvest
+        page = item.page
+        if (
+            self._acquisition is None
+            or page is None
+            or journal is None
+            or (
+                snapshot.run_id != self._run_id
+                or h.receipt.effective_config != self._config
+                or journal.header.config != self._config
+                or journal.header.goal != h.goal
+                or journal.header.judge != h.receipt.judge
+                or journal.state != "unsealed"
+                or journal.incomplete_tail
+                or journal.rows != h.ledger
+                or snapshot.operation_id != item.operation_id
+                or snapshot.operation_sha256
+                != hashlib.sha256(item.model_dump_json().encode()).hexdigest()
+                or snapshot.return_sequence != len(journal.rows) - 1
+                or unreconciled_model_sequences(journal.rows)
+                or validate_model_rows(
+                    self._config.model_work, self._config.judge_budget, journal.rows
+                )
+                != h.receipt.judge_calls
+            )
+        ):
+            raise ValueError(
+                "acquisition requires its original operation and exact acknowledged journal"
+            )
+        observed = journal.rows[snapshot.return_sequence]
+        returned = observed.source_acquisition
+        if returned is None or (
+            snapshot.return_sha256
+            != hashlib.sha256(observed.model_dump_json().encode()).hexdigest()
+            or returned.operation_id != item.operation_id
+            or returned.request_sha256
+            != hashlib.sha256(item.request.model_dump_json().encode()).hexdigest()
+            or returned.page_sha256 != hashlib.sha256(page.model_dump_json().encode()).hexdigest()
+            or returned.source_sha256 != hashlib.sha256(page.body).hexdigest()
+            or returned.source_url != page.url
+            or returned.kind
+            != ("owned_file" if isinstance(item.request, LocalSourceRequest) else "fetched")
+            or snapshot.phase == "initial_local"
+            and not isinstance(item.request, LocalSourceRequest)
+            or snapshot.phase == "collection"
+            and (
+                not isinstance(item.request, SourceRequest)
+                or snapshot.scope is None
+                or not snapshot.scope.permits(item.request.url)
+            )
+        ):
+            raise ValueError("acquisition return differs from its exact operation/request/Page")
+        if isinstance(item.request, LocalSourceRequest):
+            if item.request.seed not in snapshot.request.local_documents:
+                raise ValueError("acquired owned source was not admitted by the original request")
+            item.request.validate_policy(self._config.local_inputs)
+        self.verify_frontier(snapshot.session)
+
+    def _read_acquisition(self, expected_sha256: str | None = None) -> SourceAcquisitionRead:
+        if self._acquisition is None:
+            raise ValueError("acquisition recovery is not configured")
+        row = self._private.db.execute(
+            "SELECT payload,sha256 FROM source_acquisition WHERE id=1"
+        ).fetchone()
+        if row is None:
+            raise ValueError("no atomic acquired source control exists")
+        data, pin = row
+        if (
+            not isinstance(data, bytes)
+            or len(data) > self._acquisition.max_capsule_bytes
+            or hashlib.sha256(data).hexdigest() != pin
+            or expected_sha256 is not None
+            and pin != expected_sha256
+        ):
+            raise ValueError("acquisition control differs from its original bounded digest")
+        snapshot = SourceAcquisitionSnapshot.model_validate_json(data)
+        operations = self._read_operations()
+        if not operations or not isinstance(operations[-1], SourceOperation):
+            raise ValueError("acquisition lacks its exact latest original operation")
+        operation = operations[-1]
+        self._validate_acquisition(snapshot, operation)
+        if self._config.journal is None:
+            raise ValueError("acquisition lost original journal")
+        return SourceAcquisitionRead(
+            snapshot=snapshot,
+            operation=operation,
+            journal=read_journal(self._config.journal, self._run_id),
+            sha256=pin,
+        )
+
+    @classmethod
+    def acquisition(
+        cls,
+        config: GhimeraConfig,
+        run_id: str,
+        expected_sha256: str | None = None,
+        *,
+        expected_request: ResearchRequest | None = None,
+        expected_models: ResearchRecoveryModels | None = None,
+        expected_runtime: SourceCompletionRuntime | None = None,
+    ) -> SourceAcquisitionRead:
+        store = cls(config, run_id, create=False)
+        try:
+            with store._private.writer(), store._private.transaction():
+                result = store._read_acquisition(expected_sha256)
+                if (
+                    expected_request is not None
+                    and result.snapshot.request != expected_request
+                    or expected_models is not None
+                    and result.snapshot.models != expected_models
+                    or expected_runtime is not None
+                    and result.snapshot.runtime != expected_runtime
+                ):
+                    raise ValueError("acquisition request or original collaborator runtime changed")
+                return result
+        finally:
+            store.close()
 
     def processing(self, token: SourceWorkToken) -> None:
         item = self._get(token)

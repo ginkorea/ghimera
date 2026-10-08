@@ -375,6 +375,9 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
         from ghimera.judgment_validation import validate_judgment_rows
 
         validate_judgment_rows(header.config, header.goal.text, tuple(rows))
+        from ghimera.source_acquisition_types import validate_acquisition_rows
+
+        validate_acquisition_rows(header.config, tuple(rows))
         from ghimera.research_reranking import validate_rerank_rows
 
         validate_rerank_rows(header.config, tuple(rows))

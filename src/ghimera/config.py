@@ -213,9 +213,9 @@ class GhimeraConfig(BaseModel):
                 raise ValueError(
                     "scored judgment must remain within original scoring/judge context limits"
                 )
-        if (
-            self.research_recovery is not None
-            and self.research_recovery.source_completion is not None
+        if self.research_recovery is not None and (
+            self.research_recovery.source_completion is not None
+            or self.research_recovery.source_acquisition is not None
         ):
             if (
                 self.execution is not None
@@ -225,9 +225,12 @@ class GhimeraConfig(BaseModel):
                 raise ValueError(
                     "source recovery requires serial execution and native source frontier"
                 )
-            if (
-                self.research_recovery.source_completion.max_capsule_bytes
-                >= self.source_work.max_store_bytes
+            if any(
+                policy is not None and policy.max_capsule_bytes >= self.source_work.max_store_bytes
+                for policy in (
+                    self.research_recovery.source_completion,
+                    self.research_recovery.source_acquisition,
+                )
             ):
                 raise ValueError("source capsule must fit within native source-work capacity")
         automation = self.identity_automation

@@ -15,6 +15,32 @@ apply; this introduces neither another database nor a separate query quota.
 The effective non-secret recipe remains in the original receipt and snapshot.
 Corpus-backed queries also require the existing native encoding recovery policy.
 
+For a fresh run that also needs acquired original-page adoption, explicitly
+select `research_recovery/6` with **both** `query_control = "serial_acknowledged"`
+and the typed serial `source_acquisition/1` policy. The inert fragment is
+[query-acquisition-recovery.toml](../examples/query-acquisition-recovery.toml).
+The acquired Page/control still belongs to the existing SourceWork transaction;
+the query/control still belongs to the original journal and ResearchRecoveryStore.
+Choose one exact original boundary and snapshot pin for each adoption. Neither
+boundary can admit the other's capsule or extend its original request/recipe,
+generation, ledger, source, graph, remaining budget or writer admission.
+
+Profiles /4, /5 and /6 reject unrelated completion/reconciliation fields,
+including explicit nulls; /4 also rejects acquisition and /5 rejects query
+control. These unpublished profiles previously had an early-return validation
+gap for unrelated fields. Fresh helper recipes must omit turned-off controls,
+not serialize null placeholders. Original /1–3 typed optional fields and dumps
+remain unchanged (including optional completed-source policy under /3).
+Stored original recipes are never normalized, migrated or widened on recovery.
+Changing a retained run from /4 or /5 to /6 changes its identity and refuses.
+
+This core composition does not add a multi-boundary service policy. Existing
+query CLI/service routes remain fixed single-boundary owners; acquired-page
+CLI/service bindings are a separate reviewed child. A later service composition
+must explicitly authorize its selected boundary under the original job policy
+and preserve the one existing lifetime adoption counter. No automatic latest-file
+selection, unknown retry or arbitrary interrupted-session recovery is claimed.
+
 Before query/provider/encoding contact, the native driver saves the original
 outer reservation: one operation identity, stage/round/query/provider cursor,
 exact request bytes/hash, original search/fetch/retained debit ordinals, and,

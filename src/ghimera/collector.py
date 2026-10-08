@@ -423,7 +423,9 @@ class Collector:
         run_id: str,
         *,
         snapshot_sha256: str,
-        boundary: Literal["model_return", "source_completion", "query_return"] = "model_return",
+        boundary: Literal[
+            "model_return", "source_completion", "query_return", "source_acquisition"
+        ] = "model_return",
         attempt: "ModelAttemptAuthorization | None" = None,
     ) -> ResearchResult:
         """Adopt an exact native model boundary; never retry an unknown contact."""

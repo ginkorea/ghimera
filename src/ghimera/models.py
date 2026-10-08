@@ -63,6 +63,7 @@ from ghimera.semantic_types import (
     SemanticReview,
     SemanticWindow,
 )
+from ghimera.source_acquisition_types import SourceAcquisitionReturn
 from ghimera.source_feed_types import SourceFeedEvidence
 from ghimera.source_refresh_types import SourceRefreshUse
 from ghimera.source_session_types import SourceSessionUse
@@ -754,6 +755,7 @@ class LedgerRow(Record):
                 "semantic_selection",
                 "query_intent",
                 "query_ack",
+                "source_acquisition",
             ]
         ]
     )
@@ -806,6 +808,9 @@ class LedgerRow(Record):
     encoding_call: EncodingCall | None = None
     similarity: SimilarityEvidence | None = None
     scoring_source: SkipJsonSchema[ScoringSourceBinding | None] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    source_acquisition: SkipJsonSchema[SourceAcquisitionReturn | None] = Field(
         default=None, exclude_if=lambda value: value is None
     )
     scoring_reading: SkipJsonSchema[ScoringNativeReading | None] = Field(
@@ -920,6 +925,18 @@ class LedgerRow(Record):
             raise ValueError("a known refused completion must retain its invoked model identity")
         if self.scoring_source is not None and self.event != "scoring":
             raise ValueError("scoring source attribution belongs to its native scoring operation")
+        if (self.event == "source_acquisition") != (self.source_acquisition is not None) or (
+            self.source_acquisition is not None
+            and (
+                self.url != self.source_acquisition.source_url
+                or self.refusal is not None
+                or self.model_call is not None
+                or self.bytes_read != 0
+            )
+        ):
+            raise ValueError(
+                "acquisition return is exact local provenance, not extra spend or a model ACK"
+            )
         if (self.event == "scoring_source") != (self.scoring_reading is not None) or (
             self.scoring_reading is not None and self.url != self.scoring_reading.source_url
         ):
@@ -1373,6 +1390,9 @@ class Harvest(Record):
         from ghimera.judgment_validation import validate_judgment_rows
 
         validate_judgment_rows(self.receipt.effective_config, self.goal.text, self.ledger)
+        from ghimera.source_acquisition_types import validate_acquisition_rows
+
+        validate_acquisition_rows(self.receipt.effective_config, self.ledger)
         if self.receipt.fetches != count_fetch_attempts(self.receipt.effective_config, self.ledger):
             raise ValueError("fetch count does not match ledger")
         challenge_rows = tuple(row for row in self.ledger if row.event == "challenge")
