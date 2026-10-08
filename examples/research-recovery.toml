@@ -1,0 +1,8 @@
+# Merge into an intent-research recipe that explicitly configures [journal]
+# and [model_work.results]. This fragment grants no model/source access.
+# Control snapshots reuse the private journal directory and are opt-in.
+[research_recovery]
+schema = "ghimera.research-recovery/1"
+max_snapshot_bytes = 67108864
+clock_policy = "include_downtime"
+tail_policy = "acknowledged_model_return"
