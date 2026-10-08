@@ -205,6 +205,109 @@ def test_same_configured_collector_gets_fresh_goal_state_and_charges_each_run(
     assert Harvest.model_validate_json(second.model_dump_json()) == second
 
 
+def test_configured_refresh_reaches_document_graph_journal_and_bound_304(
+    tmp_path,
+    source_site,
+    search_endpoint,
+    model_endpoint,
+    encoder_endpoint,
+):
+    from ghimera.source_refresh import SourceRefreshStore
+    from tests.test_evidence_corpus import config as corpus_policy
+    from tests.test_evidence_corpus import corpus
+    from tests.test_source_refresh import policy as refresh_policy
+
+    cfg, url = assembled(tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint)
+    url = url.rsplit("/", 1)[0] + "/conditional"
+    graph = tomllib.loads(Path("examples/research-graph.toml").read_text())
+    graph.update(sink_path=tmp_path / "graphs", capture_semantics=False)
+    values = cfg.model_dump()
+    values.update(
+        source_refresh=refresh_policy(tmp_path, url),
+        graph=graph,
+        journal=dict(
+            schema="chimera.run-journal-config/1",
+            directory=tmp_path / "runs",
+            max_record_bytes=1_000_000,
+            max_journal_bytes=10_000_000,
+            max_summary_bytes=1_000_000,
+            max_records=1000,
+        ),
+    )
+    cfg = GhimeraConfig.model_validate(values)
+    scope = Scope(
+        allowed_hosts=("fixture.example",),
+        allowed_ports=(source_site[0],),
+        max_depth=0,
+        content_types=("text/html",),
+    )
+
+    async def operation():
+        first = await Collector(cfg, source_resolver=ResolverFixture()).collect(
+            Goal(text="ports", seeds=(url,)), scope, run_id="initial"
+        )
+        second = await Collector(cfg, source_resolver=ResolverFixture()).collect(
+            Goal(text="ports", seeds=(url,)), scope, run_id="refreshed"
+        )
+        return first, second
+
+    first, second = asyncio.run(operation())
+    assert len(first.documents) == len(second.documents) == 1
+    document = second.documents[0]
+    assert document.raw == first.documents[0].raw and document.source_refresh is not None
+    assert second.receipt.fetches == 2
+    assert [r.status for r in second.ledger if r.event == "fetch"] == [200, 304]
+    assert (
+        next(n for n in second.graph.nodes if n.role == "document").source_refresh
+        == document.source_refresh
+    )
+    assert Harvest.model_validate_json(second.model_dump_json()) == second
+    report = read_journal(cfg.journal, "refreshed")
+    assert report.state == "complete" and report.rows == second.ledger
+    assert len(asyncio.run(SourceRefreshStore(cfg.source_refresh).versions())) == 1
+    store = corpus(corpus_policy(tmp_path, encoder_endpoint[0]), create=True)
+    try:
+
+        async def persist():
+            await store.append(second)
+            # This protocol fixture has no synonym understanding; query retained
+            # native text to prove retrieval bindings, not real model quality.
+            found = await store.search(document.extracted.text[:80], top_k=1)
+            return store.document(found.hits[0].passage.document_id)
+
+        restored = asyncio.run(persist())
+        assert restored == document and restored.source_refresh == document.source_refresh
+    finally:
+        store.close()
+    altered = second.model_dump()
+    altered["ledger"] = [
+        r for r in altered["ledger"] if r["reason"] != "source_refresh_revalidated"
+    ]
+    for i, row in enumerate(altered["ledger"]):
+        row["sequence"] = i
+    with pytest.raises(ValidationError):
+        Harvest.model_validate(altered)
+
+
+def test_unbound_collector_does_not_bootstrap_refresh_storage(
+    tmp_path,
+    source_site,
+    search_endpoint,
+    model_endpoint,
+    encoder_endpoint,
+):
+    from tests.test_source_refresh import policy as refresh_policy
+
+    cfg, url = assembled(tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint)
+    values = cfg.model_dump()
+    values.update(source_refresh=refresh_policy(tmp_path, url), models=None)
+    cfg = GhimeraConfig.model_validate(values)
+    with pytest.raises(ValueError):
+        Collector(cfg, source_resolver=ResolverFixture())
+    assert not cfg.source_refresh.directory.exists()
+    assert not any((source_site[1], search_endpoint[1], model_endpoint[1], encoder_endpoint[1]))
+
+
 def test_binary_pdf_scope_requires_explicit_document_policy_before_any_io(
     tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint
 ):

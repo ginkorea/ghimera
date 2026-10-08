@@ -6,7 +6,9 @@ path. There is no second HTTP client, scheduler, implicit hostname allowance,
 authentication bypass, feed poller or private service. The existing fetch
 ladder owns robots, per-origin spacing, Direct/Tor routing, redirects, response
 limits and conditional revalidation. Its conditional cache is run-local,
-not cross-process incremental refresh.
+not cross-process incremental refresh by default. The separately configured
+[source-refresh candidate](SOURCE_REFRESH.md) adds private cross-run versions
+through this same guarded boundary; it is not yet published or fully accepted.
 
 Merge `examples/source-feeds.toml` under `source_feeds` in your normal recipe;
 replace worker/storage paths with owned locations. Add the matching feed MIME

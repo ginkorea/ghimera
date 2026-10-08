@@ -5,6 +5,20 @@ from urllib.parse import urldefrag, urljoin
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 
+def conditional_cache_permitted(headers: tuple[tuple[str, str], ...]) -> bool:
+    """Response prohibitions apply to volatile and durable conditional reuse alike."""
+    controls = [
+        part.strip().lower().split("=", 1)[0]
+        for name, value in headers
+        if name.lower() == "cache-control"
+        for part in value.split(",")
+    ]
+    return "no-store" not in controls and not any(
+        name.lower() == "vary" and "*" in {part.strip() for part in value.split(",")}
+        for name, value in headers
+    )
+
+
 def redirect_target(url: str, headers: tuple[tuple[str, str], ...]) -> str | None:
     values = [value for key, value in headers if key.lower() == "location"]
     if len(values) != 1 or not values[0].strip():
@@ -18,6 +32,7 @@ def redirect_target(url: str, headers: tuple[tuple[str, str], ...]) -> str | Non
 RETAINED_HEADERS = frozenset(
     {
         "content-type",
+        "cache-control",
         "location",
         "etag",
         "last-modified",

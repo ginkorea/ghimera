@@ -40,6 +40,7 @@ from ghimera.search import GroundedSearch
 from ghimera.searxng import SearxHtmlSearch, SearxSearch
 from ghimera.semantic_scoring import EmbeddingScorer
 from ghimera.source_feeds import SourceFeedExtractionSuite, SourceFeedExtractor
+from ghimera.source_refresh import SourceRefreshStore
 from ghimera.source_sessions import SourceCredentials
 from ghimera.transport import Resolver
 from ghimera.visual_model import LocalVisionReader
@@ -249,9 +250,10 @@ class Collector:
             )
         elif vision_credential is not None or visual_reviewer_credential is not None:
             raise ValueError("visual credentials require a visual service recipe")
+        refresh = SourceRefreshStore(config.source_refresh) if config.source_refresh else None
         collection = GoalLoop(
             config=config,
-            fetcher=FetchLadder(routes, renderer=renderer),
+            fetcher=FetchLadder(routes, renderer=renderer, source_refresh=refresh),
             extractor=extractor,
             scorer=scorer,
             judge=models.judge,

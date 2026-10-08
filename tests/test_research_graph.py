@@ -1,6 +1,7 @@
 """Graph acceptance: durable early graph, vocabulary, evidence, replay and failures."""
 
 import asyncio
+import threading
 from pathlib import Path
 
 import pytest
@@ -296,5 +297,106 @@ def test_cancellation_waits_for_exact_ack_then_is_replayable(tmp_path):
         restored = ResearchGraph(cfg, "run-1", sink)
         await restored.start("ports")
         assert restored.snapshot() == graph.snapshot()
+
+    asyncio.run(scenario())
+
+
+def test_repeated_cancellation_retains_native_writer_until_exact_ack(tmp_path):
+    async def scenario():
+        committed = asyncio.Event()
+        release = threading.Event()
+        owner = asyncio.get_running_loop()
+
+        class PausedAck(DirectoryGraphSink):
+            def _write(self, batch):
+                ack = super()._write(batch)
+                if batch.sequence == 1:
+                    owner.call_soon_threadsafe(committed.set)
+                    if not release.wait(timeout=5):
+                        raise RuntimeError("controlled graph acknowledgement expired")
+                return ack
+
+        cfg = policy(tmp_path / "g")
+        sink = PausedAck(cfg, "run-1")
+        graph = ResearchGraph(cfg, "run-1", sink)
+        await graph.start("ports")
+        task = asyncio.create_task(graph.discovered("https://example.org/a", graph.intent_id))
+        next_write = None
+        try:
+            await asyncio.wait_for(committed.wait(), timeout=5)
+            for _ in range(3):
+                task.cancel()
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                assert not task.done()
+            next_write = asyncio.create_task(
+                graph.discovered("https://example.org/b", graph.intent_id)
+            )
+            await asyncio.sleep(0)
+            assert not next_write.done()
+            assert len(graph.snapshot().nodes) == 1
+            assert len(await DirectoryGraphSink(cfg, "run-1").replay()) == 2
+        finally:
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            if next_write is not None:
+                await next_write
+        assert len(graph.snapshot().nodes) == 3
+        restored = ResearchGraph(cfg, "run-1", DirectoryGraphSink(cfg, "run-1"))
+        await restored.start("ports")
+        assert restored.snapshot() == graph.snapshot()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_native_sink_direct_cancellation_drains_write_and_reports_failure(tmp_path, fail):
+    async def scenario():
+        entered = asyncio.Event()
+        release = threading.Event()
+        owner = asyncio.get_running_loop()
+
+        class PausedWrite(DirectoryGraphSink):
+            def _write(self, batch):
+                owner.call_soon_threadsafe(entered.set)
+                if not release.wait(timeout=5):
+                    raise RuntimeError("controlled native write expired")
+                if fail:
+                    raise OSError("controlled native graph failure")
+                return super()._write(batch)
+
+        cfg = policy(tmp_path / "g")
+        graph = ResearchGraph(cfg, "run-1", MemoryGraphSink())
+        await graph.start("ports")
+        from ghimera.graph_types import GraphBatch
+
+        batch = GraphBatch(
+            schema="chimera.graph-batch/1",
+            run_id="run-1",
+            config_digest=cfg.content_digest(),
+            sequence=0,
+            previous_digest=None,
+            nodes=graph.snapshot().nodes,
+            edges=(),
+        )
+        sink = PausedWrite(cfg, "run-1")
+        task = asyncio.create_task(sink.append(batch))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            for _ in range(3):
+                task.cancel()
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                assert not task.done()
+        finally:
+            release.set()
+            if fail:
+                with pytest.raises(GhimeraRefused, match="graph_sink_failed"):
+                    await task
+            else:
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+        assert len(await DirectoryGraphSink(cfg, "run-1").replay()) == (0 if fail else 1)
 
     asyncio.run(scenario())

@@ -26,7 +26,8 @@ from ghimera.refusals import (
     HttpStatusRefused,
     RefusalCode,
 )
-from ghimera.response import REDIRECT_STATUSES
+from ghimera.response import REDIRECT_STATUSES, conditional_cache_permitted
+from ghimera.source_refresh import SourceRefreshFailure, SourceRefreshKey, SourceRefreshStore
 from ghimera.source_session_types import SourceSessionUse
 from ghimera.transport_types import TransportEvidence
 
@@ -81,6 +82,10 @@ class FetchRoute(ABC):
     def source_session_selection(self, url: str) -> SourceSessionUse | None:
         return None
 
+    def conditional_binding(self, url: str) -> str | None:
+        """Providers opt in only when they can bind the full request representation."""
+        return None
+
     async def clear_challenge(
         self, page: Page, *, timeout_seconds: float, max_bytes: int
     ) -> tuple[ChallengeEvidence, int]:
@@ -95,14 +100,19 @@ class FetchRoute(ABC):
 
 class FetchLadder:
     def __init__(
-        self, routes: tuple[FetchRoute, ...], *, renderer: PageRenderer | None = None
+        self,
+        routes: tuple[FetchRoute, ...],
+        *,
+        renderer: PageRenderer | None = None,
+        source_refresh: SourceRefreshStore | None = None,
     ) -> None:
         if not routes or len({route.name for route in routes}) != len(routes):
             raise ValueError("a ladder needs distinct named routes")
         self._routes = tuple(sorted(routes, key=lambda route: route.cost))
         self._politeness: Politeness | None = None
-        self._cache: OrderedDict[str, Page] = OrderedDict()
+        self._cache: OrderedDict[tuple[str, str, str | None], Page] = OrderedDict()
         self._renderer = renderer
+        self._source_refresh = source_refresh
 
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
@@ -119,8 +129,9 @@ class FetchLadder:
 
     def discard_cached(self, *urls: str) -> None:
         """Release transient resource bytes after relevance acceptance/refusal."""
-        for url in urls:
-            self._cache.pop(url, None)
+        for key in tuple(self._cache):
+            if key[1] in urls:
+                self._cache.pop(key, None)
 
     def resource_fetcher(self, scope: Scope, budget: RunBudget, ledger: Ledger) -> ResourceFetcher:
         """Bind single-hop HTTP to the same run's policy, cache and accounting.
@@ -148,6 +159,13 @@ class FetchLadder:
         allow_render: bool,
         single_hop: bool = False,
     ) -> Page:
+        refresh = budget.config.source_refresh
+        if (refresh is None) != (self._source_refresh is None) or (
+            refresh is not None
+            and self._source_refresh is not None
+            and refresh != self._source_refresh.policy
+        ):
+            raise SourceRefreshFailure("fetch ladder requires its matching source refresh store")
         if self._renderer is not None:
             self._renderer.validate_config(budget.config)
         elif budget.config.browser is not None:
@@ -559,7 +577,27 @@ class FetchLadder:
                 return await self._follow(route, target, scope, budget, ledger, robots=True)
 
             await politeness.permits(url, robots_get, ledger)
-        prior = self._cache.get(url) if not robots else None
+        binding = route.conditional_binding(url)
+        cache_key = (route.name, url, binding)
+        store = self._source_refresh
+        key = (
+            SourceRefreshKey(
+                schema="ghimera.source-refresh-key/1",
+                url=url,
+                route=route.name,
+                representation_sha256=binding,
+            )
+            if not robots and store is not None and url in store.policy.urls and binding is not None
+            else None
+        )
+        original = await store.latest(key) if store is not None and key is not None else None
+        prior = (
+            original.page
+            if original is not None
+            else self._cache.get(cache_key)
+            if not robots and key is None
+            else None
+        )
         headers: tuple[tuple[str, str], ...] = ()
         if prior is not None:
             if etag := prior.header("etag"):
@@ -570,6 +608,21 @@ class FetchLadder:
         for retry in range(budget.config.retry_budget + 1):
             try:
                 page = await self._attempt(route, url, budget, ledger, headers)
+                if not conditional_cache_permitted(page.headers):
+                    self._cache.pop(cache_key, None)
+                # Refusals and no-store responses must not resurrect an older version.
+                if (
+                    store is not None
+                    and key is not None
+                    and (
+                        page.status not in {200, 304}
+                        or not conditional_cache_permitted(page.headers)
+                        or page.challenge_use is not None
+                    )
+                ):
+                    await store.invalidate(key)
+                    original, prior, headers = None, None, ()
+                    self._cache.pop(cache_key, None)
                 throttled = (
                     budget.config.cadence is not None
                     and page.status in budget.config.cadence.throttle_statuses
@@ -624,13 +677,44 @@ class FetchLadder:
         if page.status == 304:
             if prior is None:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-            self._cache.move_to_end(url)
-            return prior.model_copy(update={"url": url, "revalidated": True})
+            use = original.reuse(store.policy, store.now()) if original and store else None
+            if use is not None and store is not None:
+                use.validate_policy(store.policy, url, use.source_sha256)
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="policy",
+                        url=url,
+                        route=route.name,
+                        reason="source_refresh_revalidated",
+                        source_refresh=use,
+                    )
+                )
+            if cache_key in self._cache:
+                self._cache.move_to_end(cache_key)
+            return Page.model_validate(
+                prior.model_copy(
+                    update={
+                        "url": url,
+                        "revalidated": True,
+                        "source_refresh": use,
+                        "transport": page.transport,
+                        "source_session": page.source_session,
+                    }
+                ).model_dump()
+            )
         if not robots and page.status >= 300 and page.status not in REDIRECT_STATUSES:
             raise HttpStatusRefused(page.status)
-        if not robots and page.status == 200:
-            self._cache[url] = page
-            self._cache.move_to_end(url)
+        if (
+            not robots
+            and page.status == 200
+            and conditional_cache_permitted(page.headers)
+            and page.challenge_use is None
+        ):
+            if store is not None and key is not None:
+                await store.capture(key, page)
+            self._cache[cache_key] = page
+            self._cache.move_to_end(cache_key)
             while len(self._cache) > policy.conditional_cache_entries:
                 self._cache.popitem(last=False)
         return page

@@ -952,6 +952,7 @@ class GoalLoop:
                 transport=page.transport,
                 local_input=page.local_input,
                 human_browser=page.human_browser,
+                source_refresh=page.source_refresh,
                 pdf_reading=extracted.pdf_transcription.graph_reading()
                 if extracted.pdf_transcription is not None
                 else None,
@@ -988,6 +989,7 @@ class GoalLoop:
                 transport=page.transport,
                 rendered=page.rendered,
                 source_session=page.source_session,
+                source_refresh=page.source_refresh,
                 challenge_use=page.challenge_use,
                 local_input=page.local_input,
                 human_browser=page.human_browser,
@@ -1230,6 +1232,7 @@ class GoalLoop:
                 transport=source.transport,
                 local_input=source.local_input,
                 human_browser=source.human_browser,
+                source_refresh=source.source_refresh,
                 pdf_reading=source.extracted.pdf_transcription.graph_reading()
                 if source.extracted.pdf_transcription is not None
                 else None,
@@ -1315,6 +1318,7 @@ class GoalLoop:
             transport=document.transport,
             local_input=document.local_input,
             human_browser=document.human_browser,
+            source_refresh=document.source_refresh,
             pdf_reading=reading.graph_reading() if reading else None,
             retained_source=original.origin,
         )

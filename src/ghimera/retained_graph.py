@@ -94,6 +94,7 @@ def validate_harvest(harvest: Harvest) -> None:
             transport=document.transport,
             local_input=document.local_input,
             human_browser=document.human_browser,
+            source_refresh=document.source_refresh,
             pdf_reading=reading.graph_reading() if reading else None,
             retained_source=origin,
         )

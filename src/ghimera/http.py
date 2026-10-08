@@ -8,6 +8,8 @@ Source credentials are explicit in-memory bindings selected by exact origin/path
 """
 
 import asyncio
+import hashlib
+import json
 from collections.abc import Mapping
 from typing import Protocol
 
@@ -152,6 +154,26 @@ class CurlRoute(FetchRoute):
     def source_session_selection(self, url: str) -> SourceSessionUse | None:
         selected = self._sessions.select(url)
         return selected.evidence if selected is not None else None
+
+    def conditional_binding(self, url: str) -> str | None:
+        selected = self._sessions.select(url)
+        if selected is None and self._challenges is not None and self._challenges.select(url):
+            return None  # Ephemeral clearance must not acquire durable authority.
+        # Secret material is used only in memory to partition representations.
+        # Neither values nor this preimage are retained, logged or sent to a model.
+        data = {
+            "http": self._http.model_dump(mode="json"),
+            "transport": self._config.transport.model_dump(mode="json")
+            if self._config.transport is not None
+            else None,
+            "user_agent": self._config.user_agent,
+            "impersonation": self._config.impersonation_profile,
+            "session": selected.evidence.model_dump(mode="json") if selected else None,
+            "credentials": [(name, secret.get_secret_value()) for name, secret in selected.headers]
+            if selected
+            else [],
+        }
+        return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
     async def attempt(self, request: FetchRequest) -> Page:
         source_session = self._sessions.select(request.url)

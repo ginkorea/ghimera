@@ -58,6 +58,9 @@ def site():
             elif self.path == "/redirect":
                 status, body = 302, b"redirect"
                 headers["Location"] = "/plain"
+            elif self.path == "/conditional-redirect":
+                status, body = 302, b"redirect"
+                headers["Location"] = "/conditional"
             elif self.path == "/loop":
                 status, body = 302, b"redirect"
                 headers["Location"] = "/loop"
@@ -83,8 +86,12 @@ def site():
                 headers["Content-Encoding"] = "gzip"
             elif self.path == "/conditional":
                 body = bodies["/plain"]
-                headers["ETag"] = '"original"'
-                if self.headers.get("If-None-Match") == '"original"':
+                headers["ETag"] = bodies.get("/conditional_etag", b'"original"').decode()
+                if "/conditional_cache_control" in bodies:
+                    headers["Cache-Control"] = bodies["/conditional_cache_control"].decode()
+                if "/conditional_vary" in bodies:
+                    headers["Vary"] = bodies["/conditional_vary"].decode()
+                if self.headers.get("If-None-Match") == headers["ETag"]:
                     status, body = 304, b""
             elif self.path == "/slow":
                 time.sleep(0.12)

@@ -44,6 +44,7 @@ from ghimera.semantic_types import (
     SemanticWindow,
 )
 from ghimera.source_feed_types import SourceFeedEvidence
+from ghimera.source_refresh_types import SourceRefreshUse
 from ghimera.source_session_types import SourceSessionUse
 from ghimera.transport_types import TransportEvidence
 from ghimera.visual_types import ImageCandidate, ImageEvidence
@@ -145,6 +146,7 @@ class Page(Record):
     body: bytes
     headers: tuple[tuple[str, str], ...] = ()
     revalidated: bool = False
+    source_refresh: SourceRefreshUse | None = Field(default=None, exclude_if=lambda v: v is None)
     transport: TransportEvidence | None = None
     rendered: RenderResult | None = None
     source_session: SourceSessionUse | None = None
@@ -156,6 +158,18 @@ class Page(Record):
 
     @model_validator(mode="after")
     def rendering_binding(self) -> "Page":
+        if self.source_refresh is not None and (
+            not self.revalidated
+            or self.status != 200
+            or self.final_url != self.source_refresh.source_url
+            or hashlib.sha256(self.body).hexdigest() != self.source_refresh.source_sha256
+            or self.human_browser is not None
+            or self.local_input is not None
+            or self.challenge_use is not None
+        ):
+            raise ValueError(
+                "refresh reuse requires its exact original and native HTTP revalidation"
+            )
         if (self.status is None) != (self.human_browser is not None):
             raise ValueError("only explicit browser acquisition has no HTTP status")
         if self.human_browser is not None:
@@ -404,6 +418,7 @@ class DocumentSource(Record):
     transport: TransportEvidence | None = None
     rendered: RenderResult | None = None
     source_session: SourceSessionUse | None = None
+    source_refresh: SourceRefreshUse | None = Field(default=None, exclude_if=lambda v: v is None)
     challenge_use: ChallengeEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     human_browser: BrowserSourceEvidence | None = Field(
@@ -412,6 +427,8 @@ class DocumentSource(Record):
     images: tuple[ImageEvidence, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     def validate_policy(self, config: GhimeraConfig) -> None:
+        if self.source_refresh is not None:
+            self.source_refresh.validate_policy(config.source_refresh, self.url, self.sha256)
         if (
             self.extracted.source_feed is not None
             and self.extracted.source_feed.policy != config.source_feeds
@@ -501,6 +518,14 @@ class DocumentSource(Record):
 
     @model_validator(mode="after")
     def source_binding(self) -> "DocumentSource":
+        if self.source_refresh is not None and (
+            self.source_refresh.source_url != self.url
+            or self.source_refresh.source_sha256 != self.sha256
+            or self.human_browser is not None
+            or self.local_input is not None
+            or self.challenge_use is not None
+        ):
+            raise ValueError("refresh provenance belongs to its exact native source version")
         if any(
             image.candidate.parent_url != self.url or image.candidate.parent_sha256 != self.sha256
             for image in self.images
@@ -724,6 +749,7 @@ class LedgerRow(Record):
     reference: ReferenceDecision | None = None
     reference_query: ReferenceQuery | None = None
     source_session: SourceSessionUse | None = None
+    source_refresh: SourceRefreshUse | None = Field(default=None, exclude_if=lambda v: v is None)
     challenge: ChallengeEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -754,6 +780,15 @@ class LedgerRow(Record):
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if self.source_refresh is not None and (
+            self.event != "policy"
+            or self.reason != "source_refresh_revalidated"
+            or self.url != self.source_refresh.source_url
+            or self.bytes_read != 0
+            or self.status is not None
+            or self.refusal is not None
+        ):
+            raise ValueError("refresh reuse is a zero-transfer policy observation, not a fetch")
         if self.source_feed is not None and (
             self.event != "extraction"
             or self.url != self.source_feed.source_url
@@ -1027,6 +1062,10 @@ class Harvest(Record):
             if row.local_input is not None:
                 row.local_input.validate_policy(input_policy)
         for document in self.source_documents:
+            if document.source_refresh is not None and not any(
+                row.source_refresh == document.source_refresh for row in self.ledger
+            ):
+                raise ValueError("refreshed documents require their revalidation observation")
             transcription = document.extracted.pdf_transcription
             if transcription is not None and any(
                 not any(
@@ -1043,6 +1082,23 @@ class Harvest(Record):
                 raise ValueError("local documents must retain their import observation")
         parsing: dict[tuple[str, str, str | None], list[HtmlExtractionAttempt]] = {}
         for row in self.ledger:
+            if row.source_refresh is not None:
+                row.source_refresh.validate_policy(
+                    self.receipt.effective_config.source_refresh,
+                    row.url or "",
+                    row.source_refresh.source_sha256,
+                )
+                if not any(
+                    fetch.event == "fetch"
+                    and fetch.sequence < row.sequence
+                    and fetch.url == row.url
+                    and fetch.status == 304
+                    and fetch.refusal is None
+                    for fetch in self.ledger
+                ):
+                    raise ValueError(
+                        "refresh policy observation requires an actual preceding HTTP 304"
+                    )
             for clearance in (row.challenge, row.challenge_use):
                 if clearance is not None:
                     if row.url is None:
@@ -1268,6 +1324,14 @@ class Harvest(Record):
                     else None
                 )
             for node in self.graph.nodes:
+                if node.source_refresh is not None and node.retained_source is None:
+                    node.source_refresh.validate_policy(
+                        self.receipt.effective_config.source_refresh,
+                        node.source_url or "",
+                        node.content_sha256 or "",
+                    )
+                    if not any(row.source_refresh == node.source_refresh for row in self.ledger):
+                        raise ValueError("refreshed graph source must retain its HTTP observation")
                 if node.role == "document":
                     node_reading_key = (
                         node.source_url or "",

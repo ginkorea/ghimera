@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.human_browser_types import BrowserSourceEvidence
 from ghimera.local_input_types import LocalInputEvidence
+from ghimera.source_refresh_types import SourceRefreshUse
 from ghimera.transport_types import TransportEvidence
 
 Name = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]*$")]
@@ -185,6 +186,7 @@ class GraphNode(GraphRecord):
         default=None, exclude_if=lambda value: value is None
     )
     local_input: LocalInputEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    source_refresh: SourceRefreshUse | None = Field(default=None, exclude_if=lambda v: v is None)
     human_browser: BrowserSourceEvidence | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
@@ -203,6 +205,7 @@ class GraphNode(GraphRecord):
         human_browser: BrowserSourceEvidence | None = None,
         pdf_reading: GraphPdfReading | None = None,
         retained_source: GraphRetainedOrigin | None = None,
+        source_refresh: SourceRefreshUse | None = None,
     ) -> str:
         identity = f"{len(source_url)}:{source_url}:{content_sha256}:{text_sha256}:{revision}"
         if human_browser is not None:
@@ -211,10 +214,31 @@ class GraphNode(GraphRecord):
             identity += f":{pdf_reading.content_digest()}"
         if retained_source is not None:
             identity += f":{retained_source.content_digest()}"
+        if source_refresh is not None:
+            identity += f":{hashlib.sha256(source_refresh.model_dump_json().encode()).hexdigest()}"
         return identity
 
     @model_validator(mode="after")
     def content_bound(self) -> "GraphNode":
+        if self.source_refresh is not None and (
+            self.role != "document"
+            or self.source_url != self.source_refresh.source_url
+            or self.content_sha256 != self.source_refresh.source_sha256
+            or self.local_input is not None
+            or self.human_browser is not None
+            or self.identity
+            != self.document_identity(
+                self.source_url or "",
+                self.content_sha256 or "",
+                self.text_sha256 or "",
+                self.revision,
+                human_browser=self.human_browser,
+                pdf_reading=self.pdf_reading,
+                retained_source=self.retained_source,
+                source_refresh=self.source_refresh,
+            )
+        ):
+            raise ValueError("refreshed graph documents require their exact reuse representation")
         if self.human_browser is not None and (
             self.role != "document"
             or self.source_url != self.human_browser.final_url
@@ -247,6 +271,7 @@ class GraphNode(GraphRecord):
                     human_browser=self.human_browser,
                     pdf_reading=self.pdf_reading,
                     retained_source=self.retained_source,
+                    source_refresh=self.source_refresh,
                 ):
                     raise ValueError(
                         "graph PDF reading must bind its exact representation identity"
@@ -266,6 +291,7 @@ class GraphNode(GraphRecord):
                 human_browser=self.human_browser,
                 pdf_reading=self.pdf_reading,
                 retained_source=self.retained_source,
+                source_refresh=self.source_refresh,
             )
         ):
             raise ValueError("retained graph origin must bind its document representation")

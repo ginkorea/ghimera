@@ -32,6 +32,7 @@ from ghimera.scoring_config import ScoringConfig
 from ghimera.search_config import SearxConfig
 from ghimera.semantic_types import SemanticConfig
 from ghimera.source_feed_config import SourceFeedConfig
+from ghimera.source_refresh_config import SourceRefreshConfig
 from ghimera.source_session_types import SourceSessionPolicy, validate_sessions
 from ghimera.source_work_config import SourceWorkConfig
 from ghimera.transport_types import TransportConfig
@@ -147,6 +148,9 @@ class GhimeraConfig(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     source_feeds: SourceFeedConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    source_refresh: SourceRefreshConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     dedup: DedupConfig | None = None
@@ -317,6 +321,8 @@ class GhimeraConfig(BaseModel):
                     raise ValueError("public clearance cookies require HTTPS")
         if self.source_sessions and self.http is None:
             raise ValueError("source sessions require an HTTP policy")
+        if self.source_refresh is not None and self.http is None:
+            raise ValueError("source refresh requires an HTTP policy")
         if (
             self.references is not None
             and self.references.discover_cited_by

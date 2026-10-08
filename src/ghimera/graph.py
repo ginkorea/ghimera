@@ -27,7 +27,9 @@ from ghimera.graph_types import (
 )
 from ghimera.human_browser_types import BrowserSourceEvidence
 from ghimera.local_input_types import LocalInputEvidence
+from ghimera.owned_worker import off_loop
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.source_refresh_types import SourceRefreshUse
 from ghimera.transport_types import TransportEvidence
 
 
@@ -117,7 +119,7 @@ class DirectoryGraphSink:
 
     async def append(self, batch: GraphBatch) -> GraphCheckpoint:
         try:
-            return await asyncio.to_thread(self._write, batch)
+            return await off_loop(lambda: self._write(batch))
         except OSError:
             raise GhimeraRefused(RefusalCode.GRAPH_SINK_FAILED) from None
 
@@ -141,7 +143,7 @@ class DirectoryGraphSink:
 
     async def replay(self) -> tuple[GraphBatch, ...]:
         try:
-            return await asyncio.to_thread(self._read)
+            return await off_loop(self._read)
         except (OSError, ValidationError):
             raise GhimeraRefused(RefusalCode.GRAPH_SINK_FAILED) from None
 
@@ -361,9 +363,15 @@ class ResearchGraph:
                 ack = await asyncio.shield(task)
             except asyncio.CancelledError:
                 # Thread-backed commit may already be on disk. Finish the ack
-                # before releasing the writer lock, then propagate cancellation.
+                # before releasing the writer lock, including repeated caller
+                # cancellation. Never pass cancellation into the sink task.
                 cancelled = True
-                ack = await task
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        continue
+                ack = task.result()
             if ack != GraphCheckpoint(sequence=batch.sequence, digest=batch.content_digest()):
                 raise GhimeraRefused(RefusalCode.GRAPH_SINK_FAILED)
             self._apply(batch)
@@ -388,6 +396,7 @@ class ResearchGraph:
         human_browser: BrowserSourceEvidence | None = None,
         pdf_reading: GraphPdfReading | None = None,
         retained_source: GraphRetainedOrigin | None = None,
+        source_refresh: SourceRefreshUse | None = None,
     ) -> GraphNode:
         content_digest = hashlib.sha256(raw).hexdigest()
         text_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -400,6 +409,7 @@ class ResearchGraph:
             human_browser=human_browser,
             pdf_reading=pdf_reading,
             retained_source=retained_source,
+            source_refresh=source_refresh,
         )
         kind = next(role.kind for role in self._config.roles if role.name == "document")
         return GraphNode(
@@ -420,6 +430,7 @@ class ResearchGraph:
             human_browser=human_browser,
             pdf_reading=pdf_reading,
             retained_source=retained_source,
+            source_refresh=source_refresh,
         )
 
     async def document(
@@ -434,6 +445,7 @@ class ResearchGraph:
         human_browser: BrowserSourceEvidence | None = None,
         pdf_reading: GraphPdfReading | None = None,
         retained_source: GraphRetainedOrigin | None = None,
+        source_refresh: SourceRefreshUse | None = None,
     ) -> str:
         doc = self.document_node(
             url,
@@ -445,6 +457,7 @@ class ResearchGraph:
             human_browser=human_browser,
             pdf_reading=pdf_reading,
             retained_source=retained_source,
+            source_refresh=source_refresh,
         )
         source = self.node("source", url, url, self._config.profile_version)
         await self.append(

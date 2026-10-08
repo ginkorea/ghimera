@@ -1,0 +1,13 @@
+# Merge this optional section into an existing configured HTTP collector recipe.
+# Replace this exact URL and owner-private absolute directory before enabling it.
+# URLs are cache targets, not additions to the request's scope or access grants.
+[source_refresh]
+schema = "ghimera.source-refresh/1"
+directory = "/absolute/owned/path/source-versions"
+create_if_missing = false
+urls = ["https://example.org/feed.xml"]
+max_versions = 10000
+max_record_bytes = 32000000
+max_store_bytes = 2000000000
+max_validator_age_seconds = 86400.0
+database_timeout_seconds = 5.0
