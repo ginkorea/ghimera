@@ -17,6 +17,7 @@ from ghimera.collector import Collector
 from ghimera.config import GhimeraConfig
 from ghimera.continuation import CheckpointReceipt, CheckpointStore, ResearchSuspended
 from ghimera.corpus import EvidenceCorpus
+from ghimera.corpus_evidence import CorpusEvidenceReader
 from ghimera.embedding_types import EmbeddingReferences
 from ghimera.human_browser_types import HumanAssistant
 from ghimera.model_reconciliation_types import (
@@ -49,6 +50,7 @@ class CommandExecution(BaseModel):
         "ghimera.command-execution/2",
         "ghimera.command-execution/3",
         "ghimera.command-execution/4",
+        "ghimera.command-execution/5",
     ] = Field(alias="schema")
     operation: Literal["run", "resume", "recover", "observe_model_unknown", "reconcile_model"]
     checkpoint_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
@@ -60,7 +62,7 @@ class CommandExecution(BaseModel):
     snapshot_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
-    recovery_boundary: Literal["source_completion"] | None = Field(
+    recovery_boundary: Literal["source_completion", "query_return"] | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
     model_decision: ModelReconciliationDecision | None = Field(
@@ -72,6 +74,25 @@ class CommandExecution(BaseModel):
 
     @model_validator(mode="after")
     def checkpoint_binding(self) -> "CommandExecution":
+        if (
+            self.recovery_boundary == "query_return"
+            and self.schema_version != "ghimera.command-execution/5"
+        ):
+            raise ValueError("query boundary requires explicit execution /5")
+        if self.schema_version == "ghimera.command-execution/5":
+            if (
+                self.operation != "recover"
+                or self.recovery_boundary != "query_return"
+                or self.snapshot_sha256 is None
+                or self.checkpoint_sha256 is not None
+                or self.suspend_after_rounds is not None
+                or self.model_decision is not None
+                or self.model_attempt is not None
+            ):
+                raise ValueError(
+                    "query recovery requires its exact explicit boundary and original snapshot"
+                )
+            return self
         if self.schema_version == "ghimera.command-execution/4":
             if (
                 self.operation not in {"observe_model_unknown", "reconcile_model", "recover"}
@@ -122,6 +143,7 @@ class CommandOptions(BaseModel):
         "ghimera.collector-command/3",
         "ghimera.collector-command/4",
         "ghimera.collector-command/5",
+        "ghimera.collector-command/6",
     ] = Field(alias="schema")
     config_path: Path
     request_path: Path | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -138,6 +160,10 @@ class CommandOptions(BaseModel):
 
     @model_validator(mode="after")
     def paths(self) -> "CommandOptions":
+        query_route = (
+            self.execution is not None
+            and self.execution.schema_version == "ghimera.command-execution/5"
+        )
         caller_route = (
             self.execution is not None
             and self.execution.schema_version == "ghimera.command-execution/4"
@@ -147,7 +173,12 @@ class CommandOptions(BaseModel):
             "observe_model_unknown",
             "reconcile_model",
         }
-        if self.schema_version == "ghimera.collector-command/5":
+        if self.schema_version == "ghimera.collector-command/6":
+            if not query_route:
+                raise ValueError("command /6 requires explicit query recovery")
+        elif query_route:
+            raise ValueError("query recovery requires command /6")
+        elif self.schema_version == "ghimera.collector-command/5":
             if not caller_route:
                 raise ValueError("command /5 requires explicit model caller route")
         elif caller_route:
@@ -306,6 +337,11 @@ def assemble_collector(
         source_resolver=source_resolver,
         human_assistant=human_assistant,
         corpus=corpus,
+        retained_reader=CorpusEvidenceReader(config.research.retained_evidence.reader, corpus)
+        if config.research is not None
+        and config.research.retained_evidence is not None
+        and corpus is not None
+        else None,
     )
 
 

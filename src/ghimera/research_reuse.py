@@ -10,7 +10,8 @@ from ghimera.corpus_evidence import CorpusEvidenceBundle, CorpusEvidenceReader
 from ghimera.corpus_types import BoundCorpusDocument, CorpusRecord
 from ghimera.embedding_types import EncodingCall, EncodingRecoveryEvidence
 from ghimera.graph_types import GraphRetainedOrigin
-from ghimera.models import Document, RetainedOriginal
+from ghimera.models import Document, LedgerRow, RetainedOriginal
+from ghimera.query_work import QueryWork
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_reranking import RunBoundReranker, validate_run_evidence
 from ghimera.research_reranking_types import RerankDecision, ResearchRerankingConfig
@@ -281,20 +282,17 @@ class RetainedResearchSession:
         *,
         remaining_seconds: float,
         rerank_decision: RerankDecision | None = None,
+        query_work: QueryWork | None = None,
     ) -> None:
         if self._active:
             raise ValueError("one retained research session cannot overlap queries")
-        if any(bundle.query_text == text for bundle in self._snapshots) and (
-            rerank_decision is None or rerank_decision.action == "fresh"
+        if (
+            query_work is None
+            and any(bundle.query_text == text for bundle in self._snapshots)
+            and (rerank_decision is None or rerank_decision.action == "fresh")
         ):
             return  # Includes a successful empty query; resume does not repeat it.
         invoker = None
-        if self._reader.reranking_policy is not None:
-            if self._budget is None or self._ledger is None or rerank_decision is None:
-                raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
-            invoker = RunBoundReranker(
-                self._budget, self._ledger, channel="retained", decision=rerank_decision
-            )
         reader, policy = self._policy.reader, self._policy
         if not text.strip() or len(text) > reader.max_query_chars:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
@@ -310,10 +308,38 @@ class RetainedResearchSession:
             > policy.max_input_chars
         ):
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        if query_work is not None:
+            reservation = query_work.prepare(
+                "retained",
+                text.encode(),
+                ("retained-corpus", self._reader.policy.corpus_config_sha256),
+                corpus=self._reader.query_binding(text),
+                retained_reservation=len(self._observations) + 1,
+                input_chars=len(reader.query_encoder.text_prefix) + len(text),
+                rerank_operation_key=rerank_decision.operation_key
+                if rerank_decision is not None
+                else None,
+            )
+            if query_work.resuming:
+                retained = (
+                    CorpusEvidenceBundle.model_validate_json(query_work.ack.result_json)
+                    if query_work.ack is not None and query_work.ack.result_json is not None
+                    else None
+                )
+                self._reader.admit_query(reservation, bundle=retained)
+            query_work.commit()
+            rerank_decision = query_work.decision(rerank_decision)
+        if self._reader.reranking_policy is not None:
+            if self._budget is None or self._ledger is None or rerank_decision is None:
+                raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+            invoker = RunBoundReranker(
+                self._budget, self._ledger, channel="retained", decision=rerank_decision
+            )
         call: EncodingCall | None = None
         recovered: EncodingRecoveryEvidence | None = None
         bundle: CorpusEvidenceBundle | None = None
         outcome: Literal["success", "refused", "cancelled"] = "refused"
+        cancelled = False
         self._active = True
 
         def observe(value: EncodingCall) -> None:
@@ -324,9 +350,23 @@ class RetainedResearchSession:
 
         try:
             async with asyncio.timeout(min(remaining_seconds, reader.timeout_seconds)):
-                candidate = await self._reader.read(
-                    text, encoding_observer=observe, rerank_invoker=invoker
-                )
+                if (
+                    query_work is not None
+                    and query_work.ack is not None
+                    and query_work.ack.result_json is not None
+                ):
+                    candidate = CorpusEvidenceBundle.model_validate_json(query_work.ack.result_json)
+                    call = candidate.query.encoding_call
+                else:
+                    candidate = await self._reader.read(
+                        text,
+                        encoding_observer=observe,
+                        rerank_invoker=invoker,
+                        query_reservation=query_work.reservation
+                        if query_work is not None
+                        else None,
+                        resume_operation=query_work is not None and query_work.resuming,
+                    )
             recovered = candidate.query.encoding_recovery
             if call is None:
                 if recovered is None or not recovered.reused:
@@ -358,12 +398,37 @@ class RetainedResearchSession:
             if self._budget is not None and self._ledger is not None:
                 probe.validate_run(self._budget.config, self._ledger.snapshot())
             bundle, outcome = probe.snapshots[-1], "success"
+            if query_work is not None and query_work.ack is None:
+                acknowledged = query_work.acknowledgement(bundle.model_dump_json().encode())
+                query_work.ledger.append(
+                    LedgerRow(
+                        sequence=query_work.ledger.next_sequence,
+                        event="query_ack",
+                        reason="retained_query_ended",
+                        query_ack=acknowledged,
+                    )
+                )
+                query_work.ack = acknowledged
         except asyncio.CancelledError:
             outcome = "cancelled"
+            cancelled = True
             raise
         except (ValueError, OSError, TimeoutError) as exc:
             raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE) from exc
         finally:
+            if query_work is not None and query_work.ack is None:
+                acknowledged = query_work.acknowledgement(
+                    None, "cancelled" if cancelled else "refused"
+                )
+                query_work.ledger.append(
+                    LedgerRow(
+                        sequence=query_work.ledger.next_sequence,
+                        event="query_ack",
+                        reason="retained_query_ended",
+                        query_ack=acknowledged,
+                    )
+                )
+                query_work.ack = acknowledged
             self._observations.append(
                 RetrievalObservation(
                     query_text=text,

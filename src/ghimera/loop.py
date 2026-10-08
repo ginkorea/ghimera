@@ -46,6 +46,7 @@ from ghimera.models import (
     Scope,
     StopReason,
     Verdict,
+    count_fetch_attempts,
 )
 from ghimera.pdf_transcription import PdfTranscriptionStage
 from ghimera.ports import Extractor, Judge, ScoredDocumentJudge
@@ -414,9 +415,17 @@ class GoalLoop:
                 update={
                     "judge_calls": validate_model_rows(
                         self._config.model_work, self._config.judge_budget, rows
-                    )
+                    ),
+                    "fetches": count_fetch_attempts(self._config, rows),
+                    "bytes_read": sum(row.bytes_read for row in rows),
                 }
             )
+            if model_return.snapshot.phase == "query":
+                search_calls += sum(
+                    row.query_reservation is not None
+                    and row.query_reservation.channel == "discovery"
+                    for row in rows[len(harvest.ledger) :]
+                )
         sink = DirectoryLedgerSink(
             self._config, run_id, harvest.goal, self._judge.model, resume_rows=rows
         )
@@ -1773,6 +1782,10 @@ class GoalLoop:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if session.source_work is not None:
             session.source_work.assert_quiescent()
+        from ghimera.query_work import validate_query_rows
+
+        if validate_query_rows(self._config, session.ledger.snapshot()):
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         session._closed = True
         ledger = session.ledger
         ledger.append(LedgerRow(sequence=ledger.next_sequence, event="stop", reason=stop))

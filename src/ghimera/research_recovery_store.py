@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 from typing import Protocol
 
+from pydantic import TypeAdapter
+
 from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.journal_types import JournalReport, canonical
@@ -25,6 +27,7 @@ from ghimera.models import LedgerRow
 from ghimera.research_recovery_types import (
     ResearchControlSnapshot,
     ResearchPhaseResult,
+    ResearchQueryControlSnapshot,
     ResearchRecoveryModels,
     ResearchRecoveryRead,
     ResearchRecoveryReceipt,
@@ -36,6 +39,7 @@ from ghimera.research_types import (
     PlanningRequest,
     ResearchPlan,
     ResearchRequest,
+    SearchRequest,
 )
 
 
@@ -82,7 +86,9 @@ class ResearchRecoveryStore:
         _private_directory(policy.directory)
         _private_directory(self._path)
 
-    def _journal(self, snapshot: ResearchControlSnapshot) -> JournalReport:
+    def _journal(
+        self, snapshot: ResearchControlSnapshot | ResearchQueryControlSnapshot
+    ) -> JournalReport:
         from ghimera.journal import read_journal
 
         self._check()
@@ -110,6 +116,8 @@ class ResearchRecoveryStore:
             raise ValueError("recovery requires the exact intact unsealed original journal prefix")
         # Reuse the native serializer. This inert budget performs no work or
         # reservation; its configured model-work policy selects port serialization.
+        if isinstance(snapshot, ResearchQueryControlSnapshot):
+            return report
         request = port_input(RunBudget(self._config, lambda: 0.0), snapshot.model_request)
         pending = snapshot.pending_model
         if pending.input_sha256 != hashlib.sha256(
@@ -118,10 +126,14 @@ class ResearchRecoveryStore:
             raise ValueError("recovery input binding differs from the exact native phase request")
         return report
 
-    def write(self, snapshot: ResearchControlSnapshot) -> ResearchRecoveryReceipt:
+    def write(
+        self, snapshot: ResearchControlSnapshot | ResearchQueryControlSnapshot
+    ) -> ResearchRecoveryReceipt:
         from ghimera.journal import _directory_sync, _read_file, _write_all
 
-        snapshot = ResearchControlSnapshot.model_validate(snapshot.model_dump())
+        snapshot = TypeAdapter(
+            ResearchControlSnapshot | ResearchQueryControlSnapshot
+        ).validate_python(snapshot.model_dump())
         report = self._journal(snapshot)
         if report.rows != snapshot.progress.harvest.ledger:
             raise ValueError("snapshot cannot omit work already acknowledged by the journal")
@@ -411,7 +423,9 @@ class ResearchRecoveryStore:
         data = _read_file(self._path / "research-control.json", self._maximum)
         if hashlib.sha256(data).hexdigest() != expected_sha256:
             raise ValueError("research control snapshot differs from its expected digest")
-        snapshot = ResearchControlSnapshot.model_validate_json(data)
+        snapshot: ResearchControlSnapshot | ResearchQueryControlSnapshot = TypeAdapter(
+            ResearchControlSnapshot | ResearchQueryControlSnapshot
+        ).validate_json(data)
         if (
             expected_request is not None
             and snapshot.request != expected_request
@@ -420,6 +434,10 @@ class ResearchRecoveryStore:
         ):
             raise ValueError("recovery request or collaborator identity differs from the original")
         report = self._journal(snapshot)
+        if isinstance(snapshot, ResearchQueryControlSnapshot):
+            if decision is not None or attempt is not None or observe_unknown:
+                raise ValueError("query control cannot authorize an unknown model attempt")
+            return self._query_tail(snapshot, report)
         tail = report.rows[len(snapshot.progress.harvest.ledger) :]
         if any(row.model_decision is not None for row in tail):
             validate_decisions(report.rows)
@@ -453,6 +471,81 @@ class ResearchRecoveryStore:
             snapshot=snapshot,
             journal=report,
             intent_sequence=self._admit_tail(snapshot, report),
+        )
+
+    def _query_tail(
+        self, snapshot: ResearchQueryControlSnapshot, report: JournalReport
+    ) -> ResearchRecoveryRead:
+        from ghimera.query_work import validate_query_rows
+
+        tail = report.rows[len(snapshot.progress.harvest.ledger) :]
+        if not tail:
+            return ResearchRecoveryRead(snapshot=snapshot, journal=report, intent_sequence=None)
+        if tail[0].query_reservation != snapshot.pending_query:
+            raise ValueError("query requires its exact durable original outer reservation")
+        original = tail[0]
+        remaining = list(tail[1:])
+        rerank_sequence = None
+        if remaining and remaining[0].rerank_reservation is not None:
+            intent = remaining.pop(0)
+            if not remaining or remaining[0].model_ack is None:
+                raise ValueError("unknown original query score remains held")
+            acknowledged = remaining.pop(0)
+            ack = acknowledged.model_ack
+            corpus = snapshot.pending_query.corpus
+            reservation = intent.rerank_reservation
+            if (
+                ack is None
+                or ack.intent_sequence != intent.sequence
+                or ack.outcome != "returned"
+                or ack.stored_output is None
+                or corpus is None
+                or reservation is None
+                or reservation.corpus != corpus.configuration
+                or reservation.request.corpus_id != corpus.corpus_id
+                or reservation.request.generation != corpus.generation
+                or reservation.channel != snapshot.pending_query.channel
+                or reservation.operation_key != snapshot.pending_query.rerank_operation_key
+                or reservation.request.query
+                != (
+                    SearchRequest.model_validate_json(
+                        snapshot.pending_query.request_json
+                    ).query.text
+                    if snapshot.pending_query.channel == "discovery"
+                    else snapshot.pending_query.request_json.decode()
+                )
+            ):
+                raise ValueError("query score ACK lost its exact original corpus/run binding")
+            rerank_sequence = intent.sequence
+            if remaining and remaining[0].model_replay is not None:
+                replay = remaining.pop(0).model_replay
+                if replay is None or replay.intent_sequence != intent.sequence:
+                    raise ValueError("query replay changed its original score intent")
+        result = None
+        if remaining:
+            if len(remaining) != 1:
+                raise ValueError("later query/source/graph effects require reconciliation")
+            result = remaining[0]
+            if (
+                result.query_ack is None
+                or result.query_ack.reservation_sequence != original.sequence
+                or result.query_ack.outcome != "returned"
+            ):
+                raise ValueError("query requires its exact retained successful outer ACK")
+        if result is None and rerank_sequence is None:
+            raise ValueError("unknown outer query remains charged and held, never contacted")
+        pending = validate_query_rows(self._config, report.rows)
+        if set(pending) - (
+            {original.sequence} if result is None else set()
+        ) or unreconciled_model_sequences(report.rows):
+            raise ValueError("unresolved query/model chains remain held")
+        return ResearchRecoveryRead(
+            snapshot=snapshot,
+            journal=report,
+            intent_sequence=None,
+            query_sequence=original.sequence,
+            query_ack_sequence=result.sequence if result is not None else None,
+            query_rerank_sequence=rerank_sequence,
         )
 
     def attempt_history(self) -> tuple[ModelAttemptAuthorization, ...]:

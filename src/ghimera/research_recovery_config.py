@@ -17,7 +17,10 @@ class SourceCompletionPolicy(BaseModel):
 class ResearchRecoveryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal[
-        "ghimera.research-recovery/1", "ghimera.research-recovery/2", "ghimera.research-recovery/3"
+        "ghimera.research-recovery/1",
+        "ghimera.research-recovery/2",
+        "ghimera.research-recovery/3",
+        "ghimera.research-recovery/4",
     ] = Field(alias="schema")
     max_snapshot_bytes: Annotated[int, Field(strict=True, gt=0)]
     clock_policy: Literal["include_downtime"]
@@ -28,9 +31,18 @@ class ResearchRecoveryConfig(BaseModel):
     model_reconciliation: ModelReconciliationPolicy | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    query_control: Literal["serial_acknowledged"] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def versioned(self) -> "ResearchRecoveryConfig":
+        if self.schema_version == "ghimera.research-recovery/4":
+            if self.query_control != "serial_acknowledged":
+                raise ValueError("query recovery /4 requires explicit serial acknowledged control")
+            return self
+        if self.query_control is not None:
+            raise ValueError("query control requires explicit recovery /4")
         if self.schema_version == "ghimera.research-recovery/3":
             if self.model_reconciliation is None:
                 raise ValueError("recovery /3 requires explicit model reconciliation policy")

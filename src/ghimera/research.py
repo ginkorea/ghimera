@@ -47,6 +47,8 @@ from ghimera.models import (
     Scope,
     StopReason,
 )
+from ghimera.query_work import QueryWork
+from ghimera.query_work_types import QueryCursor, QueryReservation
 from ghimera.reference_types import ReferenceQuery, ReferenceSource, SearchReference
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from ghimera.research_config import ResearchConfig
@@ -54,6 +56,7 @@ from ghimera.research_recovery_store import ResearchRecoveryStore
 from ghimera.research_recovery_types import (
     ResearchControlSnapshot,
     ResearchPendingModel,
+    ResearchQueryControlSnapshot,
     ResearchRecoveryModels,
     ResearchRecoveryRead,
 )
@@ -77,6 +80,8 @@ from ghimera.research_types import (
     ReviewRequest,
     SearchObservation,
     SearchQuery,
+    SearchRequest,
+    SearchResponse,
 )
 from ghimera.search import GroundedSearch
 from ghimera.search_history import SearchHistory
@@ -192,7 +197,11 @@ class ResearchScopeCompiler:
         return tuple(sorted(self._hosts))
 
     def restore_hosts(
-        self, checkpoint: ResearchCheckpoint | ResearchControlSnapshot | SourceCompletionSnapshot
+        self,
+        checkpoint: ResearchCheckpoint
+        | ResearchControlSnapshot
+        | ResearchQueryControlSnapshot
+        | SourceCompletionSnapshot,
     ) -> None:
         observed = {
             urlsplit(row.url).hostname
@@ -339,6 +348,8 @@ class ModelCalls:
         attempt = None
         if recovery is not None:
             saved = recovery.snapshot
+            if not isinstance(saved, ResearchControlSnapshot):
+                raise FatalModelWorkFailure("query recovery cannot replace a model-phase boundary")
             if (
                 saved.phase != event
                 or saved.pending_model.model != model
@@ -479,6 +490,19 @@ class ResearchLoop:
         self._collector, self._search = collector, search
         self._planner, self._analyst, self._reviewer = planner, analyst, reviewer
         self._retained_reader = retained_reader
+        recovery_policy = config.research_recovery
+        if recovery_policy is not None and recovery_policy.query_control is not None:
+            if policy.search_concurrency != 1 or (
+                config.discovery is not None
+                and (
+                    config.discovery.provider_concurrency != 1
+                    or config.discovery.mode == "fanout"
+                    or config.discovery.cold_start_fanout
+                )
+            ):
+                raise ValueError(
+                    "selected serial query recovery cannot adopt overlapping query execution"
+                )
         if config.graph is not None and config.graph.enabled:
             roles = {role.name for role in config.graph.roles}
             if not {"question", "query"} <= roles:
@@ -615,6 +639,10 @@ class ResearchLoop:
         compiler: ResearchScopeCompiler,
         trace: dict[str, str],
         history: SearchHistory,
+        *,
+        query_factory: Callable[[QueryCursor], QueryWork] | None = None,
+        restored_cursor: QueryCursor | None = None,
+        round_number: int = 1,
     ) -> tuple[str, ...]:
         semaphore = asyncio.Semaphore(self._policy.search_concurrency)
 
@@ -631,9 +659,45 @@ class ResearchLoop:
                     self._refuse(session, exc.code)
                     return ()
 
-        completed = await asyncio.gather(
-            *(search(query) for query in queries), return_exceptions=True
-        )
+        if query_factory is None:
+            completed = await asyncio.gather(
+                *(search(query) for query in queries), return_exceptions=True
+            )
+        else:
+            completed = []
+            for index, query in enumerate(queries):
+                cursor = QueryCursor(
+                    stage="discovery", round_number=round_number, query_index=index
+                )
+                if restored_cursor is not None and index < restored_cursor.query_index:
+                    observations = history.completed(cursor)
+                else:
+
+                    def factory(
+                        provider_index: int,
+                        provider: GroundedSearch,
+                        current_cursor: QueryCursor = cursor,
+                    ) -> QueryWork:
+                        return query_factory(
+                            current_cursor.model_copy(update={"provider_index": provider_index})
+                        )
+
+                    try:
+                        observations = await history.discover_many(
+                            query,
+                            query_factory=factory,
+                            restored_cursor=restored_cursor
+                            if restored_cursor is not None and index == restored_cursor.query_index
+                            else None,
+                        )
+                    except GhimeraRefused as exc:
+                        if exc.code == RefusalCode.BUDGET_EXHAUSTED:
+                            raise
+                        self._refuse(session, exc.code)
+                        observations = ()
+                completed.append(
+                    tuple(hit.url for obs in observations for hit in obs.response.hits)
+                )
         batches: list[tuple[str, ...]] = []
         for outcome in completed:
             if isinstance(outcome, BaseException):
@@ -782,6 +846,8 @@ class ResearchLoop:
             decision=decision,
         )
         saved = recovery.snapshot
+        if not isinstance(saved, ResearchControlSnapshot):
+            raise ValueError("caller model decision requires its original model control")
         downtime = time.time() - saved.saved_at
         if downtime < 0:
             raise ValueError("wall clock moved backwards since original snapshot")
@@ -812,7 +878,7 @@ class ResearchLoop:
         run_id: str,
         *,
         snapshot_sha256: str,
-        boundary: Literal["model_return", "source_completion"] = "model_return",
+        boundary: Literal["model_return", "source_completion", "query_return"] = "model_return",
         attempt: ModelAttemptAuthorization | None = None,
     ) -> ResearchResult:
         """Adopt one acknowledged model return at its saved native phase.
@@ -859,6 +925,12 @@ class ResearchLoop:
             attempt=attempt,
         )
         saved = recovery.snapshot
+        if isinstance(saved, ResearchQueryControlSnapshot):
+            if boundary != "query_return":
+                raise ValueError("query control requires its explicitly selected recovery boundary")
+            self.validate_query_recovery(recovery)
+        elif boundary == "query_return":
+            raise ValueError("query recovery requires its original query control snapshot")
         downtime = time.time() - saved.saved_at
         if downtime < 0:
             raise ValueError("wall clock moved backwards since the control snapshot")
@@ -875,6 +947,60 @@ class ResearchLoop:
             return await self._drive(saved.request, session, run_id=run_id, recovery=recovery)
         finally:
             session.close()
+
+    def validate_query_recovery(self, recovery: ResearchRecoveryRead) -> None:
+        saved = recovery.snapshot
+        if not isinstance(
+            saved, ResearchQueryControlSnapshot
+        ) or saved.runtime_json != record_output(self.source_runtime()):
+            raise ValueError("query recovery changed its original native runtime")
+        reservation = saved.pending_query
+        ack = (
+            recovery.journal.rows[recovery.query_ack_sequence].query_ack
+            if recovery.query_ack_sequence is not None
+            else None
+        )
+        if reservation.channel == "retained":
+            from ghimera.corpus_evidence import CorpusEvidenceBundle
+
+            if self._retained_reader is None:
+                raise ValueError("query recovery lost its original retained reader")
+            text = reservation.request_json.decode()
+            if self._retained_reader.query_binding(text) != reservation.corpus:
+                raise ValueError("retained query corpus generation/recipe/model changed")
+            if recovery.query_sequence is not None:
+                bundle = (
+                    CorpusEvidenceBundle.model_validate_json(ack.result_json)
+                    if ack is not None and ack.result_json is not None
+                    else None
+                )
+                self._retained_reader.admit_query(reservation, bundle=bundle)
+        else:
+            providers = (
+                self._search.providers
+                if isinstance(self._search, DiscoveryProviders)
+                else (self._search,)
+            )
+            provider = next(
+                (
+                    p
+                    for p in providers
+                    if p.identity == (reservation.provider, reservation.provider_revision)
+                ),
+                None,
+            )
+            if provider is None:
+                raise ValueError("query recovery changed its original discovery provider")
+            request = SearchRequest.model_validate_json(reservation.request_json)
+            if provider.query_binding(request.query) != reservation.corpus:
+                raise ValueError("discovery corpus generation/recipe/model changed")
+            if recovery.query_sequence is not None:
+                response = (
+                    SearchResponse.model_validate_json(ack.result_json)
+                    if ack is not None and ack.result_json is not None
+                    else None
+                )
+                provider.admit_query(reservation, response)
 
     @staticmethod
     def _documents(
@@ -893,7 +1019,12 @@ class ResearchLoop:
         return reuse.report.notices if reuse is not None else ()
 
     async def _retrieve(
-        self, session: CollectionSession, reuse: RetainedResearchSession | None, text: str
+        self,
+        session: CollectionSession,
+        reuse: RetainedResearchSession | None,
+        text: str,
+        *,
+        query_work: QueryWork | None = None,
     ) -> None:
         if reuse is None:
             return
@@ -906,13 +1037,23 @@ class ResearchLoop:
                 RerankDecision(
                     schema="ghimera.rerank-decision/1",
                     action="fresh",
-                    operation_key="retained:" + hashlib.sha256(text.encode()).hexdigest(),
+                    operation_key="retained:"
+                    + (
+                        query_work.original.operation_id
+                        if query_work is not None and query_work.original is not None
+                        else str(session.ledger.next_sequence)
+                    )
+                    if query_work is not None
+                    else "retained:" + hashlib.sha256(text.encode()).hexdigest(),
                 )
                 if self._policy.reranking is not None
                 else None
             )
             await reuse.query(
-                text, remaining_seconds=session.budget.remaining_seconds, rerank_decision=decision
+                text,
+                remaining_seconds=session.budget.remaining_seconds,
+                rerank_decision=decision,
+                query_work=query_work,
             )
         except GhimeraRefused as exc:
             self._refuse(session, exc.code)
@@ -1187,6 +1328,87 @@ class ResearchLoop:
             source_policy is not None and source_policy.source_completion is not None
         )
 
+        query_enabled = source_policy is not None and source_policy.query_control is not None
+        query_recovery_used = False
+
+        def query_work(cursor: QueryCursor) -> QueryWork:
+            nonlocal query_recovery_used
+
+            def before_query(reservation: QueryReservation) -> None:
+                policy = self._config.research_recovery
+                if policy is None or run_id is None:
+                    raise ValueError("query control requires its original durable run")
+                current = ResearchResult(
+                    schema="chimera.research-result/3"
+                    if reuse is not None
+                    else "chimera.research-result/2",
+                    status="partial",
+                    stop_reason="rounds_exhausted",
+                    harvest=self._collector.snapshot(session),
+                    questions=questions,
+                    rounds=tuple(rounds),
+                    unresolved=tuple(q.id for q in questions),
+                    answer=None,
+                    review=None,
+                    planner=self._planner.model,
+                    analyst=self._analyst.model,
+                    reviewer=self._reviewer.model,
+                    search_provider=self._search.identity[0],
+                    search_revision=self._search.identity[1],
+                    search_calls=session.budget.search_calls,
+                    search_observations=history.observations,
+                    retrieval=reuse.report if reuse is not None else None,
+                )
+                snapshot = ResearchQueryControlSnapshot(
+                    schema="ghimera.research-control-snapshot/2",
+                    run_id=run_id,
+                    saved_at=time.time(),
+                    max_snapshot_bytes=policy.max_snapshot_bytes,
+                    request=request,
+                    progress=current,
+                    session=session.checkpoint_state(),
+                    admitted_hosts=compiler.hosts,
+                    pending_query=reservation,
+                    runtime_json=record_output(self.source_runtime()),
+                    round_number=cursor.round_number,
+                    current_plan=plan,
+                    assessment=assessment,
+                    assessment_context=assessment_context,
+                    discovered_urls=urls,
+                    collection_stop=collection_stop,
+                    before_documents=tuple(sorted(before_documents)),
+                    before_answers=tuple(sorted(before_answers)),
+                    allow_retained_completion=allow_retained_completion,
+                    quantum_start=quantum_start,
+                )
+                ResearchRecoveryStore(self._config, run_id, policy).write(snapshot)
+
+            if (
+                isinstance(saved, ResearchQueryControlSnapshot)
+                and not query_recovery_used
+                and cursor == saved.pending_query.cursor
+            ):
+                if recovery is None:
+                    raise ValueError("query control lost its verified native read")
+                query_recovery_used = True
+                ack_row = (
+                    recovery.journal.rows[recovery.query_ack_sequence]
+                    if recovery.query_ack_sequence is not None
+                    else None
+                )
+                return QueryWork(
+                    session.budget,
+                    session.ledger,
+                    cursor,
+                    before_query,
+                    original=saved.pending_query,
+                    original_sequence=recovery.query_sequence,
+                    acknowledgement=ack_row.query_ack if ack_row is not None else None,
+                    acknowledgement_sequence=recovery.query_ack_sequence,
+                    rerank_sequence=recovery.query_rerank_sequence,
+                )
+            return QueryWork(session.budget, session.ledger, cursor, before_query)
+
         def before_model(event: ModelEvent, model: ModelIdentity, inputs: ResearchRecord) -> None:
             policy = self._config.research_recovery
             if policy is None:
@@ -1247,7 +1469,12 @@ class ResearchLoop:
             )
             ResearchRecoveryStore(self._config, run_id, policy).write(snapshot)
 
-        calls = ModelCalls(session, self._policy, before_call=before_model, recovery=recovery)
+        calls = ModelCalls(
+            session,
+            self._policy,
+            before_call=before_model,
+            recovery=recovery if not isinstance(saved, ResearchQueryControlSnapshot) else None,
+        )
         answer: AnswerDraft | None = None
         review: AnswerReview | None = None
         reason: Literal["answered", "rounds_exhausted", "budget_exhausted", "failed"] = (
@@ -1286,10 +1513,27 @@ class ResearchLoop:
                             if exc.code == RefusalCode.BUDGET_EXHAUSTED
                             else "failed"
                         )
-        else:
+        if (
+            isinstance(saved, ResearchQueryControlSnapshot)
+            and saved.pending_query.cursor.stage == "initial_retained"
+        ):
+            await self._retrieve(
+                session, reuse, request.intent, query_work=query_work(saved.pending_query.cursor)
+            )
+            saved = None
+        elif restored_control is None:
             try:
                 await self._collector.import_local(session, request.local_documents)
-                await self._retrieve(session, reuse, request.intent)
+                await self._retrieve(
+                    session,
+                    reuse,
+                    request.intent,
+                    query_work=query_work(
+                        QueryCursor(stage="initial_retained", round_number=1, query_index=0)
+                    )
+                    if query_enabled and reuse is not None
+                    else None,
+                )
             except GhimeraRefused as exc:
                 self._refuse(session, exc.code)
                 reason = (
@@ -1307,7 +1551,15 @@ class ResearchLoop:
                 resuming_source = (
                     isinstance(saved, SourceCompletionSnapshot) and number == saved.round_number
                 )
-                if not resuming_assessment and not resuming_source:
+                resuming_query = (
+                    isinstance(saved, ResearchQueryControlSnapshot) and number == saved.round_number
+                )
+                query_stage = (
+                    saved.pending_query.cursor.stage
+                    if resuming_query and isinstance(saved, ResearchQueryControlSnapshot)
+                    else None
+                )
+                if not resuming_assessment and not resuming_source and not resuming_query:
                     if saved is None or saved.phase != "plan":
                         await self._collector.resolve_identity(session)
                     planning = (
@@ -1353,8 +1605,6 @@ class ResearchLoop:
                         if prior_assessment
                         else set()
                     )
-                    for query in plan.queries:
-                        await self._retrieve(session, reuse, query.text)
                 else:
                     if plan is None:
                         raise ValueError("assessment recovery requires its original round plan")
@@ -1373,6 +1623,34 @@ class ResearchLoop:
                         if session.graph is not None
                         else {}
                     )
+                if plan is not None and (
+                    not resuming_assessment
+                    and not resuming_source
+                    and not resuming_query
+                    or query_stage == "planned_retained"
+                ):
+                    first = (
+                        saved.pending_query.cursor.query_index
+                        if query_stage == "planned_retained"
+                        and isinstance(saved, ResearchQueryControlSnapshot)
+                        else 0
+                    )
+                    for query_index in range(first, len(plan.queries)):
+                        query = plan.queries[query_index]
+                        await self._retrieve(
+                            session,
+                            reuse,
+                            query.text,
+                            query_work=query_work(
+                                QueryCursor(
+                                    stage="planned_retained",
+                                    round_number=number,
+                                    query_index=query_index,
+                                )
+                            )
+                            if query_enabled and reuse is not None
+                            else None,
+                        )
                 if plan is None:
                     raise ValueError("research round requires its validated plan")
                 if (
@@ -1382,6 +1660,7 @@ class ResearchLoop:
                     and allow_retained_completion
                     and not request.seeds
                     and not resuming_source
+                    and query_stage not in {"discovery", "cited_by"}
                     and (not resuming_assessment or assessment_context == "retained_first")
                 ):
                     assessment_context = "retained_first"
@@ -1415,11 +1694,30 @@ class ResearchLoop:
                         )
                         reason = "answered"
                         break
-                if not resuming_source and (
-                    not resuming_assessment or assessment_context == "retained_first"
+                if (
+                    not resuming_source
+                    and query_stage != "cited_by"
+                    and (not resuming_assessment or assessment_context == "retained_first")
                 ):
-                    urls = await self._discover(session, plan.queries, compiler, trace, history)
-                if number == 1 and not resuming_assessment and not resuming_source:
+                    urls = await self._discover(
+                        session,
+                        plan.queries,
+                        compiler,
+                        trace,
+                        history,
+                        query_factory=query_work if query_enabled else None,
+                        restored_cursor=saved.pending_query.cursor
+                        if query_stage == "discovery"
+                        and isinstance(saved, ResearchQueryControlSnapshot)
+                        else None,
+                        round_number=number,
+                    )
+                if (
+                    number == 1
+                    and not resuming_assessment
+                    and not resuming_source
+                    and query_stage != "cited_by"
+                ):
                     allowed_seeds: list[str] = []
                     for seed in request.seeds:
                         if compiler.accept(seed):
@@ -1434,13 +1732,17 @@ class ResearchLoop:
                     else compiler.scope()
                 )
                 collection_scope = scope
-                if not resuming_source and (
-                    not resuming_assessment or assessment_context == "retained_first"
+                if (
+                    not resuming_source
+                    and query_stage != "cited_by"
+                    and (not resuming_assessment or assessment_context == "retained_first")
                 ):
                     collection_stop = "frontier_empty"
                 quantum_start = (
                     saved.quantum_start
                     if resuming_source and isinstance(saved, SourceCompletionSnapshot)
+                    else saved.quantum_start
+                    if query_stage == "cited_by" and isinstance(saved, ResearchQueryControlSnapshot)
                     else session.budget.fetches
                 )
                 if scope is not None and (
@@ -1451,7 +1753,9 @@ class ResearchLoop:
                         if resuming_source and isinstance(saved, SourceCompletionSnapshot)
                         else "primary"
                     )
-                    if not resuming_source or collection_stop == "frontier_empty":
+                    if query_stage != "cited_by" and (
+                        not resuming_source or collection_stop == "frontier_empty"
+                    ):
                         collection_stop = await self._collector.collect(
                             session,
                             scope,
@@ -1469,7 +1773,18 @@ class ResearchLoop:
                         collection_stop not in {"failed", "budget_exhausted"}
                         and collection_leg == "primary"
                     ):
-                        cited_urls = await self._cited_by(session, scope, questions, history)
+                        cited_urls = await self._cited_by(
+                            session,
+                            scope,
+                            questions,
+                            history,
+                            query_factory=query_work if query_enabled else None,
+                            restored_cursor=saved.pending_query.cursor
+                            if query_stage == "cited_by"
+                            and isinstance(saved, ResearchQueryControlSnapshot)
+                            else None,
+                            round_number=number,
+                        )
                         urls = tuple(dict.fromkeys(urls + cited_urls))
                         remaining = self._policy.max_pages_per_round - (
                             session.budget.fetches - quantum_start
@@ -1598,6 +1913,10 @@ class ResearchLoop:
         scope: Scope,
         questions: tuple[Question, ...],
         history: SearchHistory,
+        *,
+        query_factory: Callable[[QueryCursor], QueryWork] | None = None,
+        restored_cursor: QueryCursor | None = None,
+        round_number: int = 1,
     ) -> tuple[str, ...]:
         """Query observed sources, concurrently, then score using native parent context.
 
@@ -1617,7 +1936,23 @@ class ResearchLoop:
                 self._refuse(session, RefusalCode.RESEARCH_CONTRACT, url=source.url)
                 continue
             if not session.claim_cited_by(source):
-                continue
+                references = {
+                    row.sequence
+                    for row in session.ledger.snapshot()
+                    if row.reference_query is not None
+                    and row.reference_query.source.sha256 == source.sha256
+                }
+                current = {
+                    row.query_reservation.cursor.parent_sequence
+                    for row in session.ledger.snapshot()
+                    if row.query_reservation is not None
+                    and row.query_reservation.cursor.stage == "cited_by"
+                    and row.query_reservation.cursor.round_number == round_number
+                }
+                if restored_cursor is not None:
+                    current.add(restored_cursor.parent_sequence)
+                if query_factory is None or not references.intersection(current):
+                    continue
             query = SearchQuery(
                 text=text, question_ids=tuple(question.id for question in questions)
             )
@@ -1683,9 +2018,103 @@ class ResearchLoop:
                     self._refuse(session, exc.code)
                     return ()
 
-        completed = await asyncio.gather(
-            *(search(source, query) for source, query in parents), return_exceptions=True
-        )
+        if query_factory is None:
+            completed = await asyncio.gather(
+                *(search(source, query) for source, query in parents), return_exceptions=True
+            )
+        else:
+            completed = []
+
+            def reference_sequence(observation: SearchObservation) -> int:
+                rows = session.ledger.snapshot()
+                ack = rows[observation.sequence].query_ack
+                if ack is None:
+                    raise ValueError("cited-by recovery lost original query ACK")
+                reservation = rows[ack.reservation_sequence].query_reservation
+                if reservation is None or reservation.cursor.parent_sequence is None:
+                    raise ValueError("cited-by recovery lost original reference cursor")
+                return reservation.cursor.parent_sequence
+
+            for index, (source, query) in enumerate(parents):
+                cursor = QueryCursor(stage="cited_by", round_number=round_number, query_index=index)
+                if restored_cursor is not None and index < restored_cursor.query_index:
+                    query_observations = history.completed(cursor)
+                    batch = tuple((obs, reference_sequence(obs)) for obs in query_observations)
+                else:
+
+                    def before_call(
+                        provider: GroundedSearch,
+                        current_source: Document = source,
+                        current_query: SearchQuery = query,
+                    ) -> None:
+                        if (
+                            sum(row.event == "reference_query" for row in session.ledger.snapshot())
+                            >= policy.cited_by_query_budget
+                        ):
+                            raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
+                        seq = session.ledger.next_sequence
+                        session.ledger.append(
+                            LedgerRow(
+                                sequence=seq,
+                                event="reference_query",
+                                url=current_source.url,
+                                query=current_query.text,
+                                reason="candidate_citing_sources",
+                                reference_query=ReferenceQuery(
+                                    schema="chimera.reference-query/1",
+                                    source=ReferenceSource(
+                                        url=current_source.url,
+                                        sha256=current_source.sha256,
+                                        text_sha256=hashlib.sha256(
+                                            current_source.extracted.text.encode()
+                                        ).hexdigest(),
+                                    ),
+                                    parent_hops=session.reference_hops(current_source.url),
+                                    origin_url=session.reference_origin(current_source.url),
+                                    query=current_query.text,
+                                    provider=provider.identity[0],
+                                    provider_revision=provider.identity[1],
+                                ),
+                            )
+                        )
+
+                    def factory(
+                        provider_index: int,
+                        provider: GroundedSearch,
+                        current_cursor: QueryCursor = cursor,
+                    ) -> QueryWork:
+                        parent_seq = (
+                            restored_cursor.parent_sequence
+                            if restored_cursor is not None
+                            and current_cursor.query_index == restored_cursor.query_index
+                            and provider_index == restored_cursor.provider_index
+                            else session.ledger.next_sequence
+                        )
+                        return query_factory(
+                            current_cursor.model_copy(
+                                update={
+                                    "provider_index": provider_index,
+                                    "parent_sequence": parent_seq,
+                                }
+                            )
+                        )
+
+                    try:
+                        query_observations = await history.discover_many(
+                            query,
+                            before_call=before_call,
+                            query_factory=factory,
+                            restored_cursor=restored_cursor
+                            if restored_cursor is not None and index == restored_cursor.query_index
+                            else None,
+                        )
+                    except GhimeraRefused as exc:
+                        if exc.code == RefusalCode.BUDGET_EXHAUSTED:
+                            raise
+                        self._refuse(session, exc.code)
+                        query_observations = ()
+                    batch = tuple((obs, reference_sequence(obs)) for obs in query_observations)
+                completed.append(batch)
         batches: list[tuple[tuple[SearchObservation, int], ...]] = []
         for outcome in completed:
             if isinstance(outcome, BaseException):

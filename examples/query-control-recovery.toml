@@ -1,0 +1,17 @@
+# Inert fragments: merge deliberately into an operator-owned original recipe.
+# No endpoint, credential, path, active job or implicit scheduler is supplied.
+# Original journal/model results, continuation and serial research must exist.
+[research_recovery]
+schema = "ghimera.research-recovery/4"
+max_snapshot_bytes = 4000000
+clock_policy = "include_downtime"
+tail_policy = "acknowledged_model_return"
+query_control = "serial_acknowledged"
+
+# For an already configured collection-service /2: select before submission.
+# The safe example holds for an explicit caller rather than launching on restart.
+[service_recovery]
+schema = "ghimera.service-recovery/4"
+boundary = "query_return"
+on_restart = "hold"
+max_adoption_attempts = 1

@@ -9,10 +9,12 @@ from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.corpus_search_wire import CorpusLeadOmission, CorpusSearchWire, corpus_source_url
 from ghimera.corpus_types import BoundCorpusDocument
 from ghimera.ledger import Ledger
+from ghimera.query_work import QueryWork
+from ghimera.query_work_types import QueryCorpusBinding, QueryReservation
 from ghimera.refusals import FetchFailure, GhimeraRefused, RefusalCode
 from ghimera.research_reranking import RunBoundReranker
 from ghimera.research_reranking_types import RerankDecision, RerankInvoker, ResearchRerankingConfig
-from ghimera.research_types import SearchHit, SearchRequest, SearchResponse
+from ghimera.research_types import SearchHit, SearchQuery, SearchRequest, SearchResponse
 from ghimera.search import GroundedSearch
 
 
@@ -78,6 +80,28 @@ class CorpusLeadSearch(GroundedSearch):
     def identity(self) -> tuple[str, str]:
         return self.policy.identity
 
+    def query_binding(self, query: SearchQuery) -> QueryCorpusBinding:
+        self._check()
+        return self._corpus.query_binding(query.text)
+
+    def admit_query(self, reservation: QueryReservation, response: SearchResponse | None) -> None:
+        self._check()
+        request = SearchRequest.model_validate_json(reservation.request_json)
+        wire = CorpusSearchWire.model_validate_json(response.raw) if response is not None else None
+        if wire is not None:
+            wire.validate_policy(self.policy, request.query.text)
+            if response is None or response.hits != corpus_leads(wire, self.policy):
+                raise ValueError(
+                    "query ACK leads differ from their original guarded source projection"
+                )
+        self._corpus.admit_query(
+            reservation,
+            request.query.text,
+            pending=response is None,
+            sources=wire.sources if wire is not None else (),
+            query=wire.query if wire is not None else None,
+        )
+
     async def request(self, request: SearchRequest) -> SearchResponse:
         if self._corpus.config.reranking is not None:
             raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
@@ -92,9 +116,14 @@ class CorpusLeadSearch(GroundedSearch):
         budget: RunBudget,
         ledger: Ledger,
         rerank_decision: RerankDecision | None,
+        query_work: QueryWork | None = None,
     ) -> SearchResponse:
         if self._corpus.config.reranking is None:
-            return await self.request(request)
+            return (
+                await self._request(request, query_work=query_work)
+                if query_work is not None
+                else await self.request(request)
+            )
         if (
             rerank_decision is None
             or budget.config.research is None
@@ -103,12 +132,16 @@ class CorpusLeadSearch(GroundedSearch):
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
         invoker = RunBoundReranker(budget, ledger, channel="discovery", decision=rerank_decision)
         try:
-            return await self._request(request, rerank_invoker=invoker)
+            return await self._request(request, rerank_invoker=invoker, query_work=query_work)
         except (ValueError, OSError) as exc:
             raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE) from exc
 
     async def _request(
-        self, request: SearchRequest, *, rerank_invoker: RerankInvoker | None = None
+        self,
+        request: SearchRequest,
+        *,
+        rerank_invoker: RerankInvoker | None = None,
+        query_work: QueryWork | None = None,
     ) -> SearchResponse:
         request = SearchRequest.model_validate(request.model_dump())
         policy = self.policy
@@ -122,6 +155,8 @@ class CorpusLeadSearch(GroundedSearch):
                 languages=policy.languages,
                 retrieval=policy.retrieval,
                 rerank_invoker=rerank_invoker,
+                query_reservation=query_work.reservation if query_work is not None else None,
+                resume_operation=query_work is not None and query_work.resuming,
             )
             if (
                 query.corpus_id != policy.corpus_id

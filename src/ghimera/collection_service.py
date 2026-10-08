@@ -52,6 +52,7 @@ from ghimera.model_reconciliation_types import (
 )
 from ghimera.models import Record
 from ghimera.persistent_collector import PersistentCollection
+from ghimera.query_work import validate_query_rows
 from ghimera.research_recovery_store import ResearchRecoveryStore
 from ghimera.research_recovery_types import ResearchRecoveryModels
 from ghimera.research_types import ResearchRequest
@@ -97,11 +98,14 @@ class ServiceRecoveryPolicy(Record):
     """Service admission only; native research owns recovery and all run bounds."""
 
     schema_version: Literal[
-        "ghimera.service-recovery/1", "ghimera.service-recovery/2", "ghimera.service-recovery/3"
+        "ghimera.service-recovery/1",
+        "ghimera.service-recovery/2",
+        "ghimera.service-recovery/3",
+        "ghimera.service-recovery/4",
     ] = Field(alias="schema")
     on_restart: Literal["hold", "adopt_acknowledged"]
     max_adoption_attempts: Positive
-    boundary: Literal["source_completion"] | None = Field(
+    boundary: Literal["source_completion", "query_return"] | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
     model_reconciliation: Literal["caller_only"] | None = Field(
@@ -110,6 +114,14 @@ class ServiceRecoveryPolicy(Record):
 
     @model_validator(mode="after")
     def versioned(self) -> "ServiceRecoveryPolicy":
+        if self.boundary == "query_return" and self.schema_version != "ghimera.service-recovery/4":
+            raise ValueError("query boundary requires explicit service recovery /4")
+        if self.schema_version == "ghimera.service-recovery/4":
+            if self.boundary != "query_return" or self.model_reconciliation is not None:
+                raise ValueError(
+                    "query service recovery requires explicit /4 acknowledged boundary"
+                )
+            return self
         if self.schema_version == "ghimera.service-recovery/3":
             if self.model_reconciliation != "caller_only" or self.boundary is not None:
                 raise ValueError("service /3 requires explicit caller-only model reconciliation")
@@ -170,6 +182,7 @@ class CollectionJob(Record):
         "ghimera.collection-job/2",
         "ghimera.collection-job/3",
         "ghimera.collection-job/4",
+        "ghimera.collection-job/5",
     ] = Field(alias="schema")
     run_id: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
     policy_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -192,7 +205,7 @@ class CollectionJob(Record):
         default=0, exclude_if=lambda v: v == 0
     )
     recovery_hold: Hold | None = Field(default=None, exclude_if=lambda v: v is None)
-    recovery_boundary: Literal["source_completion"] | None = Field(
+    recovery_boundary: Literal["source_completion", "query_return"] | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
     model_attempt: ModelAttemptAuthorization | None = Field(
@@ -206,7 +219,9 @@ class CollectionJob(Record):
         if self.model_attempt is not None and self.model_attempt.run_id != self.run_id:
             raise ValueError("service attempt lost its original run or snapshot")
         if (self.schema_version == "ghimera.collection-job/3") != (
-            self.recovery_boundary is not None
+            self.recovery_boundary == "source_completion"
+        ) or (self.schema_version == "ghimera.collection-job/5") != (
+            self.recovery_boundary == "query_return"
         ):
             raise ValueError("source jobs require explicit versioned boundary")
         if self.schema_version == "ghimera.collection-job/1":
@@ -337,12 +352,23 @@ class CollectionService:
             raise ValueError("service requires durable native journal and continuation")
         if self.config.recovery is not None and recipe.research_recovery is None:
             raise ValueError("service recovery requires the native research recovery policy")
-        if self.config.recovery is not None and self.config.recovery.boundary is not None:
+        if (
+            self.config.recovery is not None
+            and self.config.recovery.boundary == "source_completion"
+        ):
             if (
                 recipe.research_recovery is None
                 or recipe.research_recovery.source_completion is None
             ):
                 raise ValueError("source service adoption requires native source-completion policy")
+        if (
+            self.config.recovery is not None
+            and self.config.recovery.boundary == "query_return"
+            and (recipe.research_recovery is None or recipe.research_recovery.query_control is None)
+        ):
+            raise ValueError(
+                "query service adoption requires its original explicit serial query policy"
+            )
         bindings = (
             CredentialBindings.model_validate_json(
                 bounded_file(self.config.command.bindings_path, self.config.command.max_input_bytes)
@@ -403,7 +429,11 @@ class CollectionService:
                     else None
                 )
                 discovery_corpus = (
-                    self._corpus if isinstance(recipe.search, CorpusSearchConfig) else None
+                    self._corpus
+                    if isinstance(recipe.search, CorpusSearchConfig)
+                    or recipe.research is not None
+                    and recipe.research.retained_evidence is not None
+                    else None
                 )
                 self._validator = assemble_collector(
                     recipe, credentials, references, corpus=discovery_corpus
@@ -571,7 +601,9 @@ class CollectionService:
         if len(request_data) > self.config.command.max_input_bytes:
             raise ValueError("request exceeds configured allowance")
         job = CollectionJob(
-            schema="ghimera.collection-job/3"
+            schema="ghimera.collection-job/5"
+            if self.config.recovery is not None and self.config.recovery.boundary == "query_return"
+            else "ghimera.collection-job/3"
             if self.config.recovery is not None and self.config.recovery.boundary is not None
             else "ghimera.collection-job/2"
             if self.config.recovery is not None
@@ -717,7 +749,15 @@ class CollectionService:
                     attempt=attempt,
                 )
                 # Service adoption requires an actual retained ACK, not a no-call snapshot.
-                if saved.intent_sequence is None and saved.attempt is None:
+                if job.recovery_boundary == "query_return":
+                    if self._validator is None:
+                        raise ValueError(
+                            "query recovery needs its actual native corpus/runtime validator"
+                        )
+                    self._validator.validate_query_recovery(saved)
+                elif saved.snapshot.phase == "query":
+                    raise ValueError("query snapshot requires original explicit service boundary")
+                elif saved.intent_sequence is None and saved.attempt is None:
                     raise ValueError("no retained original model return")
                 harvest, journal_rows = saved.snapshot.progress.harvest, saved.journal.rows
             archive = ResearchResultArchive.resume(
@@ -979,6 +1019,7 @@ class CollectionService:
                 or report.state != "complete"
                 or report.incomplete_tail
                 or unreconciled_model_sequences(report.rows)
+                or validate_query_rows(recipe, report.rows)
                 or report.header.config != recipe
                 or report.header.goal != result.harvest.goal
                 or report.rows != result.harvest.ledger
@@ -1167,12 +1208,16 @@ class CollectionService:
                         options = CommandOptions.model_validate(
                             dict(
                                 options.model_dump(),
-                                schema="ghimera.collector-command/5"
+                                schema="ghimera.collector-command/6"
+                                if job.recovery_boundary == "query_return"
+                                else "ghimera.collector-command/5"
                                 if selected_attempt is not None
                                 else "ghimera.collector-command/4",
                                 request_path=None,
                                 execution=CommandExecution(
-                                    schema="ghimera.command-execution/4"
+                                    schema="ghimera.command-execution/5"
+                                    if job.recovery_boundary == "query_return"
+                                    else "ghimera.command-execution/4"
                                     if selected_attempt is not None
                                     else "ghimera.command-execution/3"
                                     if job.recovery_boundary is not None

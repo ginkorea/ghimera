@@ -49,6 +49,7 @@ from ghimera.model_types import IdentityCallEvidence, ModelCallEvidence
 from ghimera.model_work_types import ModelAcknowledgement, ModelIntent, ModelReplay
 from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.page_transcription_types import PageTranscriptionCall, ReviewedPageTranscription
+from ghimera.query_work_types import QueryAcknowledgement, QueryReservation
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_reranking_types import RerankReservation
@@ -746,7 +747,14 @@ class LedgerRow(Record):
             "model_replay",
         ]
         | SkipJsonSchema[
-            Literal["model_attempt", "judgment_context", "scoring_source", "semantic_selection"]
+            Literal[
+                "model_attempt",
+                "judgment_context",
+                "scoring_source",
+                "semantic_selection",
+                "query_intent",
+                "query_ack",
+            ]
         ]
     )
     url: str | None = None
@@ -765,6 +773,12 @@ class LedgerRow(Record):
     model_call: IdentityCallEvidence | ModelCallEvidence | None = None
     model_intent: ModelIntent | None = Field(default=None, exclude_if=lambda v: v is None)
     model_ack: ModelAcknowledgement | None = Field(default=None, exclude_if=lambda v: v is None)
+    query_reservation: SkipJsonSchema[QueryReservation | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    query_ack: SkipJsonSchema[QueryAcknowledgement | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     model_replay: ModelReplay | None = Field(default=None, exclude_if=lambda v: v is None)
     rerank_reservation: SkipJsonSchema[RerankReservation | None] = Field(
         default=None, exclude_if=lambda v: v is None
@@ -852,6 +866,20 @@ class LedgerRow(Record):
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if (
+            (self.event == "query_intent") != (self.query_reservation is not None)
+            or (self.query_ack is not None and self.event not in {"query_ack", "fetch"})
+            or (self.event == "query_ack" and self.query_ack is None)
+        ):
+            raise ValueError("query reservation/ACK belong only to their native events")
+        if self.query_reservation is not None and (
+            self.bytes_read
+            or self.model is not None
+            or self.refusal is not None
+            or self.model_intent is not None
+            or self.model_ack is not None
+        ):
+            raise ValueError("query intent cannot fabricate returned source/model evidence")
         if (self.rerank_reservation is not None) != (
             self.model_intent is not None and self.model_intent.phase == "reranking"
         ):
@@ -1163,7 +1191,13 @@ def count_fetch_attempts(config: GhimeraConfig, rows: tuple[LedgerRow, ...]) -> 
     return sum(
         row.browser_action is not None
         or row.event == "challenge"
-        or (row.event == "fetch" and not (guarded and row.route == "human_browser_dom"))
+        or row.query_reservation is not None
+        and row.query_reservation.fetch_reservation is not None
+        or (
+            row.event == "fetch"
+            and row.query_ack is None
+            and not (guarded and row.route == "human_browser_dom")
+        )
         for row in rows
     )
 
@@ -1356,6 +1390,9 @@ class Harvest(Record):
         native_model_policy = self.receipt.effective_config.model_work
         validate_model_decisions(self.receipt.effective_config, self.ledger)
         validate_rerank_rows(self.receipt.effective_config, self.ledger)
+        from ghimera.query_work import validate_query_rows
+
+        validate_query_rows(self.receipt.effective_config, self.ledger)
         observed_judge_calls = (
             validate_model_rows(
                 native_model_policy, self.receipt.effective_config.judge_budget, self.ledger

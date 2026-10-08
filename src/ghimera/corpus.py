@@ -34,6 +34,7 @@ from ghimera.encoding_reconciliation import (
 from ghimera.models import Document, Harvest
 from ghimera.owned_worker import off_loop
 from ghimera.ports import EvidenceEncoder
+from ghimera.query_work_types import QueryCorpusBinding, QueryReservation
 from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused, RefusalCode
 from ghimera.reranking_types import (
     PassageReranker,
@@ -532,6 +533,63 @@ class EvidenceCorpus:
         finally:
             storage.close()
 
+    def query_binding(self, text: str) -> QueryCorpusBinding:
+        """Original generation/model identity under the existing private corpus owner."""
+        if self.config.encoding_recovery is None:
+            raise ValueError("query control requires native acknowledged encoding recovery")
+        with self._storage.writer(), self._storage.transaction():
+            intent = EncodingIntent(
+                schema="ghimera.encoding-intent/1",
+                corpus_id=self._storage.identity,
+                generation=self._storage.generation(),
+                purpose="query",
+                service=self.config.query_encoder,
+                texts=(text,),
+                request_sha256=digest(encoding_request(self.config.query_encoder, (text,))),
+            )
+            return QueryCorpusBinding(
+                configuration=self.config,
+                corpus_id=intent.corpus_id,
+                generation=intent.generation,
+                encoding_invocation_sha256=intent.identity,
+            )
+
+    def admit_query(
+        self,
+        reservation: QueryReservation,
+        text: str,
+        *,
+        pending: bool | None = None,
+        sources: tuple[Document, ...] = (),
+        query: CorpusQuery | None = None,
+    ) -> None:
+        if reservation.corpus != self.query_binding(text):
+            raise ValueError("query control changed its original corpus/model/recipe/generation")
+        if pending is not None:
+            with self._storage.writer(), self._storage.transaction():
+                self._storage.admit_query_operation(
+                    reservation.operation_id, digest(text.encode()), pending=pending
+                )
+                for source in sources:
+                    bound = BoundCorpusDocument(source)
+                    if self._storage.document(bound.identity) != source:
+                        raise ValueError(
+                            "query ACK source differs from its guarded original corpus"
+                        )
+            if reservation.corpus is None:
+                raise ValueError("query lost its original corpus binding")
+            batch, call_id = self._storage.acknowledged_query_encoding(
+                reservation.corpus.encoding_invocation_sha256
+            )
+            if query is not None and (
+                query.encoding_call != batch.call
+                or query.encoding_recovery is None
+                or query.encoding_recovery.original_call_id != call_id
+                or query.encoding_recovery.invocation_sha256
+                != reservation.corpus.encoding_invocation_sha256
+            ):
+                raise ValueError("query ACK changed its original authoritative encoding lineage")
+
     async def search(
         self,
         text: str,
@@ -542,6 +600,8 @@ class EvidenceCorpus:
         retrieval: HybridRetrievalConfig | None = None,
         encoding_authorization: EncodingAttemptAuthorization | None = None,
         rerank_invoker: RerankInvoker | None = None,
+        query_reservation: QueryReservation | None = None,
+        resume_operation: bool = False,
     ) -> CorpusQuery:
         with self._operation():
             if (
@@ -552,7 +612,17 @@ class EvidenceCorpus:
                 or any(not language.strip() for language in languages)
             ):
                 raise ValueError("query, language filter and top-k require explicit bounds")
-            operation = uuid.uuid4().hex
+            operation = (
+                query_reservation.operation_id
+                if query_reservation is not None
+                else uuid.uuid4().hex
+            )
+            if query_reservation is not None:
+                self.admit_query(
+                    query_reservation, text, pending=resume_operation if resume_operation else None
+                )
+            elif resume_operation:
+                raise ValueError("query recovery requires its original operation reservation")
             if retrieval is not None:
                 retrieval = HybridRetrievalConfig.model_validate(retrieval.model_dump())
                 if retrieval.vector_candidates > self.config.search_candidates:
@@ -566,10 +636,19 @@ class EvidenceCorpus:
                     self.config, self._storage.identity, query=text, retrieval=retrieval
                 )
             query_hash = hashlib.sha256(text.encode()).hexdigest()
-            self._storage.start(operation, kind="query", input_sha=query_hash, calls=1)
+            if not resume_operation:
+                self._storage.start(operation, kind="query", input_sha=query_hash, calls=1)
             try:
                 async with asyncio.timeout(self.config.operation_timeout_seconds):
                     generation, ids, index = await self._snapshot()
+                    if (
+                        query_reservation is not None
+                        and query_reservation.corpus is not None
+                        and generation != query_reservation.corpus.generation
+                    ):
+                        raise ValueError(
+                            "query corpus generation changed after original reservation"
+                        )
                     if rerank_invoker is not None:
                         rerank_invoker.admit(
                             self.config,

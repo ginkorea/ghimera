@@ -673,6 +673,30 @@ class CorpusStorage:
                 (status, operation),
             )
 
+    def admit_query_operation(self, operation: str, input_sha: str, *, pending: bool) -> None:
+        """Admit only the original stored operation; never reserve a replacement UUID."""
+        self.check()
+        row = self.db.execute(
+            "SELECT kind,input_sha,status FROM operations WHERE id=?", (operation,)
+        ).fetchone()
+        if row != ("query", input_sha, "pending" if pending else "committed"):
+            raise ValueError("query recovery lost its exact original corpus operation")
+
+    def acknowledged_query_encoding(self, invocation: str) -> tuple[EncodingBatch, int]:
+        with self.writer(), self.transaction():
+            observed = self.observe_encoding(invocation)
+            if observed.status != "acknowledged" or observed.intent.generation != self.generation():
+                raise ValueError(
+                    "query recovery requires the original generation-bound encoding ACK"
+                )
+            row = self.db.execute(
+                "SELECT result,result_sha,call_id FROM encoding_invocations WHERE id=?",
+                (invocation,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("query recovery lost its acknowledged encoding")
+            return self._acknowledged_encoding(observed.intent, row[0], row[1], row[2])
+
     def commit(
         self,
         operation: str,

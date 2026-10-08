@@ -4,10 +4,14 @@ from collections.abc import Mapping
 from urllib.parse import urlsplit
 
 from ghimera.budget import RunBudget
+from ghimera.corpus_search import CorpusLeadSearch, corpus_leads
+from ghimera.corpus_search_wire import CorpusSearchWire
 from ghimera.discovery_config import DiscoveryConfig, DiscoveryProvider, Domain
 from ghimera.ledger import Ledger
+from ghimera.query_work import QueryWork
+from ghimera.query_work_types import QueryCorpusBinding, QueryReservation
 from ghimera.research_reranking_types import RerankDecision
-from ghimera.research_types import SearchRequest, SearchResponse
+from ghimera.research_types import SearchQuery, SearchRequest, SearchResponse
 from ghimera.search import GroundedSearch
 from ghimera.transport_types import TransportEvidence
 
@@ -30,6 +34,19 @@ class BoundSearch(GroundedSearch):
     def transport_selection(self) -> TransportEvidence | None:
         return self._adapter.transport_selection()
 
+    def query_binding(self, query: SearchQuery) -> QueryCorpusBinding | None:
+        return self._adapter.query_binding(query)
+
+    def admit_query(self, reservation: QueryReservation, response: SearchResponse | None) -> None:
+        if response is not None and isinstance(self._adapter, CorpusLeadSearch):
+            request = SearchRequest.model_validate_json(reservation.request_json)
+            wire = CorpusSearchWire.model_validate_json(response.raw)
+            native = response.model_copy(update={"hits": corpus_leads(wire, self._adapter.policy)})
+            if self._filter(request, native) != response:
+                raise ValueError("query ACK changed its original configured-domain projection")
+            response = native
+        self._adapter.admit_query(reservation, response)
+
     async def request(self, request: SearchRequest) -> SearchResponse:
         # Only the inherited final template owns reservations and observations.
         response = await self._adapter.request(request)
@@ -41,8 +58,11 @@ class BoundSearch(GroundedSearch):
         budget: RunBudget,
         ledger: Ledger,
         rerank_decision: RerankDecision | None,
+        query_work: QueryWork | None = None,
     ) -> SearchResponse:
-        response = await self._adapter.request_for_run(request, budget, ledger, rerank_decision)
+        response = await self._adapter.request_for_run(
+            request, budget, ledger, rerank_decision, query_work
+        )
         return self._filter(request, response)
 
     def _filter(self, request: SearchRequest, response: SearchResponse) -> SearchResponse:

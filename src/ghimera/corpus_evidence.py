@@ -12,6 +12,7 @@ from ghimera.corpus_evidence_config import CorpusEvidenceConfig
 from ghimera.corpus_types import BoundCorpusDocument, CorpusHit, CorpusQuery, CorpusRecord
 from ghimera.embedding_types import EncodingCall
 from ghimera.models import Document
+from ghimera.query_work_types import QueryCorpusBinding, QueryReservation
 from ghimera.reranking_config import OfflineRerankingConfig
 from ghimera.research_reranking_types import RerankInvoker
 
@@ -117,12 +118,33 @@ class CorpusEvidenceReader:
     def reranking_policy(self) -> OfflineRerankingConfig | None:
         return self._corpus.config.reranking
 
+    def query_binding(self, text: str) -> QueryCorpusBinding:
+        self._check()
+        return self._corpus.query_binding(text)
+
+    def admit_query(
+        self, reservation: QueryReservation, *, bundle: CorpusEvidenceBundle | None = None
+    ) -> None:
+        self._check()
+        text = reservation.request_json.decode()
+        if bundle is not None and (bundle.policy != self.policy or bundle.query_text != text):
+            raise ValueError("query ACK changed its exact retained reader")
+        self._corpus.admit_query(
+            reservation,
+            text,
+            pending=bundle is None,
+            sources=bundle.sources if bundle is not None else (),
+            query=bundle.query if bundle is not None else None,
+        )
+
     async def read(
         self,
         text: str,
         *,
         encoding_observer: Callable[[EncodingCall], None] | None = None,
         rerank_invoker: RerankInvoker | None = None,
+        query_reservation: QueryReservation | None = None,
+        resume_operation: bool = False,
     ) -> CorpusEvidenceBundle:
         self._check()
         policy = self.policy
@@ -136,6 +158,8 @@ class CorpusEvidenceReader:
                 encoding_observer=encoding_observer,
                 retrieval=policy.retrieval,
                 rerank_invoker=rerank_invoker,
+                query_reservation=query_reservation,
+                resume_operation=resume_operation,
             )
             bundle = CorpusEvidenceBundle(
                 schema="ghimera.corpus-evidence/1",

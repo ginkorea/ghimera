@@ -10,6 +10,8 @@ from ghimera.discovery import BoundSearch, DiscoveryProviders
 from ghimera.discovery_config import SearchCallLimits
 from ghimera.ledger import Ledger
 from ghimera.models import LedgerRow
+from ghimera.query_work import QueryWork
+from ghimera.query_work_types import QueryCursor
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_reranking_types import RerankDecision
 from ghimera.research_types import ResearchRound, SearchObservation, SearchQuery, SearchResponse
@@ -51,6 +53,21 @@ class SearchHistory:
                 for bound in provider.providers:
                     if row.route == f"search:{bound.identity[0]}@{bound.identity[1]}":
                         self._charge(self._usage.setdefault(bound.identity, _Usage()), row)
+        acknowledged = {
+            row.query_ack.reservation_sequence
+            for row in ledger.snapshot()
+            if row.query_ack is not None
+        }
+        if isinstance(provider, DiscoveryProviders):
+            for row in ledger.snapshot():
+                reservation = row.query_reservation
+                if (
+                    reservation is not None
+                    and reservation.channel == "discovery"
+                    and row.sequence not in acknowledged
+                ):
+                    identity = (reservation.provider, reservation.provider_revision)
+                    self._usage.setdefault(identity, _Usage()).calls += 1
 
     @staticmethod
     def _charge(usage: _Usage, row: LedgerRow) -> None:
@@ -100,8 +117,9 @@ class SearchHistory:
         *,
         limits: SearchCallLimits | None = None,
         before_call: Callable[[GroundedSearch], None] | None = None,
+        query_work: QueryWork | None = None,
     ) -> SearchObservation:
-        if before_call is not None:
+        if before_call is not None and (query_work is None or query_work.original is None):
             before_call(provider)
         decision = (
             RerankDecision(
@@ -119,20 +137,28 @@ class SearchHistory:
             else None
         )
         response = await provider.discover(
-            query, self._budget, self._ledger, limits=limits, rerank_decision=decision
+            query,
+            self._budget,
+            self._ledger,
+            limits=limits,
+            rerank_decision=decision,
+            query_work=query_work,
         )
         # The final provider template appends before return, with no intervening
         # await. Capture immediately here, before graph/model work or gather can
         # fail. Concurrent completions therefore bind their own append position.
         observation = SearchObservation(
             schema="chimera.search-observation/1",
-            sequence=self._ledger.next_sequence - 1,
+            sequence=query_work.ack_sequence
+            if query_work is not None and query_work.ack_sequence is not None
+            else self._ledger.next_sequence - 1,
             provider=provider.identity[0],
             provider_revision=provider.identity[1],
             query=query,
             response=response,
         )
-        self._observations.append(observation)
+        if observation not in self._observations:
+            self._observations.append(observation)
         return observation
 
     async def _attempt(
@@ -140,6 +166,7 @@ class SearchHistory:
         provider: BoundSearch,
         query: SearchQuery,
         before_call: Callable[[GroundedSearch], None] | None,
+        query_work: QueryWork | None = None,
     ) -> SearchObservation | GhimeraRefused:
         async with self._semaphore:
             usage = self._usage.setdefault(provider.identity, _Usage())
@@ -177,7 +204,9 @@ class SearchHistory:
             usage.reserved_seconds += limits.timeout_seconds
             start = self._ledger.next_sequence
             try:
-                return await self._call(provider, query, limits=limits, before_call=before_call)
+                return await self._call(
+                    provider, query, limits=limits, before_call=before_call, query_work=query_work
+                )
             except GhimeraRefused as exc:
                 return exc
             finally:
@@ -195,23 +224,53 @@ class SearchHistory:
         query: SearchQuery,
         *,
         before_call: Callable[[GroundedSearch], None] | None = None,
+        query_factory: Callable[[int, GroundedSearch], QueryWork] | None = None,
+        restored_cursor: QueryCursor | None = None,
     ) -> tuple[SearchObservation, ...]:
         provider = self._provider
         if not isinstance(provider, DiscoveryProviders):
-            return (await self._call(provider, query, before_call=before_call),)
+            return (
+                await self._call(
+                    provider,
+                    query,
+                    before_call=before_call,
+                    query_work=query_factory(0, provider) if query_factory is not None else None,
+                ),
+            )
         ordered = self._ordered()
         fanout = provider.policy.mode == "fanout" or (
             provider.policy.cold_start_fanout and not self._rounds
         )
         observations: list[SearchObservation] = []
         failures: list[GhimeraRefused] = []
+        result: SearchObservation | GhimeraRefused
         if fanout:
             # Wait for every owned attempt; never lose neighboring evidence on failure.
             results = await asyncio.gather(*(self._attempt(p, query, before_call) for p in ordered))
         else:
             results = []
-            for bound in ordered:
-                result = await self._attempt(bound, query, before_call)
+            for index, bound in enumerate(ordered):
+                if restored_cursor is not None and index < restored_cursor.provider_index:
+                    previous = self.completed(restored_cursor, provider_index=index)
+                    results.extend(previous)
+                    if previous and previous[-1].response.hits:
+                        break
+                    continue
+                work = query_factory(index, bound) if query_factory is not None else None
+                if work is not None and work.resuming:
+                    start = self._ledger.next_sequence
+                    try:
+                        result = await self._call(bound, query, query_work=work)
+                    except GhimeraRefused as exc:
+                        result = exc
+                    finally:
+                        rows = self._ledger.snapshot()
+                        if work.resuming and len(rows) > start and rows[-1].query_ack is not None:
+                            usage = self._usage.setdefault(bound.identity, _Usage())
+                            usage.calls -= 1
+                            self._charge(usage, rows[-1])
+                else:
+                    result = await self._attempt(bound, query, before_call, work)
                 results.append(result)
                 if isinstance(result, SearchObservation) and result.response.hits:
                     break
@@ -233,3 +292,38 @@ class SearchHistory:
         if not observations:
             raise failures[-1] if failures else GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
         return tuple(observations)
+
+    def completed(
+        self, cursor: QueryCursor, *, provider_index: int | None = None
+    ) -> tuple[SearchObservation, ...]:
+        """Select by original durable coordinates, never query text or guessed UUID."""
+        from ghimera.research_types import SearchRequest
+
+        rows = self._ledger.snapshot()
+        result = []
+        for row in rows:
+            ack = row.query_ack
+            if ack is None or ack.result_json is None:
+                continue
+            original = rows[ack.reservation_sequence].query_reservation
+            if original is None or original.channel != "discovery":
+                continue
+            coordinates = original.cursor
+            if (coordinates.stage, coordinates.round_number, coordinates.query_index) != (
+                cursor.stage,
+                cursor.round_number,
+                cursor.query_index,
+            ) or (provider_index is not None and coordinates.provider_index != provider_index):
+                continue
+            request = SearchRequest.model_validate_json(original.request_json)
+            result.append(
+                SearchObservation(
+                    schema="chimera.search-observation/1",
+                    sequence=row.sequence,
+                    provider=original.provider,
+                    provider_revision=original.provider_revision,
+                    query=request.query,
+                    response=SearchResponse.model_validate_json(ack.result_json),
+                )
+            )
+        return tuple(result)
