@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.10 — candidate, not yet published
+## 0.4.10 — 2026-10-08
 
 - Add a configured authenticated collection service with durable run manifests,
   bounded active work, native completed-round pause/resume and archive-only
@@ -19,8 +19,10 @@
   locally without contacting a model again or resetting original spend.
 - Add guarded remote delivery/readback, acknowledgement-age retention, bounded
   audit rotation and optional SQLite compaction; uncertain payloads are retained.
-- Combined source gate and installed artifact acceptance are pending. Real
-  multilingual vision/organization and Tor/onion quality remain unaccepted;
+- Frozen source gate: 1,318 passed without failures/skips under Python 3.11.16.
+  Independently installed-wheel native acceptance: 46 passed. An actual
+  browser-over-Tor public-source capture retained exact page/proof evidence.
+  Real multilingual vision/organization and onion quality remain unaccepted;
   independently hosted Ahmia index deployment remains intentionally deferred.
 
 ## 0.4.9 — 2026-10-08

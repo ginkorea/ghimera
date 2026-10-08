@@ -197,11 +197,13 @@ public PDF capture passed. Original public 0.4.4 artifact byte equality is recor
 in RELEASE_044.md. Representative publisher/Tor acceptance remains required;
 this is not full I08 closure.
 
-## Integrated core candidate (not yet published)
+## Integrated 0.4.10 core
 
-The next independent-package candidate combines native implementation lanes,
-not replacement storage/model/browser stacks. Its version remains unreleased
-until the combined gate and installed-package acceptance succeed.
+The independent-package increment combines native implementation lanes, not
+replacement storage/model/browser stacks. The frozen source gate passed 1,318
+tests without failures/skips under Python 3.11.16; independently installed-wheel
+acceptance passed 46 native checks. Publication evidence is recorded separately
+in [release acceptance](RELEASE_0410.md).
 
 | Requirement | Implemented in the combined candidate | Acceptance still required |
 |---|---|---|
@@ -216,8 +218,8 @@ until the combined gate and installed-package acceptance succeed.
 | I09 | Existing Ahmia lead adapter retained | Independently hosted maintained index remains deliberately deferred by the owner |
 | I14 | Actual public Crossref intake/replay, native OCR/figure rendering and controlled service/browser/model-wire witnesses | Served-model English/Chinese research, organization expansion, live onion evidence and independently inspected output quality |
 
-The row states above supersede the older tracker only for this development
-candidate, not for the published 0.4.9 artifact. Detailed bounds, contracts and
+The row states above supersede the older tracker for the 0.4.10 source, not
+for the immutable published 0.4.9 artifact. Detailed bounds, contracts and
 native evidence are in [operations](OPERATIONS_CANDIDATE.md),
 [discovery/browser](DISCOVERY_BROWSER_CANDIDATE.md),
 [evidence/graph](EVIDENCE_GRAPH_CANDIDATE.md) and [model work](MODEL_WORK.md).
