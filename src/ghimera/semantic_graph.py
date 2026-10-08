@@ -25,6 +25,7 @@ from ghimera.model_work import ModelInvocation, port_input, record_output
 from ghimera.models import Document, Harvest, LedgerRow, ModelIdentity
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from ghimera.semantic_batching import assemble_review, review_selections
+from ghimera.semantic_contract import build_graph_contract
 from ghimera.semantic_recovery import SemanticRecoveryStopped, failed_window
 from ghimera.semantic_selection import (
     make_selection,
@@ -354,6 +355,7 @@ class SemanticStage:
             or graph.config_digest != graph_policy.content_digest()
         ):
             raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+        contract = build_graph_contract(self._config, policy)
         text = document.extracted.text
         plan: SemanticSelection | None = None
         if policy.window_selection is not None:
@@ -412,6 +414,7 @@ class SemanticStage:
                     budget,
                     document,
                     policy,
+                    *((contract,) if contract is not None else ()),
                     *(
                         (plan, selection_ref)
                         if plan is not None and selection_ref is not None

@@ -28,6 +28,7 @@ SEMANTIC_PROMPT_REVISION = "ghimera-semantic-extraction/1"
 MENTION_KEY_PROMPT_REVISION = "ghimera-semantic-extraction/2"
 NATIVE_SPAN_PROMPT_REVISION = "ghimera-semantic-extraction/3"
 DEFINED_ONTOLOGY_PROMPT_REVISION = "ghimera-semantic-extraction/4"
+GRAPH_BOUND_PROMPT_REVISION = "ghimera-semantic-extraction/5"
 SEMANTIC_REVIEW_REVISION = "ghimera-semantic-verification/1"
 FACTORIZED_REVIEW_REVISION = "ghimera-semantic-verification/2"
 GROUNDED_REVIEW_REVISION = "ghimera-semantic-verification/3"
@@ -42,6 +43,7 @@ SEMANTIC_PROFILES = MappingProxyType(
         "ghimera.semantics/2": ("explicit_mention_keys", MENTION_KEY_PROMPT_REVISION),
         "ghimera.semantics/3": ("native_span_keys", NATIVE_SPAN_PROMPT_REVISION),
         "ghimera.semantics/4": ("defined_ontology", DEFINED_ONTOLOGY_PROMPT_REVISION),
+        "ghimera.semantics/5": ("graph_bound_native_spans", GRAPH_BOUND_PROMPT_REVISION),
     }
 )
 
@@ -138,10 +140,20 @@ class SemanticFailurePolicy(GraphRecord):
 
 class SemanticConfig(GraphRecord):
     schema_version: Literal[
-        "ghimera.semantics/1", "ghimera.semantics/2", "ghimera.semantics/3", "ghimera.semantics/4"
+        "ghimera.semantics/1",
+        "ghimera.semantics/2",
+        "ghimera.semantics/3",
+        "ghimera.semantics/4",
+        "ghimera.semantics/5",
     ] = Field(alias="schema")
     prompt_profile: (
-        Literal["explicit_mention_keys", "native_span_keys", "defined_ontology"] | None
+        Literal[
+            "explicit_mention_keys",
+            "native_span_keys",
+            "defined_ontology",
+            "graph_bound_native_spans",
+        ]
+        | None
     ) = Field(default=None, exclude_if=lambda value: value is None)
     model_role: Literal["analyst", "reviewer", "judge"]
     window_chars: Positive
@@ -174,7 +186,9 @@ class SemanticConfig(GraphRecord):
             or self.mention_rule in self.relation_rules
         ):
             raise ValueError("semantic roles and relation rules must be distinct")
-        defined = self.schema_version == "ghimera.semantics/4"
+        reviewed = self.schema_version == "ghimera.semantics/4"
+        graph_bound = self.schema_version == "ghimera.semantics/5"
+        defined = reviewed or graph_bound
         if defined:
             roles = {item.name for item in self.role_definitions}
             relations = {item.name for item in self.relation_definitions}
@@ -183,15 +197,17 @@ class SemanticConfig(GraphRecord):
                 or relations != set(self.relation_rules)
                 or len(roles) != len(self.role_definitions)
                 or len(relations) != len(self.relation_definitions)
-                or self.verification is None
+                or (reviewed and self.verification is None)
             ):
                 raise ValueError(
-                    "defined ontology requires complete unique definitions and verification"
+                    "defined ontology requires complete unique definitions and /4 verification"
                 )
         elif self.role_definitions or self.relation_definitions or self.verification is not None:
             raise ValueError("definitions and verification require semantics/4")
+        if graph_bound and "verification" in self.model_fields_set:
+            raise ValueError("graph-bound /5 assertions are unreviewed: omit verification")
         if self.failure is not None and (
-            not defined or self.failure.max_failed_windows_per_run > self.max_calls_per_run
+            not reviewed or self.failure.max_failed_windows_per_run > self.max_calls_per_run
         ):
             raise ValueError("bounded failure continuation requires semantics/4 and its call limit")
         return self

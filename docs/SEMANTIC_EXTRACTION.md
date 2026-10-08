@@ -54,6 +54,59 @@ modifying the original proposal or discarding valid neighbors; see
 [semantic verification](SEMANTIC_VERIFICATION.md). Profiles 1–3 keep their
 existing whole-window refusal behavior. This is not real-model accuracy proof.
 
+Version 5 explicitly selects `prompt_profile="graph_bound_native_spans"`; see
+[the inert graph-bound fragment](../examples/semantics-graph-bound.toml).
+It requires complete, unique operator role/relation definitions matching every
+selected entity role and relation rule. `/5` must omit `verification` (even
+explicit null) and does not enable failure continuation. It is a single-model,
+**unreviewed** source-local assertion path, not a substitute for `/4`'s required
+independent review. Profiles `/1`–`/4` retain their exact serialized policies,
+model request bytes and prompt revisions; there is no automatic upgrade.
+
+The native client derives `semantic_graph_contract` only from its existing graph
+configuration. It copies selected `GraphRole` names/kinds and actual
+`GraphRelation` names, predicates, source/target role sets and semantic flags,
+including the configured mention rule. It binds the whole original graph-config
+digest and exact semantic-policy digest. Operators cannot provide a second
+projection contract or registry. The model receives these contracts alongside
+the unchanged selected native source window and complete definitions, retaining
+literal names, spaces, line breaks and per-surface occurrence counting.
+
+The new instructions require both explicit source support for the configured
+predicate in that direction and compatible endpoint roles. Rule names or
+compatible roles alone establish no entailment, identity or truth; unsupported
+relations must be omitted, not repaired by swapping endpoints, renaming rules
+or changing roles. The model still may violate these instructions. The existing
+projector, citation/span checks and refusal behavior are unchanged; every
+admitted edge remains `model_asserted`, with no independent verification or
+corroboration claim.
+
+The same pure native contract builder supplies the model packet and `/5`'s
+logical port-input reservation. Actual formatted input characters, encoded
+request bytes/hash, context digest and selected source offsets are accounted by
+the existing client. Larger metadata can refuse against the original limits
+before contact; it grants no new budget or call. `/5` pins
+`ghimera-semantic-extraction/5`. Original acknowledged results replay through
+the existing exact-sequence model-work owner, with no service contact; changed
+graph/policy/source/request bindings refuse. UNKNOWN remains charged and held,
+not retried or converted into a graph acknowledgment. This does not implement
+automatic mid-window extraction or graph-write recovery.
+
+The real source-first organization diagnostic admitted its unchanged whole PDF
+but produced no answer: its first semantic output was HTTP 200/stop, schema-valid
+and exactly source-grounded as mentions, then projection refused an
+organization-to-organization `holds_position` relation where the native graph
+permits person-to-position. Retained request SHA
+`3a366e9d244fe28f4c608d68593e444939318d6cab05ee674645d19092e93caa`
+and original acknowledged output SHA
+`7d0c321d8dee09b4dfb82e0c53a42721854460b203a70be1e6614eff9052a5d6`
+identify that failed observation, not successful extraction. The `/3` packet
+contained rule names but no actual graph endpoint contracts. `/5` closes that
+generic input omission without reinterpreting the original ACK; a separate
+role-compatible but source-unsupported relation in that same output remains a
+quality gap. Focused fixtures establish contract/refusal/replay behavior only.
+Real `/5` semantic quality and whole-Collector acceptance remain pending.
+
 Accepted documents pass through sequential bounded native-text windows. Calls
 consume both `max_calls_per_run` and the existing shared judge/model-call
 allowance and deadline. A document window limit records the unread native tail

@@ -68,6 +68,7 @@ from ghimera.research_types import (
     ResearchPlan,
     ReviewRequest,
 )
+from ghimera.semantic_contract import SemanticGraphContract, build_graph_contract
 from ghimera.semantic_types import (
     SEMANTIC_REVIEW_REVISION,
     FactorizedSemanticReview,
@@ -425,6 +426,7 @@ class PromptInput(Record):
     max_queries: int | None = None
     max_query_chars: int | None = None
     semantic_recipe: SemanticConfig | None = None
+    semantic_graph_contract: SemanticGraphContract | None = None
     semantic_proposal: SemanticProposal | None = None
     semantic_review_selection: ReviewSelection | None = None
     native_quote_templates: tuple[NativeQuoteTemplate, ...] | None = None
@@ -793,14 +795,20 @@ class SelfHostedModel:
                     if prompt.task == "semantic_extract"
                     and semantic is not None
                     and semantic.prompt_profile
-                    in {"explicit_mention_keys", "native_span_keys", "defined_ontology"}
+                    in {
+                        "explicit_mention_keys",
+                        "native_span_keys",
+                        "defined_ontology",
+                        "graph_bound_native_spans",
+                    }
                     else ""
                 )
                 + (
                     NATIVE_SPAN_INSTRUCTIONS
                     if prompt.task == "semantic_extract"
                     and semantic is not None
-                    and semantic.prompt_profile in {"native_span_keys", "defined_ontology"}
+                    and semantic.prompt_profile
+                    in {"native_span_keys", "defined_ontology", "graph_bound_native_spans"}
                     else ""
                 )
                 + (
@@ -812,7 +820,23 @@ class SelfHostedModel:
                     "Relationship direction and validity dates require explicit source support."
                     if prompt.task == "semantic_extract"
                     and semantic is not None
-                    and semantic.prompt_profile == "defined_ontology"
+                    and semantic.prompt_profile in {"defined_ontology", "graph_bound_native_spans"}
+                    else ""
+                )
+                + (
+                    " The semantic_graph_contract is the client's exact configured projection "
+                    "contract, not source evidence or a truth claim. Use its native role kinds "
+                    "and relation predicates with the operator definitions. A relation requires "
+                    "BOTH explicit source support for the stated predicate in that direction "
+                    "AND endpoint mentions whose roles occur in its source_roles and target_roles "
+                    "respectively. A matching rule name or compatible roles alone establishes "
+                    "neither entailment nor identity. Omit unsupported relations; do not swap "
+                    "endpoints, change roles or rename predicates to make a relation fit. "
+                    "Only this exact source window is evidence. These are source-local "
+                    "UNREVIEWED model assertions, never independent verification, corroboration "
+                    "or complete coverage. Empty mentions/relations are valid."
+                    if prompt.task == "semantic_extract"
+                    and prompt.semantic_graph_contract is not None
                     else ""
                 )
                 + (
@@ -992,6 +1016,7 @@ class SelfHostedModel:
                 task="semantic_extract",
                 intent=intent,
                 semantic_recipe=policy,
+                semantic_graph_contract=build_graph_contract(self._config, policy),
                 evidence=selector.build(
                     intent, (document,), required=(native_citation(document, start, end),)
                 ),
