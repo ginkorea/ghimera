@@ -8,14 +8,6 @@ from typing import Protocol
 
 from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
-from ghimera.journal import (
-    _directory_sync,
-    _private_directory,
-    _read_file,
-    _run_path,
-    _write_all,
-    read_journal,
-)
 from ghimera.journal_types import JournalReport, canonical
 from ghimera.model_work import port_input, uncertain_model_sequences, validate_model_rows
 from ghimera.models import LedgerRow
@@ -52,6 +44,11 @@ class ResearchRecoveryStore:
     """
 
     def __init__(self, config: GhimeraConfig, run_id: str, policy: ResearchRecoveryPolicy) -> None:
+        # Keep the executable journal module out of package initialization,
+        # as the established checkpoint store does. Otherwise `-m ghimera.journal`
+        # sees an already imported module before its command is executed.
+        from ghimera.journal import _run_path
+
         if (
             config.journal is None
             or config.research is None
@@ -66,6 +63,8 @@ class ResearchRecoveryStore:
         self._maximum = policy.max_snapshot_bytes
 
     def _check(self) -> None:
+        from ghimera.journal import _private_directory, _run_path
+
         policy = self._config.journal
         if policy is None or _run_path(policy, self._run_id) != self._path:
             raise ValueError("research recovery storage changed")
@@ -73,6 +72,8 @@ class ResearchRecoveryStore:
         _private_directory(self._path)
 
     def _journal(self, snapshot: ResearchControlSnapshot) -> JournalReport:
+        from ghimera.journal import read_journal
+
         self._check()
         policy = self._config.journal
         if policy is None:
@@ -107,6 +108,8 @@ class ResearchRecoveryStore:
         return report
 
     def write(self, snapshot: ResearchControlSnapshot) -> ResearchRecoveryReceipt:
+        from ghimera.journal import _directory_sync, _read_file, _write_all
+
         snapshot = ResearchControlSnapshot.model_validate(snapshot.model_dump())
         report = self._journal(snapshot)
         if report.rows != snapshot.progress.harvest.ledger:
@@ -220,6 +223,8 @@ class ResearchRecoveryStore:
         expected_request: ResearchRequest | None = None,
         expected_models: ResearchRecoveryModels | None = None,
     ) -> ResearchRecoveryRead:
+        from ghimera.journal import _read_file
+
         self._check()
         data = _read_file(self._path / "research-control.json", self._maximum)
         if hashlib.sha256(data).hexdigest() != expected_sha256:
