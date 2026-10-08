@@ -104,9 +104,9 @@ refetch; writer exclusion; capacity refusal; recipe/digest/symlink/journal
 mutation; and bounded CLI output. Fixtures test recovery contracts, not real
 language or model accuracy. Full release acceptance is still required.
 
-I03 remains open: the queued frontier and local-import candidates below still need release
-acceptance; integrate explicit uncertain model/graph reconciliation and reservation accounting,
-cover retained-source operations, and reconstruct a
+I03 remains open: the frontier/local-import candidates below still need release
+acceptance; integrate explicit uncertain model/graph reconciliation and reservation
+accounting, retained-reader control state and retained-source operations, and reconstruct a
 whole resumed collection/research session without losing queued links or
 inventing exact unknown spend. This web-operation capture is a necessary part
 of that path, not an automatic replay engine or a replacement for I12's
@@ -168,8 +168,40 @@ Repeated caller cancellation does not abandon the owned read's drain. A reader
 task itself cancelled before acknowledging its physical I/O is a fatal uncertain
 read, not a recorded zero-byte cancellation.
 
-This is operation capture, not automatic interrupted-import replay. The caller's
-whole local seed batch and research control state are not yet durable pending
-frontiers, and resuming an interrupted operation still requires explicit
+This is operation capture, not automatic interrupted-import replay. The optional
+pending-batch extension below preserves never-started local files; whole research
+control state and resuming an interrupted operation still require explicit
 reconciliation. No OCR or semantic-language quality claim follows from capturing
 a pinned PDF correctly.
+
+## Atomic pending local batches candidate
+
+Enabling `[source_work.frontier]` now also captures a caller's complete local
+PDF/DOCX seed batch before the first read. The existing private frontier table,
+capacity policy, journal owner and writer lease are reused. Every request retains
+its exact path/hash/MIME/input-policy pin. All new batch intents commit in one
+transaction; invalid coordinates, changed pins, capacity exhaustion or a failed
+insert roll back the whole batch before any file I/O. An acknowledged duplicate
+pending intent keeps its first observation and order. A file that already has
+an acquisition operation refuses implicit retry rather than reopening it.
+
+Local requests never enter the web priority heap or acquire HTTP scope. The
+shared entry/byte limits cover both kinds of intent, so choose them for the
+actual workload. `report.queued` retains web intents only; `report.queued_local`
+returns never-started local requests in acknowledged caller order. Queued
+files do not imply file reads or spent bytes. A started read without its native
+acknowledgement remains an unresolved operation, not an unstarted file.
+
+Quiescent checkpoints retain the exact pending-local order and pins. Missing,
+reordered, invented or changed local requests refuse restoration. After a
+verified completed prefix is restored, an explicit
+`await loop.import_local(restored_session, ())` drains only its pending files,
+with the existing byte/file/model budgets; handled files are not reopened.
+Inspection never drains or retries anything itself. The inspector CLI adds
+only a bounded `local_queued` count when present, not private paths or contents.
+
+This does not adopt an arbitrary interrupted research session. Unknown read,
+model or graph acknowledgement still requires explicit reconciliation. Actual
+subprocess termination, a mid-transaction SQLite failure, capacity-before-I/O
+and restored native DOCX processing are the candidate's acceptance witnesses;
+they are not real Chinese OCR or semantic-model quality measurements.

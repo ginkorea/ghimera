@@ -64,7 +64,7 @@ class SourceFrontierEntry(Record):
     schema_version: Literal["ghimera.source-frontier-entry/1"] = Field(alias="schema")
     entry_id: Digest
     sequence: Count
-    request: SourceCoordinates
+    request: SourceCoordinates | LocalSourceRequest
     priority: Annotated[float, Field(ge=-1, le=0, allow_inf_nan=False)]
     queued_at: ObservedTime
     ledger_start: Count
@@ -157,7 +157,21 @@ class SourceWorkReport(Record):
         return tuple(
             item
             for item in self.frontier or ()
-            if item.discard_reason is None and item.entry_id not in started
+            if isinstance(item.request, SourceCoordinates)
+            and item.discard_reason is None
+            and item.entry_id not in started
+        )
+
+    @property
+    def queued_local(self) -> tuple[LocalSourceRequest, ...]:
+        """Never-started owned files in acknowledged caller order, not web scope."""
+        started = {item.operation_id for item in self.operations}
+        return tuple(
+            item.request
+            for item in self.frontier or ()
+            if isinstance(item.request, LocalSourceRequest)
+            and item.discard_reason is None
+            and item.entry_id not in started
         )
 
     @property

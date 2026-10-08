@@ -95,7 +95,12 @@ class SourceWorkStore:
                 self._operations = {item.operation_id: item for item in operations}
                 self._reservation = sum(self._reserved(item) for item in operations)
             if self._policy.frontier is not None:
-                self._frontier = SourceFrontier(self._private, self._policy.frontier, create=create)
+                self._frontier = SourceFrontier(
+                    self._private,
+                    self._policy.frontier,
+                    create=create,
+                    input_policy=self._config.local_inputs,
+                )
                 if self._reservation + self._frontier.payload_bytes > self._policy.max_store_bytes:
                     raise ValueError("source work and frontier exceed their shared capacity")
             if create:
@@ -306,6 +311,24 @@ class SourceWorkStore:
         except (OSError, ValueError, sqlite3.Error, GhimeraRefused) as exc:
             raise SourceWorkFailure("frontier discard was not durably acknowledged") from exc
 
+    def enqueue_local_batch(
+        self, requests: tuple[LocalSourceRequest, ...], ledger_start: int
+    ) -> None:
+        if not self._writing:
+            raise SourceWorkFailure("frontier writer is not owned by this session")
+        if self._frontier is None:
+            return
+        if any(request.identity in self._operations for request in requests):
+            raise SourceWorkFailure(
+                "local source already has an operation; inspect it before retry"
+            )
+        try:
+            self._frontier.enqueue_local_batch(
+                requests, ledger_start, available_bytes=self._available_bytes
+            )
+        except (OSError, ValueError, sqlite3.Error, GhimeraRefused) as exc:
+            raise SourceWorkFailure("local batch was not durably acknowledged") from exc
+
     def begin(self, request: SourceRequest, ledger_start: int) -> SourceWorkToken:
         request = SourceRequest.model_validate(request.model_dump())
         if self._frontier is not None:
@@ -320,6 +343,8 @@ class SourceWorkStore:
         request = LocalSourceRequest.model_validate(request.model_dump())
         try:
             request.validate_policy(self._config.local_inputs)
+            if self._frontier is not None:
+                self._frontier.require_queued(request)
         except ValueError as exc:
             raise SourceWorkFailure("local acquisition requires its declared input policy") from exc
         return self._begin(request, ledger_start)
@@ -422,11 +447,23 @@ class SourceWorkStore:
     def verify_frontier(self, state: SessionState) -> None:
         """A completed-round checkpoint may not omit or invent acknowledged queued work."""
         if self._frontier is None:
+            if state.local_frontier:
+                raise SourceWorkFailure("local pending work requires its configured frontier")
             return
         report = self.report()
-        queued = {(item.request.url, item.request.depth): item for item in report.queued}
+        if state.local_frontier != report.queued_local:
+            raise SourceWorkFailure("checkpoint changed acknowledged local pending work")
+        queued = {
+            (item.request.url, item.request.depth): item
+            for item in report.queued
+            if isinstance(item.request, SourceCoordinates)
+        }
         observed: dict[str, float] = {}
-        all_keys = {(item.request.url, item.request.depth) for item in report.frontier or ()}
+        all_keys = {
+            (item.request.url, item.request.depth)
+            for item in report.frontier or ()
+            if isinstance(item.request, SourceCoordinates)
+        }
         for priority, url, depth in state.frontier:
             if (url, depth) not in all_keys:
                 raise SourceWorkFailure("checkpoint contains unacknowledged frontier work")
@@ -435,6 +472,8 @@ class SourceWorkStore:
                 # Duplicate heap entries already acquired or discarded are not new work.
                 continue
             request = entry.request
+            if not isinstance(request, SourceCoordinates):
+                raise SourceWorkFailure("local work cannot enter the web priority heap")
             if (
                 request.reference_hops != state.reference_hops.get(url, 0)
                 or request.reference_origin != state.reference_origins.get(url)
@@ -504,9 +543,11 @@ def main() -> int:
     try:
         report = read_source_work(GhimeraConfig.from_toml(arguments.config), arguments.run_id)
         queued = f" queued={len(report.queued)}" if report.frontier is not None else ""
+        local = f" local_queued={len(report.queued_local)}" if report.queued_local else ""
         sys.stdout.write(
             f"run_id={report.run_id} operations={len(report.operations)} "
-            f"writer_active={report.writer_active} unresolved={len(report.unresolved)}{queued}\n"
+            f"writer_active={report.writer_active} unresolved={len(report.unresolved)}"
+            f"{queued}{local}\n"
         )
         return 0
     except (OSError, ValueError, sqlite3.Error, SourceWorkFailure, GhimeraRefused):
