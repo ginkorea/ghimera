@@ -713,7 +713,11 @@ class GoalLoop:
                 raise asyncio.CancelledError from None
         if extracted.extraction is not None:
             self._record_parse_attempts(ledger, extracted.extraction.attempts)
-        if extracted.extraction is not None or extracted.document_parse is not None:
+        if (
+            extracted.extraction is not None
+            or extracted.document_parse is not None
+            or extracted.source_feed is not None
+        ):
             ledger.append(
                 LedgerRow(
                     sequence=ledger.next_sequence,
@@ -721,7 +725,10 @@ class GoalLoop:
                     url=page.final_url,
                     extraction=extracted.extraction,
                     document_parse=extracted.document_parse,
-                    reason=self._extractor.revision,
+                    source_feed=extracted.source_feed,
+                    reason=extracted.source_feed.parser_revision
+                    if extracted.source_feed is not None
+                    else self._extractor.revision,
                     latency_seconds=max(0.0, self._clock() - extraction_started),
                 )
             )
@@ -1133,6 +1140,8 @@ class GoalLoop:
         return harvest
 
     def _extraction_revision(self, extracted: Extracted) -> str:
+        if extracted.source_feed is not None:
+            return extracted.source_feed.parser_revision
         if extracted.pdf_transcription is not None:
             return f"{self._extractor.revision}+{PdfTranscriptionStage.revision}"
         return self._extractor.revision

@@ -39,6 +39,7 @@ from ghimera.research_types import ResearchRequest, ResearchResult
 from ghimera.search import GroundedSearch
 from ghimera.searxng import SearxHtmlSearch, SearxSearch
 from ghimera.semantic_scoring import EmbeddingScorer
+from ghimera.source_feeds import SourceFeedExtractionSuite, SourceFeedExtractor
 from ghimera.source_sessions import SourceCredentials
 from ghimera.transport import Resolver
 from ghimera.visual_model import LocalVisionReader
@@ -114,6 +115,8 @@ class Collector:
             if config.document_extraction is not None
             else frozenset()
         )
+        if config.source_feeds is not None:
+            self._content_types |= frozenset(config.source_feeds.content_types)
         if not set(config.research.content_types) <= self._content_types:
             raise ValueError(
                 "research content types require matching configured extraction adapters"
@@ -210,6 +213,10 @@ class Collector:
         extractor: Extractor = HtmlExtractor(config)
         if config.document_extraction is not None:
             extractor = DocumentExtractionSuite(html=extractor, documents=DocumentExtractor(config))
+        if config.source_feeds is not None:
+            extractor = SourceFeedExtractionSuite(
+                fallback=extractor, feeds=SourceFeedExtractor(config)
+            )
         renderer = IsolatedBrowserRenderer(config) if config.browser is not None else None
         transcription = None
         if config.pdf_transcription is not None:

@@ -1,0 +1,21 @@
+# Merge as [source_feeds] into the ordinary collector recipe. Replace paths
+# with an owned runtime/work directory. Source seeds and allowed hosts stay
+# in the normal request/scope, not inside this parser policy.
+schema = "ghimera.source-feeds/1"
+formats = ["rss", "atom", "sitemap", "json_feed"]
+content_types = ["application/rss+xml", "application/atom+xml", "application/xml", "text/xml", "application/feed+json", "application/json"]
+include_attachments = false
+worker_python = "/opt/ghimera/bin/python"
+work_directory = "/var/lib/ghimera/source-feeds"
+max_workers = 2
+timeout_seconds = 20.0
+cleanup_timeout_seconds = 5.0
+max_input_bytes = 2000000
+max_output_bytes = 4000000
+max_diagnostic_bytes = 4096
+max_entries = 1000
+max_xml_nodes = 20000
+max_xml_depth = 32
+max_text_chars = 1000000
+max_field_chars = 50000
+max_links = 1000

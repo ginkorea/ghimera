@@ -31,6 +31,7 @@ from ghimera.research_config import ResearchConfig
 from ghimera.scoring_config import ScoringConfig
 from ghimera.search_config import SearxConfig
 from ghimera.semantic_types import SemanticConfig
+from ghimera.source_feed_config import SourceFeedConfig
 from ghimera.source_session_types import SourceSessionPolicy, validate_sessions
 from ghimera.transport_types import TransportConfig
 from ghimera.visual_config import VisualConfig
@@ -142,6 +143,9 @@ class GhimeraConfig(BaseModel):
     extraction: ExtractionConfig | None = None
     document_extraction: DocumentExtractionConfig | None = None
     pdf_transcription: PdfTranscriptionConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    source_feeds: SourceFeedConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     dedup: DedupConfig | None = None

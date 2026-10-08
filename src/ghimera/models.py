@@ -43,6 +43,7 @@ from ghimera.semantic_types import (
     SemanticReview,
     SemanticWindow,
 )
+from ghimera.source_feed_types import SourceFeedEvidence
 from ghimera.source_session_types import SourceSessionUse
 from ghimera.transport_types import TransportEvidence
 from ghimera.visual_types import ImageCandidate, ImageEvidence
@@ -223,10 +224,29 @@ class Extracted(Record):
     pdf_transcription: "PdfTranscriptionEvidence | None" = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    source_feed: SourceFeedEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     references: tuple[DocumentReference, ...] = ()
 
     @model_validator(mode="after")
     def text_binding(self) -> "Extracted":
+        if self.source_feed is not None and (
+            self.text != self.source_feed.text
+            or self.title != self.source_feed.reading_title
+            or self.language != "und"
+            or tuple((link.url, link.anchor) for link in self.links) != self.source_feed.links
+            or any(
+                value is not None
+                for value in (
+                    self.extraction,
+                    self.document_parse,
+                    self.document_layout,
+                    self.pdf_transcription,
+                )
+            )
+        ):
+            raise ValueError("feed extraction must preserve native declarations and exact links")
         if self.pdf_transcription is not None and (
             self.text != self.pdf_transcription.text
             or self.language != self.pdf_transcription.config.language_hint
@@ -392,6 +412,11 @@ class DocumentSource(Record):
     images: tuple[ImageEvidence, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     def validate_policy(self, config: GhimeraConfig) -> None:
+        if (
+            self.extracted.source_feed is not None
+            and self.extracted.source_feed.policy != config.source_feeds
+        ):
+            raise ValueError("feed extraction must bind the effective run configuration")
         transcription = self.extracted.pdf_transcription
         if transcription is not None:
             if transcription.config != config.pdf_transcription:
@@ -520,6 +545,11 @@ class DocumentSource(Record):
         digest = hashlib.sha256(self.raw).hexdigest()
         if self.sha256 != digest:
             raise ValueError("document digest must bind retained source bytes")
+        feed = self.extracted.source_feed
+        if feed is not None:
+            if feed.source_url != self.url:
+                raise ValueError("feed extraction must bind this source occurrence")
+            feed.validate_source(self.raw)
         transcription = self.extracted.pdf_transcription
         if transcription is not None and (
             transcription.source_sha256 != digest
@@ -677,6 +707,9 @@ class LedgerRow(Record):
         default=None, exclude_if=lambda v: v is None
     )
     document_parse: DocumentParseEvidence | None = None
+    source_feed: SourceFeedEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     dedup: DedupEvidence | None = None
     transcription_call: PageTranscriptionCall | None = Field(
         default=None, exclude_if=lambda value: value is None
@@ -721,6 +754,15 @@ class LedgerRow(Record):
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if self.source_feed is not None and (
+            self.event != "extraction"
+            or self.url != self.source_feed.source_url
+            or self.reason != "source-feed-parser/1"
+            or self.extraction is not None
+            or self.document_parse is not None
+            or self.refusal is not None
+        ):
+            raise ValueError("feed parse evidence belongs to its exact extraction observation")
         if self.retained_failure is not None and (
             self.event != "refusal"
             or self.refusal is None
@@ -964,6 +1006,15 @@ class Harvest(Record):
 
         validate_reference_ledger(self)
         validate_browser_harvest(self)
+        feed_policy = self.receipt.effective_config.source_feeds
+        feeds = tuple(row.source_feed for row in self.ledger if row.source_feed is not None)
+        if any(feed.policy != feed_policy for feed in feeds):
+            raise ValueError("feed ledger evidence must bind the effective run configuration")
+        if any(
+            doc.extracted.source_feed is not None and doc.extracted.source_feed not in feeds
+            for doc in self.source_documents
+        ):
+            raise ValueError("fresh feed documents must preserve their parse observation")
         inputs = tuple(row for row in self.ledger if row.event == "local_input")
         input_policy = self.receipt.effective_config.local_inputs
         if inputs and (
