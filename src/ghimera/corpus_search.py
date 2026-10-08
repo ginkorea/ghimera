@@ -47,6 +47,10 @@ class CorpusLeadSearch(GroundedSearch):
 
     def _check(self) -> None:
         corpus, policy = self._corpus, self.policy
+        if corpus.config.reranking is not None:
+            raise ValueError(
+                "learned corpus discovery requires future run-bound rerank reservations/replay"
+            )
         validate_reader(
             corpus,
             corpus_id=policy.corpus_id,

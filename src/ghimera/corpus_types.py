@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.embedding_types import EncodingCall, EncodingRecoveryEvidence
 from ghimera.models import Document
+from ghimera.reranking_types import RerankingEvidence
 from ghimera.retrieval import RetrievalEvidence
 from ghimera.visual_types import ImageRegion
 
@@ -144,7 +145,9 @@ class CorpusHit(CorpusRecord):
 
 
 class CorpusQuery(CorpusRecord):
-    schema_version: Literal["ghimera.corpus-query/1"] = Field(alias="schema")
+    schema_version: Literal["ghimera.corpus-query/1", "ghimera.corpus-query/2"] = Field(
+        alias="schema"
+    )
     corpus_id: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
     config_sha256: Digest
     generation: Count
@@ -156,9 +159,12 @@ class CorpusQuery(CorpusRecord):
     hits: tuple[CorpusHit, ...]
     approximate: Literal[True] = True
     retrieval: RetrievalEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    reranking: RerankingEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def reconciled(self) -> "CorpusQuery":
+        if (self.schema_version == "ghimera.corpus-query/2") != (self.reranking is not None):
+            raise ValueError("learned query requires its versioned complete reranking evidence")
         if (
             self.encoding_call.outcome != "success"
             or len(self.encoding_call.input_sha256) != 1
@@ -169,7 +175,38 @@ class CorpusQuery(CorpusRecord):
             )
         ):
             raise ValueError("corpus query requires one successful encoding and distinct hits")
-        if self.retrieval is not None:
+        if self.reranking is not None:
+            learned = self.reranking
+            request = learned.request
+            candidates = {candidate.passage_id: candidate for candidate in request.candidates}
+            if (
+                self.retrieval is None
+                or len(request.candidates) > self.retrieval.passage_count
+                or tuple(row.passage_id for row in request.candidates)
+                != tuple(row.passage_id for row in self.retrieval.ranking)
+                or request.corpus_id != self.corpus_id
+                or request.config_sha256 != self.config_sha256
+                or request.generation != self.generation
+                or hashlib.sha256(request.query.encode()).hexdigest() != self.query_sha256
+                or tuple(hit.passage_id for hit in self.hits) != learned.selected_ids
+            ):
+                raise ValueError(
+                    "learned query must bind the complete original hybrid union and selection"
+                )
+            for hit in self.hits:
+                candidate = candidates[hit.passage_id]
+                if (
+                    candidate.passage_sha256
+                    != hashlib.sha256(hit.passage.model_dump_json().encode()).hexdigest()
+                    or candidate.document_id != hit.passage.document_id
+                    or candidate.text != hit.passage.text
+                    or candidate.language != hit.passage.language
+                    or candidate.cosine != hit.cosine
+                ):
+                    raise ValueError(
+                        "learned hit must preserve its actual original passage and score"
+                    )
+        elif self.retrieval is not None:
             ranked = {
                 row.passage_id: position for position, row in enumerate(self.retrieval.ranking)
             }

@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ghimera.model_config import EmbeddingServiceConfig
+from ghimera.reranking_config import OfflineRerankingConfig
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
 
@@ -24,7 +25,7 @@ class EncodingRecoveryConfig(BaseModel):
 
 class CorpusConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["ghimera.corpus/1"] = Field(alias="schema")
+    schema_version: Literal["ghimera.corpus/1", "ghimera.corpus/2"] = Field(alias="schema")
     directory: Path
     encoder: EmbeddingServiceConfig
     query_encoder: EmbeddingServiceConfig
@@ -51,6 +52,9 @@ class CorpusConfig(BaseModel):
     encoding_recovery: EncodingRecoveryConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    reranking: OfflineRerankingConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("directory")
     @classmethod
@@ -61,6 +65,8 @@ class CorpusConfig(BaseModel):
 
     @model_validator(mode="after")
     def coherent(self) -> "CorpusConfig":
+        if (self.schema_version == "ghimera.corpus/2") != (self.reranking is not None):
+            raise ValueError("learned reranking requires corpus/2 and its explicit offline policy")
         document, query = self.encoder, self.query_encoder
         if (document.model_id, document.revision, document.dimensions) != (
             query.model_id,
@@ -103,7 +109,8 @@ class CorpusConfig(BaseModel):
         """Mutable capacity/transport/ANN knobs do not orphan immutable passage vectors."""
         service = self.encoder
         recipe = {
-            "schema": self.schema_version,
+            # Query-only model selection does not change immutable passage vectors.
+            "schema": "ghimera.corpus/1",
             "model_id": service.model_id,
             "revision": service.revision,
             "dimensions": service.dimensions,

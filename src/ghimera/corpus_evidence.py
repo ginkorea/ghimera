@@ -12,6 +12,7 @@ from ghimera.corpus_evidence_config import CorpusEvidenceConfig
 from ghimera.corpus_types import BoundCorpusDocument, CorpusHit, CorpusQuery, CorpusRecord
 from ghimera.embedding_types import EncodingCall
 from ghimera.models import Document
+from ghimera.reranking_config import OfflineRerankingConfig
 
 PassageId = Annotated[int, Field(strict=True, gt=0)]
 OmissionReason = Literal["minimum_cosine", "document_limit", "original_bytes", "response_bytes"]
@@ -110,6 +111,10 @@ class CorpusEvidenceReader:
             max_passage_hits=policy.max_passage_hits,
             minimum_cosine=policy.minimum_cosine,
         )
+
+    @property
+    def reranking_policy(self) -> OfflineRerankingConfig | None:
+        return self._corpus.config.reranking
 
     async def read(
         self, text: str, *, encoding_observer: Callable[[EncodingCall], None] | None = None

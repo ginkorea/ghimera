@@ -35,6 +35,14 @@ from ghimera.models import Document, Harvest
 from ghimera.owned_worker import off_loop
 from ghimera.ports import EvidenceEncoder
 from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused, RefusalCode
+from ghimera.reranking_types import (
+    PassageReranker,
+    RerankCandidate,
+    RerankingEvidence,
+    RerankRequest,
+    RerankScores,
+    selection_decisions,
+)
 from ghimera.retrieval import HybridRetrievalConfig, NativeLexicalIndex
 from ghimera.visual_types import ImageRegion
 
@@ -108,8 +116,18 @@ class EvidenceCorpus:
         encoder: EvidenceEncoder,
         query_encoder: EvidenceEncoder,
         create: bool = False,
+        reranker: PassageReranker | None = None,
     ) -> None:
         self.config = CorpusConfig.model_validate(config.model_dump())
+        if self.config.reranking is None and reranker is not None:
+            raise ValueError("an injected reranker requires the corpus's explicit offline policy")
+        if self.config.reranking is not None and reranker is None:
+            from ghimera.offline_reranking import OfflineCrossEncoder
+
+            reranker = OfflineCrossEncoder(self.config.reranking)
+        if reranker is not None and reranker.config != self.config.reranking:
+            raise ValueError("corpus reranker must bind its exact declared offline policy")
+        self._reranker = reranker
         for port, service in ((encoder, config.encoder), (query_encoder, config.query_encoder)):
             if port.config != service or (
                 port.model.model_id,
@@ -537,6 +555,10 @@ class EvidenceCorpus:
                 retrieval = HybridRetrievalConfig.model_validate(retrieval.model_dump())
                 if retrieval.vector_candidates > self.config.search_candidates:
                     raise ValueError("hybrid candidates exceed the native vector query allowance")
+            if self.config.reranking is not None and retrieval is None:
+                raise ValueError(
+                    "learned reranking requires the explicit complete hybrid candidate union"
+                )
             query_hash = hashlib.sha256(text.encode()).hexdigest()
             self._storage.start(operation, kind="query", input_sha=query_hash, calls=1)
             try:
@@ -569,6 +591,13 @@ class EvidenceCorpus:
 
                         lexical = await off_loop(lexical_snapshot)
                         lexical.admit_query(text)
+                    if self._reranker is not None:
+                        if self._reranker.config != self.config.reranking:
+                            raise ValueError("reranker changed its exact configured policy")
+                        async with asyncio.timeout(self._reranker.config.timeout_seconds):
+                            await self._reranker.prepare()
+                        if self._reranker.config != self.config.reranking:
+                            raise ValueError("reranker changed its exact configured policy")
                     batch, _, evidence = await self._encode(
                         (text,),
                         self._query_encoder,
@@ -602,7 +631,61 @@ class EvidenceCorpus:
                             )
                             for row in ranking.ranking
                         )
-                    for position, cosine in neighbors:
+                    learned = None
+                    if self._reranker is not None:
+                        if self.config.reranking is None:
+                            raise ValueError("reranker lost its native configured policy")
+                        candidates: list[RerankCandidate] = []
+                        native_hits: dict[int, CorpusHit] = {}
+                        for position, cosine in neighbors:
+                            identity = ids[position]
+                            passage = self._storage.passage(identity)
+                            native_hits[identity] = CorpusHit(
+                                passage_id=identity, cosine=cosine, passage=passage
+                            )
+                            candidates.append(
+                                RerankCandidate(
+                                    passage_id=identity,
+                                    document_id=passage.document_id,
+                                    passage_sha256=digest(passage.model_dump_json().encode()),
+                                    text=passage.text,
+                                    text_sha256=digest(passage.text.encode()),
+                                    cosine=cosine,
+                                    language=passage.language,
+                                )
+                            )
+                        request = RerankRequest(
+                            schema="ghimera.rerank-request/1",
+                            policy=self.config.reranking,
+                            corpus_id=self._storage.identity,
+                            config_sha256=self.config.identity,
+                            generation=generation,
+                            query=text,
+                            candidates=tuple(candidates),
+                        )
+                        if self._reranker.config != self.config.reranking:
+                            raise ValueError("reranker changed its exact configured policy")
+                        async with asyncio.timeout(self.config.reranking.timeout_seconds):
+                            scores = RerankScores.model_validate(
+                                (await self._reranker.score(request)).model_dump()
+                            )
+                        learned = RerankingEvidence(
+                            schema="ghimera.reranking-evidence/1",
+                            request=request,
+                            scores=scores,
+                            top_k=top_k,
+                            minimum_cosine=self.config.minimum_cosine,
+                            languages=languages,
+                            decisions=selection_decisions(
+                                request,
+                                scores,
+                                top_k=top_k,
+                                minimum_cosine=self.config.minimum_cosine,
+                                languages=languages,
+                            ),
+                        )
+                        hits = [native_hits[identity] for identity in learned.selected_ids]
+                    for position, cosine in () if learned is not None else neighbors:
                         if cosine < self.config.minimum_cosine:
                             continue
                         passage = self._storage.passage(ids[position])
@@ -614,7 +697,9 @@ class EvidenceCorpus:
                         if len(hits) == top_k:
                             break
                     result = CorpusQuery(
-                        schema="ghimera.corpus-query/1",
+                        schema="ghimera.corpus-query/2"
+                        if learned is not None
+                        else "ghimera.corpus-query/1",
                         corpus_id=self._storage.identity,
                         config_sha256=self.config.identity,
                         generation=generation,
@@ -623,6 +708,7 @@ class EvidenceCorpus:
                         encoding_recovery=evidence,
                         hits=tuple(hits),
                         retrieval=ranking,
+                        reranking=learned,
                     )
                 self._storage.terminal(operation, "committed")
                 return result

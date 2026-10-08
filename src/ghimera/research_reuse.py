@@ -132,6 +132,10 @@ class ResearchRetrievalReport(CorpusRecord):
 
     @model_validator(mode="after")
     def reconcile(self) -> "ResearchRetrievalReport":
+        if any(bundle.query.reranking is not None for bundle in self.snapshots):
+            raise ValueError(
+                "learned research snapshots require future run-bound rerank reservations/replay"
+            )
         policy = self.policy
         reader = policy.reader
         snapshots = {bundle_digest(bundle): bundle for bundle in self.snapshots}
@@ -192,6 +196,10 @@ class RetainedResearchSession:
         restored: ResearchRetrievalReport | None = None,
     ) -> None:
         self._policy = ResearchReuseConfig.model_validate(policy.model_dump())
+        if reader.reranking_policy is not None:
+            raise ValueError(
+                "learned research retrieval requires future run-bound rerank reservations/replay"
+            )
         self._reader, self._intent = reader, intent
         if reader.policy != self._policy.reader:
             raise ValueError("research reuse requires its exact configured reader")

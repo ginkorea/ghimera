@@ -1,0 +1,47 @@
+# Inert operator template, not an admitted model or trained-quality claim.
+# Supply a complete local inventory and real SHA-256 values before use.
+schema = "ghimera.offline-reranking/1"
+runtime = "transformers_sequence_classification/1"
+model_id = "configure-reviewed-cross-encoder"
+revision = "replace-with-immutable-training-revision"
+score_semantics = "single_relevance_logit"
+input_recipe = "query_document_pair/1"
+device = "cpu"
+model_directory = "/srv/ghimera/models/reviewed-cross-encoder"
+worker_python = "/srv/ghimera/reranking-runtime/bin/python"
+work_directory = "/srv/ghimera/private/reranking-worker"
+torch_version = "replace-with-exact-installed-version"
+transformers_version = "replace-with-exact-installed-version"
+max_artifact_bytes = 2147483648
+cpu_threads = 2
+interop_threads = 1
+batch_size = 8
+max_workers = 1
+max_pairs = 128
+max_pair_tokens = 512
+max_input_chars = 262144
+max_request_bytes = 4194304
+max_response_bytes = 262144
+max_diagnostic_bytes = 16384
+timeout_seconds = 120.0
+cleanup_timeout_seconds = 5.0
+max_passages_per_document = 2
+max_source_documents = 10
+
+[[artifacts]]
+path = "config.json"
+role = "model"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[artifacts]]
+path = "model.safetensors"
+role = "model"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[artifacts]]
+path = "tokenizer.json"
+role = "tokenizer"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+# Declare every additional tokenizer/model data file (including tokenizer
+# configuration, vocabulary and sharded-weight indices) with its actual digest.
