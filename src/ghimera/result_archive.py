@@ -193,6 +193,53 @@ class ResearchResultArchive:
         return data
 
     @classmethod
+    def acknowledged(
+        cls,
+        path: Path,
+        *,
+        reservation: ArchiveReservation,
+        max_bytes: int,
+        max_reservation_bytes: int,
+    ) -> tuple[ArchiveReceipt, ResearchResult]:
+        """Verify a completed original command under the archive's writer lock.
+
+        This admits only existing sealed evidence. It never finishes a partial
+        write, changes a reservation, recreates a receipt or launches work.
+        """
+        reservation = ArchiveReservation.model_validate(reservation.model_dump())
+        if (
+            type(max_bytes) is not int
+            or max_bytes <= 0
+            or type(max_reservation_bytes) is not int
+            or max_reservation_bytes <= 0
+        ):
+            raise ValueError("positive archive and reservation read allowances are required")
+        cls._path_check(path)
+        archive = cls(path, reservation.run_id)
+        try:
+            fcntl.flock(archive._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if set(os.listdir(archive._fd)) != {
+                "reservation.json",
+                "result.json",
+                "receipt.json",
+            }:
+                raise ValueError("acknowledgement requires exactly the original sealed output")
+            observed = ArchiveReservation.model_validate_json(
+                archive._read("reservation.json", max_reservation_bytes)
+            )
+            if observed != reservation:
+                raise ValueError("acknowledgement requires the exact original reservation")
+            result = cls.read(path, max_bytes=max_bytes)
+            receipt = ArchiveReceipt.model_validate_json(
+                archive._read("receipt.json", max_reservation_bytes)
+            )
+            if receipt.run_id != reservation.run_id:
+                raise ValueError("acknowledgement changed its original run identity")
+            return receipt, result
+        finally:
+            archive.close()
+
+    @classmethod
     def read(cls, path: Path, *, max_bytes: int) -> ResearchResult:
         if type(max_bytes) is not int or max_bytes <= 0:
             raise ValueError("a positive result byte allowance is required")
