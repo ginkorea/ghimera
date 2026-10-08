@@ -4,7 +4,26 @@ Intent-driven web research: discover sources, collect native-language documents,
 follow evidence gaps, and return a source-cited answer—or an explicit partial
 result when the evidence or budget is insufficient.
 
-**v0.4.9 adds durable model-call intent and explicit uncertainty holds.**
+**The 0.4.10 candidate adds a standalone collection service and richer evidence workflows.**
+
+It combines configured hybrid corpus retrieval, source API/reference expansion,
+guarded browser pagination and explicit Tor-browser route proof; native-layout
+PDF figure crops and visual graph/answer citations; reversible dated identity
+decisions; bounded model-return replay; and remote delivery with retention.
+The `ghimera-service` command exposes authenticated run/status/pause/resume/
+cancel, health, manifests and corpus queries. Existing library use needs no
+service, external scheduler or platform registry.
+
+Configuration owns endpoints, paths, models, budgets, networking and storage.
+Nothing downloads or serves a model on import. Source observations, OCR readings
+and reviewed model claims remain distinguishable. See the [core tracker](docs/PRD_INFRASTRUCTURE.md),
+[service guide](docs/OPERATIONS_CANDIDATE.md), [browser/retrieval guide](docs/DISCOVERY_BROWSER_CANDIDATE.md)
+and [visual/identity guide](docs/EVIDENCE_GRAPH_CANDIDATE.md).
+This is an unreleased candidate until its combined gate and installed-package
+acceptance finish. Live multilingual model quality and onion investigation
+acceptance are not implied by protocol fixtures.
+
+**Published v0.4.9 adds durable model-call intent and explicit uncertainty holds.**
 
 With explicit model-work and journal configuration, the collector persists its
 reservation before invoking a model and links observed returns to the original

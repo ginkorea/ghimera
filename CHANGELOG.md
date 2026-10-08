@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.10 — candidate, not yet published
+
+- Add a configured authenticated collection service with durable run manifests,
+  bounded active work, native completed-round pause/resume and archive-only
+  corpus/outbox retries. Interrupted external work stays held, not blindly rerun.
+- Add hybrid native-script lexical/vector retrieval with explicit weighted
+  reciprocal-rank fusion and exact evidence-reader policy binding.
+- Add configured JSON API result/reference/cited-by/pagination mappings, guarded
+  same-page browser pagination and explicit uncached browser Tor route proofs.
+- Carry accepted image OCR and reviewed visual claims into graph observations
+  and answer citation templates, preserving distinct basis and region anchors.
+  Native-layout PDF figure selection precedes bounded rendering and existing
+  OCR/vision admission; absent observed figures produce an explicit gap.
+- Add append-only source-backed merge/split/retract decisions and dated identity
+  views without rewriting original observations or silently merging equal names.
+- Retain bounded original model outputs and replay an exact acknowledged call
+  locally without contacting a model again or resetting original spend.
+- Add guarded remote delivery/readback, acknowledgement-age retention, bounded
+  audit rotation and optional SQLite compaction; uncertain payloads are retained.
+- Combined source gate and installed artifact acceptance are pending. Real
+  multilingual vision/organization and Tor/onion quality remain unaccepted;
+  independently hosted Ahmia index deployment remains intentionally deferred.
+
 ## 0.4.9 — 2026-10-08
 
 - Explicit typed model-work policy requires the run's exactly bound durable
