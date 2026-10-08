@@ -21,7 +21,12 @@ from ghimera.fetch import FetchLadder
 from ghimera.graph import DirectoryGraphSink, GraphSink, ResearchGraph
 from ghimera.ledger import Ledger
 from ghimera.local_input_types import LocalDocumentSeed
-from ghimera.local_inputs import LocalInputFailure, LocalInputLoader
+from ghimera.local_inputs import (
+    LocalInputAcknowledgementLost,
+    LocalInputFailure,
+    LocalInputLoader,
+    LocalInputSnapshot,
+)
 from ghimera.models import (
     Document,
     DuplicateOccurrence,
@@ -47,7 +52,7 @@ from ghimera.scoring import Scorer
 from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, SemanticStage
 from ghimera.semantic_recovery import SemanticRecoveryStopped
 from ghimera.session_state import SessionState
-from ghimera.source_work_types import SourceCoordinates, SourceRequest
+from ghimera.source_work_types import LocalSourceRequest, SourceCoordinates, SourceRequest
 from ghimera.visual_stage import VisualStage
 from ghimera.visual_types import ImageEvidence
 
@@ -392,76 +397,73 @@ class GoalLoop:
         budget, ledger = session.budget, session.ledger
         for item in seeds:
             seed = LocalDocumentSeed.model_validate(item.model_dump())
-            allowance = budget.reserve_local_input()
-            started = self._clock()
-            snapshot, failure, code = None, None, None
-            cancelled = False
-            task = asyncio.create_task(asyncio.to_thread(loader.read, seed, max_bytes=allowance))
+            work, token = session.source_work, None
             try:
-                try:
-                    async with asyncio.timeout(budget.remaining_seconds):
-                        snapshot = await asyncio.shield(task)
-                except TimeoutError:
-                    code = RefusalCode.BUDGET_EXHAUSTED
-                except asyncio.CancelledError:
-                    cancelled, code = True, RefusalCode.LOCAL_INPUT_FAILED
-                except LocalInputFailure as exc:
-                    failure, code = exc, exc.code
-                if code is not None and failure is None:
-                    # Drain the bounded file read, preserving physical byte spend
-                    # even when its caller's deadline or cancellation fired.
-                    try:
-                        snapshot = await task
-                    except LocalInputFailure as exc:
-                        failure = exc
-                read = (
-                    len(snapshot.raw)
-                    if snapshot is not None
-                    else (failure.bytes_read if failure is not None else 0)
-                )
-                ledger.append(
-                    LedgerRow(
-                        sequence=ledger.next_sequence,
-                        event="local_input",
-                        url=seed.source_id,
-                        bytes_read=read,
-                        refusal=code,
-                        local_input=snapshot.evidence
-                        if snapshot is not None and code is None
-                        else None,
-                        reason="owned_local_snapshot" if code is None else "local_input_refused",
-                        latency_seconds=max(0.0, self._clock() - started),
+                if work is not None:
+                    if not policy.permits(seed.path):
+                        raise GhimeraRefused(RefusalCode.LOCAL_INPUT_FAILED)
+                    token = work.begin_local(
+                        LocalSourceRequest(
+                            schema="ghimera.local-source-request/1",
+                            seed=seed,
+                            policy_digest=policy.content_digest(),
+                        ),
+                        ledger.next_sequence,
                     )
-                )
-                budget.local_input_bytes += read
-                budget.record_bytes(read)
+                snapshot, code, cancelled = await self._read_local(session, loader, seed)
+                page = None
+                if snapshot is not None:
+                    # Existing parser byte envelope, never a fictitious HTTP fetch.
+                    page = Page(
+                        url=seed.source_id,
+                        final_url=seed.source_id,
+                        status=200,
+                        content_type=seed.content_type,
+                        body=snapshot.raw,
+                        local_input=snapshot.evidence,
+                    )
+                    if work is not None and token is not None:
+                        # A drained cancelled read still acquired these original bytes.
+                        work.acquired(token, page)
                 if cancelled:
                     raise asyncio.CancelledError
                 if code is not None:
                     raise GhimeraRefused(code)
-                if snapshot is None:
+                if page is None:
                     raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-            finally:
-                budget.release_bytes(allowance)
-            # Page is only the existing parser's byte envelope here; no HTTP
-            # request/status is written to the ledger or source provenance.
-            page = Page(
-                url=seed.source_id,
-                final_url=seed.source_id,
-                status=200,
-                content_type=seed.content_type,
-                body=snapshot.raw,
-                local_input=snapshot.evidence,
-            )
-            if session.graph is not None:
-                await session.graph.discovered(seed.source_id, session.graph.intent_id)
-            try:
+                if work is not None and token is not None:
+                    work.processing(token)
+                if session.graph is not None:
+                    await session.graph.discovered(seed.source_id, session.graph.intent_id)
                 budget.check_time()
-                await self._process_page(session, page, seed.source_id, 0, None, 0)
+                result = await self._process_page(session, page, seed.source_id, 0, None, 0)
+                if work is not None and token is not None:
+                    work.processed(token, result, ledger.next_sequence)
+            except asyncio.CancelledError:
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="refusal",
+                        url=seed.source_id,
+                        refusal=RefusalCode.LOCAL_INPUT_FAILED,
+                        reason="local_document_processing_cancelled",
+                    )
+                )
+                if work is not None and token is not None:
+                    work.refused(
+                        token,
+                        "local_document_processing_cancelled",
+                        ledger.next_sequence,
+                        cancelled=True,
+                    )
+                raise
             except (GhimeraRefused, TimeoutError) as exc:
                 if isinstance(exc, ExtractionFailure):
                     self._record_parse_attempts(ledger, exc.attempts)
                 code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+                if code in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}:
+                    # A failed graph acknowledgement is unresolved, not a known refusal.
+                    raise
                 ledger.append(
                     LedgerRow(
                         sequence=ledger.next_sequence,
@@ -471,7 +473,71 @@ class GoalLoop:
                         reason="local_document_processing_refused",
                     )
                 )
+                if work is not None and token is not None:
+                    work.refused(token, code.value, ledger.next_sequence)
                 raise GhimeraRefused(code) from None
+
+    async def _read_local(
+        self, session: CollectionSession, loader: LocalInputLoader, seed: LocalDocumentSeed
+    ) -> tuple[LocalInputSnapshot | None, RefusalCode | None, bool]:
+        """Account and drain the bounded reader before acknowledging its outcome."""
+        budget, ledger = session.budget, session.ledger
+        allowance = budget.reserve_local_input()
+        started = self._clock()
+        snapshot, failure, code = None, None, None
+        cancelled = False
+        task = asyncio.create_task(asyncio.to_thread(loader.read, seed, max_bytes=allowance))
+        try:
+            try:
+                async with asyncio.timeout(budget.remaining_seconds):
+                    snapshot = await asyncio.shield(task)
+            except TimeoutError:
+                code = RefusalCode.BUDGET_EXHAUSTED
+            except asyncio.CancelledError:
+                cancelled, code = True, RefusalCode.LOCAL_INPUT_FAILED
+            except LocalInputFailure as exc:
+                failure, code = exc, exc.code
+            if code is not None and failure is None:
+                # Preserve physical spend even when the caller cancels or times out.
+                while True:
+                    try:
+                        snapshot = await asyncio.shield(task)
+                        break
+                    except asyncio.CancelledError:
+                        if task.cancelled():
+                            # Do not turn a lost reader acknowledgement into a zero-byte
+                            # terminal cancellation. Its physical thread may still run.
+                            raise LocalInputAcknowledgementLost(
+                                "local read requires acknowledgement before reconciliation"
+                            ) from None
+                        cancelled = True
+                    except LocalInputFailure as exc:
+                        failure = exc
+                        break
+            read = (
+                len(snapshot.raw)
+                if snapshot is not None
+                else (failure.bytes_read if failure is not None else 0)
+            )
+            ledger.append(
+                LedgerRow(
+                    sequence=ledger.next_sequence,
+                    event="local_input",
+                    url=seed.source_id,
+                    bytes_read=read,
+                    refusal=code,
+                    local_input=snapshot.evidence
+                    if snapshot is not None and code is None
+                    else None,
+                    reason="owned_local_snapshot" if code is None else "local_input_refused",
+                    latency_seconds=max(0.0, self._clock() - started),
+                )
+            )
+            budget.local_input_bytes += read
+            budget.record_bytes(read)
+            return snapshot, code, cancelled
+        finally:
+            budget.release_bytes(allowance)
 
     async def collect(
         self,

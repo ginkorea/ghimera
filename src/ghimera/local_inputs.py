@@ -15,6 +15,10 @@ class LocalInputFailure(GhimeraRefused):
         super().__init__(code)
 
 
+class LocalInputAcknowledgementLost(RuntimeError):
+    """A reader was cancelled without a physical read acknowledgement."""
+
+
 @dataclass(frozen=True)
 class LocalInputSnapshot:
     raw: bytes

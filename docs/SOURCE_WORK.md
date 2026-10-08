@@ -104,9 +104,9 @@ refetch; writer exclusion; capacity refusal; recipe/digest/symlink/journal
 mutation; and bounded CLI output. Fixtures test recovery contracts, not real
 language or model accuracy. Full release acceptance is still required.
 
-I03 remains open: the queued frontier candidate below still needs release
+I03 remains open: the queued frontier and local-import candidates below still need release
 acceptance; integrate explicit uncertain model/graph reconciliation and reservation accounting,
-cover interrupted local imports/retained-source operations, and reconstruct a
+cover retained-source operations, and reconstruct a
 whole resumed collection/research session without losing queued links or
 inventing exact unknown spend. This web-operation capture is a necessary part
 of that path, not an automatic replay engine or a replacement for I12's
@@ -140,5 +140,36 @@ No queued or unresolved item is automatically refetched or replayed by inspectio
 
 This candidate closes capture of queued web intents, not the full I03: interrupted
 whole-session adoption still needs explicit uncertain model/graph reconciliation,
-budget reservations, local/retained operation coverage and durable research
+budget reservations, retained operation coverage and durable research
 control state. It is not yet a published release or real model-quality acceptance.
+
+## Owned local document capture candidate
+
+With source work enabled, `GoalLoop.import_local` and the research loop's
+`local_documents` use the same run-owned operation store. A typed
+`ghimera.local-source-request/1` retains the exact caller-declared file path,
+SHA-256, content type and local-input policy digest before the bounded read.
+Local URNs do not become permitted HTTP URLs or invented web-frontier entries.
+Existing web coordinate serialization and identities are unchanged. Local paths
+are private recovery metadata, never added to public document provenance or the
+bounded inspector CLI.
+
+Captured local `Page` bytes and path-free `LocalInputEvidence` are acknowledged
+before graph discovery, parsing, scoring or model work. Processing returns its
+exact native `Document` through the same terminal result boundary as web work.
+A controlled cancelled read is drained and its actual byte spend recorded; when
+the pinned snapshot was acquired, the cancelled operation retains those original
+bytes without claiming an accepted document. A changed input refuses and keeps
+the observed read spend, not a false original. Lost read acknowledgement remains
+`fetching` with unknown spend, not a fabricated zero-byte receipt. Storage
+capacity is reserved before file I/O; failed graph acknowledgements remain
+unresolved rather than being reclassified as ordinary source refusals.
+Repeated caller cancellation does not abandon the owned read's drain. A reader
+task itself cancelled before acknowledging its physical I/O is a fatal uncertain
+read, not a recorded zero-byte cancellation.
+
+This is operation capture, not automatic interrupted-import replay. The caller's
+whole local seed batch and research control state are not yet durable pending
+frontiers, and resuming an interrupted operation still requires explicit
+reconciliation. No OCR or semantic-language quality claim follows from capturing
+a pinned PDF correctly.

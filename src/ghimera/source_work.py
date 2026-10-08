@@ -24,6 +24,7 @@ from ghimera.refusals import GhimeraRefused
 from ghimera.session_state import SessionState
 from ghimera.source_frontier import SourceFrontier
 from ghimera.source_work_types import (
+    LocalSourceRequest,
     SourceCoordinates,
     SourceOperation,
     SourceRequest,
@@ -41,7 +42,7 @@ class SourceWorkToken:
     journal_header_sha256: str
 
 
-def _identity(request: SourceRequest) -> str:
+def _identity(request: SourceRequest | LocalSourceRequest) -> str:
     return request.identity
 
 
@@ -197,6 +198,10 @@ class SourceWorkStore:
         return tuple(operations)
 
     def _sizes(self, item: SourceOperation) -> None:
+        if isinstance(item.request, LocalSourceRequest):
+            item.request.validate_policy(self._config.local_inputs)
+            if item.page is not None and item.page.local_input is not None:
+                item.page.local_input.validate_policy(self._config.local_inputs)
         if (
             item.page is not None
             and len(item.page.model_dump_json().encode()) > self._policy.max_page_bytes
@@ -308,6 +313,20 @@ class SourceWorkStore:
                 self._frontier.require_queued(request)
             except ValueError as exc:
                 raise SourceWorkFailure("acquisition requires its queued source intent") from exc
+        return self._begin(request, ledger_start)
+
+    def begin_local(self, request: LocalSourceRequest, ledger_start: int) -> SourceWorkToken:
+        """Acknowledge the declared owned-file read before reserving or opening it."""
+        request = LocalSourceRequest.model_validate(request.model_dump())
+        try:
+            request.validate_policy(self._config.local_inputs)
+        except ValueError as exc:
+            raise SourceWorkFailure("local acquisition requires its declared input policy") from exc
+        return self._begin(request, ledger_start)
+
+    def _begin(
+        self, request: SourceRequest | LocalSourceRequest, ledger_start: int
+    ) -> SourceWorkToken:
         item = SourceOperation(
             schema="ghimera.source-operation/1",
             operation_id=_identity(request),

@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
+from ghimera.local_input_types import LocalDocumentSeed, LocalInputConfig
 from ghimera.models import Document, Page, Record, Scope
 
 Count = Annotated[int, Field(strict=True, ge=0)]
@@ -34,6 +35,31 @@ class SourceRequest(SourceCoordinates):
         return self
 
 
+class LocalSourceRequest(Record):
+    """Owned-file intent; the private path is not public source provenance."""
+
+    schema_version: Literal["ghimera.local-source-request/1"] = Field(alias="schema")
+    seed: LocalDocumentSeed
+    policy_digest: Digest
+
+    @property
+    def url(self) -> str:
+        return self.seed.source_id
+
+    @property
+    def identity(self) -> str:
+        # The explicit local schema domain-separates this from web coordinates.
+        return hashlib.sha256(self.model_dump_json().encode()).hexdigest()
+
+    def validate_policy(self, policy: LocalInputConfig | None) -> None:
+        if (
+            policy is None
+            or policy.content_digest() != self.policy_digest
+            or not policy.permits(self.seed.path)
+        ):
+            raise ValueError("local source intent must bind its exact permitted input policy")
+
+
 class SourceFrontierEntry(Record):
     schema_version: Literal["ghimera.source-frontier-entry/1"] = Field(alias="schema")
     entry_id: Digest
@@ -60,7 +86,7 @@ class SourceOperation(Record):
     schema_version: Literal["ghimera.source-operation/1"] = Field(alias="schema")
     operation_id: Digest
     sequence: Count
-    request: SourceRequest
+    request: SourceRequest | LocalSourceRequest
     state: Literal["fetching", "acquired", "processing", "processed", "refused", "cancelled"]
     ledger_start: Count
     ledger_end: Count | None
@@ -88,11 +114,26 @@ class SourceOperation(Record):
             raise ValueError("processing needs its acknowledged original")
         if self.page is not None and self.page.url != self.request.url:
             raise ValueError("acquisition does not belong to the requested source")
+        if self.page is not None:
+            local = self.page.local_input
+            if isinstance(self.request, LocalSourceRequest):
+                if (
+                    local is None
+                    or local.sha256 != self.request.seed.sha256
+                    or local.content_type != self.request.seed.content_type
+                    or local.policy_digest != self.request.policy_digest
+                ):
+                    raise ValueError(
+                        "local acquisition must retain the exact pinned input evidence"
+                    )
+            elif local is not None:
+                raise ValueError("web source work cannot adopt local input provenance")
         if self.result is not None and (
             self.state != "processed"
             or self.page is None
             or self.result.url != self.page.final_url
             or self.result.raw != self.page.body
+            or self.result.local_input != self.page.local_input
         ):
             raise ValueError("an accepted result needs its exact processed source original")
         if (self.reason is not None) != (self.state in {"refused", "cancelled"}):
