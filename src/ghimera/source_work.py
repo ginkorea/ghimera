@@ -15,15 +15,21 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import TypeAdapter
+
 from ghimera.config import GhimeraConfig
 from ghimera.journal import _run_path, read_journal
 from ghimera.journal_types import JournalHeader, digest
-from ghimera.models import Document, Goal, ModelIdentity, Page
+from ghimera.models import Document, Goal, ModelIdentity, Page, RetainedOriginal
 from ghimera.private_database import PrivateDatabase
 from ghimera.refusals import GhimeraRefused
+from ghimera.retained_graph import validate_original
 from ghimera.session_state import SessionState
 from ghimera.source_frontier import SourceFrontier
 from ghimera.source_work_types import (
+    Operation,
+    RetainedSourceOperation,
+    RetainedSourceRequest,
     SourceCoordinates,
     SourceOperation,
     SourceRequest,
@@ -41,7 +47,7 @@ class SourceWorkToken:
     journal_header_sha256: str
 
 
-def _identity(request: SourceRequest) -> str:
+def _identity(request: SourceRequest | RetainedSourceRequest) -> str:
     return request.identity
 
 
@@ -57,6 +63,7 @@ class SourceWorkStore:
         if report.header.config != config:
             raise ValueError("source work requires the exact original run recipe")
         self._header = digest(report.header)
+        self._decoder: TypeAdapter[Operation] = TypeAdapter(Operation)
         self._private = PrivateDatabase(
             _run_path(config.journal, run_id) / "source-work",
             "operations.sqlite",
@@ -65,7 +72,7 @@ class SourceWorkStore:
         )
         self._owner = ExitStack()
         self._writing = False
-        self._operations: dict[str, SourceOperation] = {}
+        self._operations: dict[str, Operation] = {}
         self._reservation = 0
         self._frontier: SourceFrontier | None = None
         try:
@@ -155,7 +162,7 @@ class SourceWorkStore:
             store.close()
             raise
 
-    def _read_operations(self) -> tuple[SourceOperation, ...]:
+    def _read_operations(self) -> tuple[Operation, ...]:
         self._private.check()
         count = self._private.db.execute("SELECT COUNT(*) FROM operations").fetchone()[0]
         acknowledged = self._private.db.execute(
@@ -174,14 +181,14 @@ class SourceWorkStore:
         values = self._private.db.execute(
             "SELECT id,sequence,payload,sha256 FROM operations ORDER BY sequence"
         )
-        operations: list[SourceOperation] = []
+        operations: list[Operation] = []
         total = 0
         for operation_id, sequence, payload, pin in values:
             if not isinstance(payload, bytes) or len(payload) > limit:
                 raise ValueError("source operation exceeds its configured byte bound")
             if hashlib.sha256(payload).hexdigest() != pin:
                 raise ValueError("source operation changed after acknowledgement")
-            item = SourceOperation.model_validate_json(payload)
+            item = self._decoder.validate_json(payload)
             if (
                 item.operation_id != operation_id
                 or item.sequence != sequence
@@ -196,7 +203,12 @@ class SourceWorkStore:
             raise ValueError("source store exceeds its configured byte capacity")
         return tuple(operations)
 
-    def _sizes(self, item: SourceOperation) -> None:
+    def _sizes(self, item: Operation) -> None:
+        if isinstance(item, RetainedSourceOperation):
+            validate_original(self._config, item.original)
+            if len(item.original.model_dump_json().encode()) > self._policy.max_page_bytes:
+                raise ValueError("retained original exceeds its declared acquisition bound")
+            return
         if (
             item.page is not None
             and len(item.page.model_dump_json().encode()) > self._policy.max_page_bytes
@@ -210,14 +222,14 @@ class SourceWorkStore:
         if item.result is not None:
             item.result.validate_policy(self._config)
 
-    def _reserved(self, item: SourceOperation) -> int:
+    def _reserved(self, item: Operation) -> int:
         # Include the whole serialized envelope in actual storage. Active work
         # reserves both declared byte bounds before any source request.
         if item.state in {"fetching", "acquired", "processing"}:
             return self._policy.max_operation_bytes
         return len(item.model_dump_json().encode())
 
-    def _write(self, item: SourceOperation, *, new: bool) -> None:
+    def _write(self, item: Operation, *, new: bool) -> None:
         if not self._writing:
             raise SourceWorkFailure("source-work writer is not owned by this session")
         try:
@@ -326,7 +338,33 @@ class SourceWorkStore:
         self._write(item, new=True)
         return SourceWorkToken(item.operation_id, self._header)
 
-    def _get(self, token: SourceWorkToken) -> SourceOperation:
+    def capture_retained(self, original: RetainedOriginal, ledger_start: int) -> SourceWorkToken:
+        """Capture the already-read capsule before current graph/model side effects."""
+        original = RetainedOriginal.model_validate(original.model_dump())
+        request = RetainedSourceRequest(
+            schema="ghimera.retained-source-request/1",
+            url=original.document.url,
+            origin=original.origin,
+        )
+        observed = time.time()
+        item = RetainedSourceOperation(
+            schema="ghimera.retained-source-operation/1",
+            operation_id=request.identity,
+            sequence=len(self._operations),
+            request=request,
+            state="acquired",
+            ledger_start=ledger_start,
+            ledger_end=None,
+            started_at=observed,
+            acquired_at=observed,
+            finished_at=None,
+            original=original,
+            reason=None,
+        )
+        self._write(item, new=True)
+        return SourceWorkToken(item.operation_id, self._header)
+
+    def _get(self, token: SourceWorkToken) -> Operation:
         self._private.check()
         if token.journal_header_sha256 != self._header:
             raise SourceWorkFailure("source-work token belongs to another run")
@@ -337,7 +375,7 @@ class SourceWorkStore:
 
     def acquired(self, token: SourceWorkToken, page: Page) -> None:
         item = self._get(token)
-        if item.state != "fetching":
+        if not isinstance(item, SourceOperation) or item.state != "fetching":
             raise SourceWorkFailure("source original was already acknowledged")
         updated = SourceOperation.model_validate(
             dict(item.model_dump(), state="acquired", page=page, acquired_at=time.time())
@@ -349,12 +387,12 @@ class SourceWorkStore:
         if item.state != "acquired":
             raise SourceWorkFailure("processing requires a newly acknowledged original")
         self._write(
-            SourceOperation.model_validate(dict(item.model_dump(), state="processing")), new=False
+            type(item).model_validate(dict(item.model_dump(), state="processing")), new=False
         )
 
     def processed(self, token: SourceWorkToken, result: Document | None, ledger_end: int) -> None:
         item = self._get(token)
-        if item.state != "processing":
+        if not isinstance(item, SourceOperation) or item.state != "processing":
             raise SourceWorkFailure("source processing was not started")
         updated = SourceOperation.model_validate(
             dict(
@@ -367,13 +405,29 @@ class SourceWorkStore:
         )
         self._write(updated, new=False)
 
+    def completed_retained(self, token: SourceWorkToken, ledger_end: int) -> None:
+        item = self._get(token)
+        if not isinstance(item, RetainedSourceOperation) or item.state != "processing":
+            raise SourceWorkFailure("retained admission processing was not started")
+        self._write(
+            RetainedSourceOperation.model_validate(
+                dict(
+                    item.model_dump(),
+                    state="processed",
+                    ledger_end=ledger_end,
+                    finished_at=time.time(),
+                )
+            ),
+            new=False,
+        )
+
     def refused(
         self, token: SourceWorkToken, reason: str, ledger_end: int, *, cancelled: bool = False
     ) -> None:
         item = self._get(token)
         if item.state not in {"fetching", "acquired", "processing"}:
             raise SourceWorkFailure("terminal source work cannot be rewritten")
-        updated = SourceOperation.model_validate(
+        updated = type(item).model_validate(
             dict(
                 item.model_dump(),
                 state="cancelled" if cancelled else "refused",
