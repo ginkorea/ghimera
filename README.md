@@ -4,7 +4,15 @@ Intent-driven web research: discover sources, collect native-language documents,
 follow evidence gaps, and return a source-cited answer—or an explicit partial
 result when the evidence or budget is insufficient.
 
-**v0.4.6 adds source feeds and original-evidence reuse for new research.**
+**v0.4.7 adds durable source operations and atomic pending-document batches.**
+
+Explicit source-work configuration retains fresh web/local originals before
+processing and records historical corpus admission separately. Its optional
+frontier preserves queued web intents and complete owned-file batches before
+first I/O. Quiescent continuation verifies pending order and pins without
+rereading handled files. Uncertain model/graph calls and whole-research crash
+adoption remain explicit requirements. See [source work](docs/SOURCE_WORK.md)
+and [release acceptance](docs/RELEASE_047.md).
 
 Configured RSS, Atom, sitemap/index and JSON Feed seeds use the same scoped
 HTTP/Tor fetch, robots, pacing and native evidence path as ordinary documents.
@@ -196,13 +204,13 @@ Use a dedicated virtual environment:
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'ghimera==0.4.6'
+python -m pip install 'ghimera==0.4.7'
 ```
 
 Install the adapters you intend to configure:
 
 ```bash
-python -m pip install 'ghimera[html,documents,browser]==0.4.6'
+python -m pip install 'ghimera[html,documents,browser]==0.4.7'
 ```
 
 The base package contains the typed core, HTTP/Tor transport, research/search
@@ -384,7 +392,7 @@ The collector persists JSONL events before acknowledgment and seals a completion
 summary only after receipt reconciliation. Interrupted prefixes remain inspectable
 without silently refetching sources. See [run journals](docs/RUN_JOURNAL.md).
 
-The unreleased [source-work extension](docs/SOURCE_WORK.md) captures fresh web
+The 0.4.7 [source-work extension](docs/SOURCE_WORK.md) captures fresh web
 and owned-file originals before processing, accepted results, queued web intents,
 and complete pending local-file batches. It also records admission of an already
 read corpus original before current graph/model work, without inventing a new

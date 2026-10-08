@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.7 — 2026-10-08
+
+- Explicit private source-operation storage captures fresh web/owned-file
+  originals before processing and preserves acknowledged results or unresolved
+  failures. Retained corpus admission stays distinct from new acquisition;
+  historical model/OCR spend is not replayed as current work.
+- Durable web frontier and atomic local batches preserve never-started intent
+  before I/O. Exact pending local order/pins survive quiescent continuation
+  without reopening handled inputs. Cancellation drains bounded owned reads;
+  lost acknowledgement does not become a fabricated zero-byte completion.
+- Full frozen-source gate: 1,186 passed, zero failures/skips under Python 3.11.16.
+  Installed-artifact and publication checks are recorded separately in
+  [release acceptance](docs/RELEASE_047.md). Whole-research crash adoption,
+  uncertain model/graph reconciliation and multilingual quality remain open.
+- On unchanged Chinese control bytes, RapidOCR scales 2 and 4 still misread
+  `部门` as `部内`. Chinese transcription quality remains unvalidated; neither
+  a successful parser nor this release claims otherwise.
+
 ## 0.4.6 — 2026-10-08
 
 - Explicit RSS 2.0, Atom, sitemap/index and JSON Feed intake through the normal
