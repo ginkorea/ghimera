@@ -200,10 +200,17 @@ def score_pairs(request: RerankRequest, backend: PairBackend) -> RerankScores:
 
 def execute(
     envelope: WorkerRequest,
-    factory: Callable[[OfflineRerankingConfig, Path], PairBackend] = TransformersBackend,
+    factory: Callable[[OfflineRerankingConfig, Path], PairBackend] | None = None,
 ) -> bytes:
     with artifact_snapshot(envelope.policy) as snapshot:
-        backend = factory(envelope.policy, snapshot)
+        if factory is not None:
+            backend = factory(envelope.policy, snapshot)
+        elif envelope.policy.onnx is not None:
+            from ghimera.onnx_reranking import OnnxBackend
+
+            backend = OnnxBackend(envelope.policy, snapshot)
+        else:
+            backend = TransformersBackend(envelope.policy, snapshot)
         if envelope.request is None:
             return json.dumps({"ready": envelope.policy.identity}).encode()
         return score_pairs(envelope.request, backend).model_dump_json().encode()

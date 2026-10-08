@@ -25,16 +25,83 @@ class RerankingArtifact(BaseModel):
             or str(path) != value
             or ".." in path.parts
             or any(not part or part.startswith(".") for part in path.parts)
-            or path.suffix not in {".json", ".txt", ".model", ".safetensors"}
+            or path.suffix not in {".json", ".txt", ".model", ".safetensors", ".onnx"}
         ):
             raise ValueError("declare canonical relative data files, never executable model code")
         return value
 
 
+class OnnxInputBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    name: Annotated[str, Field(min_length=1)]
+    source: Literal["ids", "attention_mask", "type_ids"]
+
+
+class OnnxRerankingRuntime(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.onnx-reranking-runtime/1"] = Field(alias="schema")
+    onnx_version: Annotated[str, Field(min_length=1)]
+    onnxruntime_version: Annotated[str, Field(min_length=1)]
+    tokenizers_version: Annotated[str, Field(min_length=1)]
+    numpy_version: Annotated[str, Field(min_length=1)]
+    model_file: str
+    tokenizer_file: str
+    provider: Literal["CPUExecutionProvider"]
+    input_bindings: Annotated[tuple[OnnxInputBinding, ...], Field(min_length=2, max_length=3)]
+    input_dtype: Literal["int64"]
+    logit_output: Annotated[str, Field(min_length=1)]
+    output_dtype: Literal["float32"]
+    axes: Literal["dynamic_batch_and_sequence"]
+    padding: Literal["longest"]
+    pad_id: Annotated[int, Field(strict=True, ge=0)]
+    pad_type_id: Annotated[int, Field(strict=True, ge=0)]
+    pad_token: Annotated[str, Field(min_length=1)]
+    padding_direction: Literal["left", "right"]
+    execution_mode: Literal["sequential"]
+    graph_optimization: Literal["disabled", "basic", "extended", "all"]
+    enable_cpu_mem_arena: bool
+    enable_mem_pattern: bool
+    log_severity: Annotated[int, Field(strict=True, ge=0, le=4)]
+    max_graph_depth: Positive
+    max_graph_messages: Positive
+
+    @model_validator(mode="after")
+    def coherent(self) -> "OnnxRerankingRuntime":
+        model = RerankingArtifact.local_data(self.model_file)
+        tokenizer = RerankingArtifact.local_data(self.tokenizer_file)
+        names = tuple(binding.name for binding in self.input_bindings)
+        sources = tuple(binding.source for binding in self.input_bindings)
+        if (
+            not model.endswith(".onnx")
+            or not tokenizer.endswith(".json")
+            or len(set(names)) != len(names)
+            or len(set(sources)) != len(sources)
+            or not {"ids", "attention_mask"} <= set(sources)
+            or not all(
+                value.strip()
+                for value in (
+                    self.onnx_version,
+                    self.onnxruntime_version,
+                    self.tokenizers_version,
+                    self.numpy_version,
+                    self.logit_output,
+                    self.pad_token,
+                    *names,
+                )
+            )
+        ):
+            raise ValueError(
+                "ONNX runtime needs exact local files, versions and distinct tensor keys"
+            )
+        return self
+
+
 class OfflineRerankingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["ghimera.offline-reranking/1"] = Field(alias="schema")
-    runtime: Literal["transformers_sequence_classification/1"]
+    schema_version: Literal["ghimera.offline-reranking/1", "ghimera.offline-reranking/2"] = Field(
+        alias="schema"
+    )
+    runtime: Literal["transformers_sequence_classification/1", "onnx_sequence_classification/1"]
     model_id: Annotated[str, Field(min_length=1)]
     revision: Annotated[str, Field(min_length=1)]
     score_semantics: Literal["single_relevance_logit"]
@@ -45,8 +112,12 @@ class OfflineRerankingConfig(BaseModel):
     max_artifact_bytes: Positive
     worker_python: Path
     work_directory: Path
-    torch_version: Annotated[str, Field(min_length=1)]
-    transformers_version: Annotated[str, Field(min_length=1)]
+    torch_version: Annotated[str | None, Field(min_length=1)] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    transformers_version: Annotated[str | None, Field(min_length=1)] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     cpu_threads: Positive
     interop_threads: Positive
     batch_size: Positive
@@ -61,6 +132,7 @@ class OfflineRerankingConfig(BaseModel):
     cleanup_timeout_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)]
     max_passages_per_document: Positive
     max_source_documents: Positive
+    onnx: OnnxRerankingRuntime | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("model_directory", "worker_python", "work_directory")
     @classmethod
@@ -75,8 +147,6 @@ class OfflineRerankingConfig(BaseModel):
         if (
             len(set(names)) != len(names)
             or {artifact.role for artifact in self.artifacts} != {"model", "tokenizer"}
-            or "config.json" not in names
-            or not any(name.endswith(".safetensors") for name in names)
             or self.batch_size > self.max_pairs
             or self.max_passages_per_document > self.max_pairs
             or self.max_source_documents > self.max_pairs
@@ -85,8 +155,6 @@ class OfflineRerankingConfig(BaseModel):
                 for s in (
                     self.model_id,
                     self.revision,
-                    self.torch_version,
-                    self.transformers_version,
                 )
             )
             or self.model_directory == self.work_directory
@@ -96,6 +164,33 @@ class OfflineRerankingConfig(BaseModel):
             raise ValueError(
                 "offline reranking requires distinct complete artifacts and coherent bounds"
             )
+        if self.schema_version == "ghimera.offline-reranking/1":
+            if (
+                self.runtime != "transformers_sequence_classification/1"
+                or self.onnx is not None
+                or self.torch_version is None
+                or not self.torch_version.strip()
+                or self.transformers_version is None
+                or not self.transformers_version.strip()
+                or "config.json" not in names
+                or not any(name.endswith(".safetensors") for name in names)
+                or any(name.endswith(".onnx") for name in names)
+            ):
+                raise ValueError(
+                    "legacy Transformers recipe requires its exact /1 runtime and artifacts"
+                )
+        else:
+            if (
+                self.runtime != "onnx_sequence_classification/1"
+                or self.onnx is None
+                or self.torch_version is not None
+                or self.transformers_version is not None
+                or {(row.path, row.role) for row in self.artifacts}
+                != {(self.onnx.model_file, "model"), (self.onnx.tokenizer_file, "tokenizer")}
+            ):
+                raise ValueError(
+                    "ONNX /2 requires only its standalone model/tokenizer and explicit runtime"
+                )
         return self
 
     @property

@@ -15,9 +15,10 @@ replace every artifact digest, immutable model revision, installed runtime
 version and absolute path with reviewed local choices. Declare the complete
 model/tokenizer inventory. Only canonical relative data files are accepted;
 extra files/directories, symlinks, executable model code, missing files, changed
-digests and excess artifact bytes refuse. Weight loading requires safetensors.
+digests and excess artifact bytes refuse. Transformers weight loading requires
+safetensors; the ONNX recipe requires a standalone captured model.
 
-The optional adapter requires a separately provisioned Python environment with
+The Transformers `/1` adapter requires a separately provisioned Python environment with
 the exact declared PyTorch and Transformers versions. Ghimera does not install
 dependencies, download weights, consult a model hub or run model-provided code.
 The supported runtime is `transformers_sequence_classification/1`, CPU only,
@@ -34,6 +35,39 @@ This is an offline model-loading boundary, not a security sandbox for compromise
 Python dependencies or protection against a malicious local filesystem owner.
 CPU and artifact-memory use are bounded by the declared workload/artifact caps;
 this slice does not impose an OS-level RSS limit.
+
+### Optional ONNX CPU recipe
+
+`ghimera.offline-reranking/2` with `onnx_sequence_classification/1` selects the
+explicit nested `ghimera.onnx-reranking-runtime/1` policy instead of Torch or
+Transformers. The old `/1` fields, serialized bytes and semantics are unchanged;
+mixing Torch fields, runtime names or schemas refuses. The safe template is
+`examples/offline-reranking-onnx.toml`. Operator-supplied versions are checked
+exactly for ONNX, ONNX Runtime, tokenizers and NumPy; no dependency is installed
+by Ghimera. ONNX's official protobuf reader/checker owns graph parsing.
+
+The complete inventory is exactly the declared `.onnx` model and tokenizer JSON.
+Only their digest-verified captured bytes are used. Before session loading,
+bounded inspection of every graph protobuf message rejects external tensor data,
+including tensors in nested graph attributes, functions and sparse initializers.
+External `.data` files are not supported. The model is passed to ONNX Runtime
+as bytes, with only `CPUExecutionProvider`, explicit thread/optimization/memory
+options and fallback disabled. No custom-op libraries or model code are loaded.
+
+Declare exact model tensor names and their tokenizer sources (`ids`,
+`attention_mask`, optional `type_ids`), and the one logit output. This recipe
+requires int64 rank-two inputs with dynamic batch/sequence axes and one float32
+`[dynamic_batch, 1]` output. Missing/extra keys, static input axes, alternative
+dtypes, multi-head outputs and provider expansion refuse. Actual returned array
+dtype, complete batch length, single-logit shape and finite values are checked
+again. The backend never invents scores or falls back to another recipe.
+
+Tokenizers loads only the captured local JSON. Truncation is explicitly disabled
+on each pair encoding; all complete token lengths are admitted before prediction.
+Longest-in-batch padding uses the declared direction, token/id and type id. The
+padding token must resolve to its declared vocabulary ID; no implicit token
+truncation or length rounding is allowed. The tokenizer's native pair processor
+and special tokens are retained as part of its artifact identity.
 
 ## Native API
 
@@ -77,7 +111,8 @@ cosines. Every candidate is scored exactly once. Missing, duplicate, foreign,
 non-finite or excessive-token returns refuse; no silent RRF fallback occurs.
 
 Before any prediction, tokenize every complete pair with special tokens and
-`truncation=False`. An excessive pair refuses the entire query, not a shortened
+`truncation=False` (Transformers) or `no_truncation()` (tokenizers). An excessive
+pair refuses the entire query, not a shortened
 reading. Inference uses explicit bounded batches, also without truncation.
 Candidates outside `max_pairs` or aggregate `max_input_chars` refuse instead of
 silently narrowing the candidate pool. These actual-pool checks follow query
@@ -126,3 +161,16 @@ passed **61 tests in 9.75 seconds**, with no skips. Ruff check/format passed for
 the 12 owned Python files; strict mypy with silent traversal of unchanged imports
 passed for the 10 owned native source files. This was not a full gate or an
 installed-package/trained-model acceptance run.
+
+The optional ONNX followup additionally passed 78 focused tests with no skips
+on the same Python 3.11.16 source-test interpreter (ONNX/ORT/Torch/Transformers
+absent), in 10.94 seconds. Ruff check/format passed for its five owned Python
+files; strict mypy passed for all 11 native reranking/corpus/research source
+importers. That includes both unchanged model-facing fingerprints and a real child
+refusing unavailable exact runtime versions. A separately invoked finite helper,
+`tests/onnx_reranking_contract.py --output-directory /explicit/fresh/owned/path`,
+passed three actual CPU/child fixture cases in an owned Python 3.11.16 environment
+with ONNX 1.20.1, ORT 1.23.2, tokenizers 0.23.2 and NumPy 2.4.6: untrained tiny
+graph inference/complete pair lengths, real-protobuf external-data refusal, and
+changed-artifact refusal after prior successful admission. These are tensor and
+lifecycle guarantees, not trained ranking or multilingual quality acceptance.
