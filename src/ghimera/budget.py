@@ -4,7 +4,11 @@ import asyncio
 from collections.abc import Callable
 
 from ghimera.config import GhimeraConfig
-from ghimera.model_work import uncertain_model_sequences, validate_model_rows
+from ghimera.model_reconciliation_types import (
+    ModelAttemptAuthorization,
+    ModelReconciliationDecision,
+)
+from ghimera.model_work import validate_model_rows
 from ghimera.models import LedgerRow, Receipt
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
@@ -52,12 +56,44 @@ class RunBudget:
         rows: tuple[LedgerRow, ...],
         search_calls: int,
         downtime_seconds: float,
+        admission: ModelReconciliationDecision | ModelAttemptAuthorization | None = None,
     ) -> None:
         if receipt.effective_config != self.config or downtime_seconds < 0:
             raise ValueError(
                 "restored budget requires its original recipe and nonnegative downtime"
             )
-        if self.config.model_work is not None and uncertain_model_sequences(rows):
+        from ghimera.model_reconciliation import unreconciled_model_sequences, validate_policy
+
+        validate_policy(self.config, rows)
+        admitted_unknown: tuple[int, ...] = ()
+        if admission is not None:
+            recovery = self.config.research_recovery
+            if recovery is None or recovery.model_reconciliation is None:
+                raise ValueError("unknown admission requires its original explicit decision policy")
+            if isinstance(admission, ModelReconciliationDecision):
+                observed = admission.observed
+                if (
+                    observed.ledger_rows != len(rows)
+                    or observed.original_intent_sequence >= len(rows)
+                    or rows[observed.original_intent_sequence].model_intent != observed.intent
+                    or observed.judge_calls != receipt.judge_calls
+                ):
+                    raise ValueError(
+                        "decision admission changed its original intent or reservation"
+                    )
+                admitted_unknown = (observed.original_intent_sequence,)
+            else:
+                from ghimera.model_reconciliation import validate_decisions
+
+                if admission not in validate_decisions(rows) or any(
+                    row.model_attempt is not None and row.model_attempt.authorization == admission
+                    for row in rows
+                ):
+                    raise ValueError("attempt admission changed or was already consumed")
+                admitted_unknown = (admission.attempt_intent_sequence,)
+        if self.config.model_work is not None and set(unreconciled_model_sequences(rows)) - set(
+            admitted_unknown
+        ):
             raise ValueError("uncertain model reservations require reconciliation, not retry")
         if (
             self.config.model_work is not None

@@ -29,6 +29,11 @@ from ghimera.loop import GoalLoop
 from ghimera.mcp_lead_config import McpLeadConfig
 from ghimera.mcp_leads import McpLeadClient, McpLeadSearch
 from ghimera.model_client import SelfHostedModels
+from ghimera.model_reconciliation_types import (
+    ModelAttemptAuthorization,
+    ModelReconciliationDecision,
+    ModelUnknownObservation,
+)
 from ghimera.models import Goal, Harvest, Scope
 from ghimera.page_renderer import PdfPageRenderer
 from ghimera.page_transcriber import LocalPageTranscriber
@@ -388,16 +393,30 @@ class Collector:
     def source_runtime(self) -> SourceCompletionRuntime:
         return self._research.source_runtime()
 
+    def observe_model_unknown(
+        self, run_id: str, *, snapshot_sha256: str
+    ) -> "ModelUnknownObservation":
+        return self._research.observe_model_unknown(run_id, snapshot_sha256=snapshot_sha256)
+
+    def model_attempt_history(self, run_id: str) -> tuple[ModelAttemptAuthorization, ...]:
+        return self._research.model_attempt_history(run_id)
+
+    async def reconcile_model(
+        self, decision: "ModelReconciliationDecision"
+    ) -> "ModelAttemptAuthorization":
+        return await self._research.reconcile_model(decision)
+
     async def recover(
         self,
         run_id: str,
         *,
         snapshot_sha256: str,
         boundary: Literal["model_return", "source_completion"] = "model_return",
+        attempt: "ModelAttemptAuthorization | None" = None,
     ) -> ResearchResult:
         """Adopt an exact native model boundary; never retry an unknown contact."""
         return await self._research.recover(
-            run_id, snapshot_sha256=snapshot_sha256, boundary=boundary
+            run_id, snapshot_sha256=snapshot_sha256, boundary=boundary, attempt=attempt
         )
 
     def validate_request(self, request: str | ResearchRequest) -> ResearchRequest:

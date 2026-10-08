@@ -44,6 +44,12 @@ from ghimera.journal import (
     read_journal,
 )
 from ghimera.journal_types import JournalDocument, JournalRetainedDocument
+from ghimera.model_reconciliation import unreconciled_model_sequences
+from ghimera.model_reconciliation_types import (
+    ModelAttemptAuthorization,
+    ModelReconciliationDecision,
+    ModelUnknownObservation,
+)
 from ghimera.models import Record
 from ghimera.persistent_collector import PersistentCollection
 from ghimera.research_recovery_store import ResearchRecoveryStore
@@ -70,7 +76,12 @@ Phase = Literal[
     "failed",
     "held",
 ]
-Executor = Callable[[CommandOptions], Awaitable[ArchiveReceipt | CheckpointReceipt]]
+Executor = Callable[
+    [CommandOptions],
+    Awaitable[
+        ArchiveReceipt | CheckpointReceipt | ModelUnknownObservation | ModelAttemptAuthorization
+    ],
+]
 Failure = Literal["execution_failed", "interrupted", "handoff_failed", "recovery_failed"]
 Hold = Literal[
     "policy_changed",
@@ -85,17 +96,26 @@ Hold = Literal[
 class ServiceRecoveryPolicy(Record):
     """Service admission only; native research owns recovery and all run bounds."""
 
-    schema_version: Literal["ghimera.service-recovery/1", "ghimera.service-recovery/2"] = Field(
-        alias="schema"
-    )
+    schema_version: Literal[
+        "ghimera.service-recovery/1", "ghimera.service-recovery/2", "ghimera.service-recovery/3"
+    ] = Field(alias="schema")
     on_restart: Literal["hold", "adopt_acknowledged"]
     max_adoption_attempts: Positive
     boundary: Literal["source_completion"] | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    model_reconciliation: Literal["caller_only"] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def versioned(self) -> "ServiceRecoveryPolicy":
+        if self.schema_version == "ghimera.service-recovery/3":
+            if self.model_reconciliation != "caller_only" or self.boundary is not None:
+                raise ValueError("service /3 requires explicit caller-only model reconciliation")
+            return self
+        if self.model_reconciliation is not None:
+            raise ValueError("caller-only model reconciliation requires service recovery /3")
         if (self.schema_version == "ghimera.service-recovery/2") != (self.boundary is not None):
             raise ValueError("source service recovery requires /2 and explicit boundary")
         return self
@@ -146,7 +166,10 @@ class CollectionServiceConfig(Record):
 
 class CollectionJob(Record):
     schema_version: Literal[
-        "ghimera.collection-job/1", "ghimera.collection-job/2", "ghimera.collection-job/3"
+        "ghimera.collection-job/1",
+        "ghimera.collection-job/2",
+        "ghimera.collection-job/3",
+        "ghimera.collection-job/4",
     ] = Field(alias="schema")
     run_id: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
     policy_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -172,9 +195,16 @@ class CollectionJob(Record):
     recovery_boundary: Literal["source_completion"] | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    model_attempt: ModelAttemptAuthorization | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def recovery_binding(self) -> "CollectionJob":
+        if (self.schema_version == "ghimera.collection-job/4") != (self.model_attempt is not None):
+            raise ValueError("caller attempt requires explicit job /4")
+        if self.model_attempt is not None and self.model_attempt.run_id != self.run_id:
+            raise ValueError("service attempt lost its original run or snapshot")
         if (self.schema_version == "ghimera.collection-job/3") != (
             self.recovery_boundary is not None
         ):
@@ -261,11 +291,15 @@ class CollectionService:
         snapshot_sha256: str | None = None,
         adoption_attempts: int | None = None,
         recovery_hold: Hold | None = None,
+        model_attempt: ModelAttemptAuthorization | None = None,
     ) -> CollectionJob:
         previous = self.status(run_id)
         job = CollectionJob.model_validate(
             dict(
                 previous.model_dump(),
+                schema="ghimera.collection-job/4"
+                if model_attempt is not None
+                else previous.schema_version,
                 phase=phase,
                 updated_at=time.time(),
                 checkpoint=checkpoint or previous.checkpoint,
@@ -281,6 +315,7 @@ class CollectionService:
                 if adoption_attempts is None
                 else adoption_attempts,
                 recovery_hold=recovery_hold,
+                model_attempt=model_attempt or previous.model_attempt,
             )
         )
         self._save(job)
@@ -346,6 +381,17 @@ class CollectionService:
                 if self.config.outbox != self._outbox.config:
                     raise ValueError("service outbox requires its exact configured binding")
                 await self._outbox.check_ready()
+            if (
+                self.config.recovery is not None
+                and self.config.recovery.model_reconciliation is not None
+                and (
+                    recipe.research_recovery is None
+                    or recipe.research_recovery.model_reconciliation is None
+                )
+            ):
+                raise ValueError(
+                    "caller service route requires original model reconciliation policy"
+                )
             if not self._provided_executor or self.config.recovery is not None:
                 references = (
                     EmbeddingReferences.model_validate_json(
@@ -363,7 +409,14 @@ class CollectionService:
                     recipe, credentials, references, corpus=discovery_corpus
                 )
 
-                async def native(options: CommandOptions) -> ArchiveReceipt | CheckpointReceipt:
+                async def native(
+                    options: CommandOptions,
+                ) -> (
+                    ArchiveReceipt
+                    | CheckpointReceipt
+                    | ModelUnknownObservation
+                    | ModelAttemptAuthorization
+                ):
                     return await execute(options, corpus=discovery_corpus)
 
                 if not self._provided_executor:
@@ -387,7 +440,11 @@ class CollectionService:
                 if mismatch is not None and (
                     self.config.recovery is None
                     or job.schema_version
-                    not in {"ghimera.collection-job/2", "ghimera.collection-job/3"}
+                    not in {
+                        "ghimera.collection-job/2",
+                        "ghimera.collection-job/3",
+                        "ghimera.collection-job/4",
+                    }
                 ):
                     raise ValueError("service job belongs to a different policy")
                 self._jobs[job.run_id] = job
@@ -572,7 +629,9 @@ class CollectionService:
             self._launch(run_id)
         return job
 
-    async def recover(self, run_id: str) -> CollectionJob:
+    async def recover(
+        self, run_id: str, *, attempt: ModelAttemptAuthorization | None = None
+    ) -> CollectionJob:
         """Admit only native evidence; no reconciliation, fresh run or failed-outcome reset."""
         job, policy = self.status(run_id), self.config.recovery
         task = self._tasks.get(run_id)
@@ -590,6 +649,14 @@ class CollectionService:
             return self._update(
                 run_id, "held", failure="interrupted", recovery_hold="policy_changed"
             )
+        if attempt is not None and (
+            policy.model_reconciliation != "caller_only"
+            or self._validator is None
+            or attempt not in self._validator.model_attempt_history(run_id)
+            or job.model_attempt is not None
+            and attempt != job.model_attempt
+        ):
+            raise ValueError("caller recovery requires the original durable service attempt")
         if await self._adopt_completed_output(job):
             return self.status(run_id)
         self._admission_unchanged(job)
@@ -647,9 +714,10 @@ class CollectionService:
                     expected_models=self._validator.recovery_models()
                     if self._validator is not None
                     else None,
+                    attempt=attempt,
                 )
                 # Service adoption requires an actual retained ACK, not a no-call snapshot.
-                if saved.intent_sequence is None:
+                if saved.intent_sequence is None and saved.attempt is None:
                     raise ValueError("no retained original model return")
                 harvest, journal_rows = saved.snapshot.progress.harvest, saved.journal.rows
             archive = ResearchResultArchive.resume(
@@ -695,10 +763,125 @@ class CollectionService:
         self._admission_unchanged(job)
         # Durable before launch, including a crash between this save and create_task.
         admitted = self._update(
-            run_id, "recovering", snapshot_sha256=pin, adoption_attempts=job.adoption_attempts + 1
+            run_id,
+            "recovering",
+            snapshot_sha256=pin,
+            adoption_attempts=job.adoption_attempts + 1,
+            model_attempt=attempt,
         )
         self._launch(run_id)
         return admitted
+
+    def _caller_options(
+        self,
+        job: CollectionJob,
+        operation: Literal["observe_model_unknown", "reconcile_model"],
+        pin: str,
+        decision: ModelReconciliationDecision | None = None,
+    ) -> CommandOptions:
+        task, policy = self._tasks.get(job.run_id), self.config.recovery
+        if (
+            self._fd < 0
+            or self._closing
+            or policy is None
+            or policy.model_reconciliation != "caller_only"
+            or job.phase != "held"
+            or job.failure != "interrupted"
+            or job.archive is not None
+            or job.policy_sha256 != self.config.identity
+            or job.recipe_sha256 != self._recipe_sha256
+            or job.adoption_attempts >= policy.max_adoption_attempts
+            or task is not None
+            and not task.done()
+        ):
+            raise ValueError("caller decision requires an inactive original interrupted job")
+        return CommandOptions.model_validate(
+            dict(
+                self.config.command.model_dump(),
+                schema="ghimera.collector-command/5",
+                run_id=job.run_id,
+                request_path=None,
+                output_directory=self.config.directory / (job.run_id + ".output"),
+                execution=CommandExecution(
+                    schema="ghimera.command-execution/4",
+                    operation=operation,
+                    snapshot_sha256=pin,
+                    model_decision=decision,
+                ),
+            )
+        )
+
+    async def observe_model_unknown(
+        self, run_id: str, *, snapshot_sha256: str
+    ) -> ModelUnknownObservation:
+        job = self.status(run_id)
+        options = self._caller_options(job, "observe_model_unknown", snapshot_sha256)
+        if self._executor is None:
+            raise ValueError("service not started")
+        self._original_caller_request(job, snapshot_sha256)
+        observation = await self._executor(options)
+        self._admission_unchanged(job)
+        if not isinstance(observation, ModelUnknownObservation):
+            raise ValueError("native observation returned a different record")
+        return observation
+
+    def _original_caller_request(self, job: CollectionJob, pin: str) -> None:
+        if self._validator is None or self._validator.config.research_recovery is None:
+            raise ValueError("native validator unavailable")
+        request = ResearchRequest.model_validate_json(
+            _read_file(
+                self.config.directory / (job.run_id + ".request"),
+                self.config.command.max_input_bytes,
+            )
+        )
+        if request.content_digest() != job.request_sha256:
+            raise ValueError("original service request changed")
+        ResearchRecoveryStore(
+            self._validator.config, job.run_id, self._validator.config.research_recovery
+        ).read(
+            pin,
+            expected_request=request,
+            expected_models=self._validator.recovery_models(),
+            observe_unknown=True,
+        )
+
+    async def reconcile_model(
+        self, run_id: str, decision: ModelReconciliationDecision
+    ) -> ModelAttemptAuthorization:
+        job = self.status(run_id)
+        if decision.observed.run_id != run_id:
+            raise ValueError("decision belongs to another original job")
+        options = self._caller_options(
+            job, "reconcile_model", decision.observed.snapshot_sha256, decision
+        )
+        if self._executor is None:
+            raise ValueError("service not started")
+        self._original_caller_request(job, decision.observed.snapshot_sha256)
+        receipt = await self._executor(options)
+        self._admission_unchanged(job)
+        if not isinstance(receipt, ModelAttemptAuthorization):
+            raise ValueError("native decision returned a different record")
+        self._update(
+            run_id,
+            "held",
+            failure="interrupted",
+            snapshot_sha256=receipt.snapshot_sha256,
+            model_attempt=receipt,
+            recovery_hold="manual_required",
+        )
+        return receipt
+
+    def model_attempt_history(self, run_id: str) -> tuple[ModelAttemptAuthorization, ...]:
+        job = self.status(run_id)
+        if (
+            self._fd < 0
+            or self._closing
+            or job.policy_sha256 != self.config.identity
+            or job.recipe_sha256 != self._recipe_sha256
+            or self._validator is None
+        ):
+            raise ValueError("attempt history requires its original active service owner")
+        return self._validator.model_attempt_history(run_id)
 
     def _admission_unchanged(self, job: CollectionJob) -> None:
         if self.status(job.run_id) != job or self._fd < 0 or self._closing:
@@ -795,7 +978,7 @@ class CollectionService:
                 receipt.run_id != job.run_id
                 or report.state != "complete"
                 or report.incomplete_tail
-                or report.uncertain_model_calls
+                or unreconciled_model_sequences(report.rows)
                 or report.header.config != recipe
                 or report.header.goal != result.harvest.goal
                 or report.rows != result.harvest.ledger
@@ -953,6 +1136,12 @@ class CollectionService:
                         )
                         if request.content_digest() != job.request_sha256:
                             raise ValueError("original service request changed before recovery")
+                        selected_attempt = (
+                            job.model_attempt
+                            if job.model_attempt is not None
+                            and job.model_attempt.snapshot_sha256 == job.snapshot_sha256
+                            else None
+                        )
                         if job.recovery_boundary == "source_completion":
                             SourceWorkStore.completion(
                                 recipe,
@@ -973,25 +1162,33 @@ class CollectionService:
                                 expected_models=self._validator.recovery_models()
                                 if self._validator is not None
                                 else None,
+                                attempt=selected_attempt,
                             )
                         options = CommandOptions.model_validate(
                             dict(
                                 options.model_dump(),
-                                schema="ghimera.collector-command/4",
+                                schema="ghimera.collector-command/5"
+                                if selected_attempt is not None
+                                else "ghimera.collector-command/4",
                                 request_path=None,
                                 execution=CommandExecution(
-                                    schema="ghimera.command-execution/3"
+                                    schema="ghimera.command-execution/4"
+                                    if selected_attempt is not None
+                                    else "ghimera.command-execution/3"
                                     if job.recovery_boundary is not None
                                     else "ghimera.command-execution/2",
                                     operation="recover",
                                     snapshot_sha256=job.snapshot_sha256,
                                     recovery_boundary=job.recovery_boundary,
+                                    model_attempt=selected_attempt,
                                 ),
                             )
                         )
                     if self._executor is None:
                         raise ValueError("service not started")
                     receipt = await self._executor(options)
+                    if isinstance(receipt, (ModelUnknownObservation, ModelAttemptAuthorization)):
+                        raise ValueError("run execution must return output or a round checkpoint")
                     if isinstance(receipt, CheckpointReceipt):
                         if recovering:
                             raise ValueError("model recovery cannot introduce a round checkpoint")

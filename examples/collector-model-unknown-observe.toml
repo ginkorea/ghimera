@@ -1,0 +1,13 @@
+# Inert observation job: replace paths/run/pin with a genuinely interrupted run.
+# The zero pin refuses; observation never creates a model attempt.
+schema = "ghimera.collector-command/5"
+config_path = "/srv/ghimera/original-recipe.toml"
+output_directory = "/srv/ghimera/original-output"
+run_id = "EXISTING-RUN"
+max_input_bytes = 4000000
+max_result_bytes = 4000000
+
+[execution]
+schema = "ghimera.command-execution/4"
+operation = "observe_model_unknown"
+snapshot_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"

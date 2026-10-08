@@ -1,0 +1,19 @@
+# Inert fragments only: not a complete recipe/service, no endpoint or credentials.
+# Configure these values BEFORE the original run; later increases do not apply.
+[research_recovery]
+schema = "ghimera.research-recovery/3"
+max_snapshot_bytes = 4000000
+clock_policy = "include_downtime"
+tail_policy = "acknowledged_model_return"
+
+[research_recovery.model_reconciliation]
+schema = "ghimera.model-reconciliation-policy/1"
+max_decisions_per_run = 2
+max_decision_bytes = 16384
+
+# Copy only into the existing service configuration when explicitly selected.
+[recovery]
+schema = "ghimera.service-recovery/3"
+on_restart = "hold"
+max_adoption_attempts = 3
+model_reconciliation = "caller_only"

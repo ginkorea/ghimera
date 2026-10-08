@@ -5,6 +5,11 @@ from typing import Annotated, Literal
 from pydantic import Field, model_validator
 
 from ghimera.journal_types import Digest, JournalReport, RunId
+from ghimera.model_reconciliation_types import (
+    ModelAttemptAuthorization,
+    ModelReconciliationDecision,
+    ModelUnknownObservation,
+)
 from ghimera.models import ModelIdentity, Record
 from ghimera.research_types import (
     AnswerDraft,
@@ -166,3 +171,10 @@ class ResearchRecoveryRead(Record):
     snapshot: ResearchControlSnapshot
     journal: JournalReport
     intent_sequence: Count | None
+    decision: ModelReconciliationDecision | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    attempt: ModelAttemptAuthorization | None = Field(default=None, exclude_if=lambda v: v is None)
+    observation: ModelUnknownObservation | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )

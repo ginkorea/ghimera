@@ -24,6 +24,12 @@ from ghimera.discovery_config import DiscoveryProgress
 from ghimera.graph_planning import build_context
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.loop import CollectionSession, GoalLoop
+from ghimera.model_reconciliation import authorization
+from ghimera.model_reconciliation_types import (
+    ModelAttemptAuthorization,
+    ModelReconciliationDecision,
+    ModelUnknownObservation,
+)
 from ghimera.model_types import ModelCallEvidence
 from ghimera.model_work import (
     FatalModelWorkFailure,
@@ -329,6 +335,7 @@ class ModelCalls:
         if model.location == "external":
             raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
         recovery = self._recovery
+        attempt = None
         if recovery is not None:
             saved = recovery.snapshot
             if (
@@ -357,7 +364,7 @@ class ModelCalls:
                 # A crash may have happened before the ordinary phase event was
                 # appended. Reuse that event if present; never invent another
                 # remote invocation or quota reservation.
-                if len(recovery.journal.rows) == len(saved.progress.harvest.ledger) + 2:
+                if recovery.journal.rows[-1].model_ack is not None:
                     ledger.append(
                         LedgerRow(
                             sequence=ledger.next_sequence,
@@ -371,7 +378,8 @@ class ModelCalls:
                         )
                     )
                 return retained_result
-        if self._before_call is not None:
+            attempt = recovery.attempt
+        if self._before_call is not None and attempt is None:
             self._before_call(event, model, request)
         invocation = ModelInvocation(
             budget,
@@ -379,6 +387,7 @@ class ModelCalls:
             phase=event,
             model=model,
             request=port_input(budget, request),
+            attempt=attempt,
         )
         started, code, result = budget.clock(), None, None
         model_call: ModelCallEvidence | None = None
@@ -739,12 +748,71 @@ class ResearchLoop:
     def source_runtime(self) -> SourceCompletionRuntime:
         return self._collector.source_runtime()
 
+    def observe_model_unknown(
+        self, run_id: str, *, snapshot_sha256: str
+    ) -> ModelUnknownObservation:
+        policy = self._config.research_recovery
+        if policy is None:
+            raise ValueError("unknown observation requires explicit original recovery policy")
+        saved = ResearchRecoveryStore(self._config, run_id, policy).read(
+            snapshot_sha256, expected_models=self.recovery_models(), observe_unknown=True
+        )
+        if saved.observation is None:
+            raise ValueError("no admissible original unknown model invocation")
+        return saved.observation
+
+    def model_attempt_history(self, run_id: str) -> tuple[ModelAttemptAuthorization, ...]:
+        policy = self._config.research_recovery
+        if policy is None or policy.model_reconciliation is None:
+            raise ValueError("attempt history requires original explicit decision policy")
+        return ResearchRecoveryStore(self._config, run_id, policy).attempt_history()
+
+    async def reconcile_model(
+        self, decision: ModelReconciliationDecision
+    ) -> ModelAttemptAuthorization:
+        """Reserve a caller-chosen new attempt, without contacting any model/source."""
+        decision = ModelReconciliationDecision.model_validate(decision.model_dump())
+        policy = self._config.research_recovery
+        if policy is None:
+            raise ValueError("model decision requires explicit original recovery policy")
+        recovery = ResearchRecoveryStore(self._config, decision.observed.run_id, policy).read(
+            decision.observed.snapshot_sha256,
+            expected_models=self.recovery_models(),
+            decision=decision,
+        )
+        saved = recovery.snapshot
+        downtime = time.time() - saved.saved_at
+        if downtime < 0:
+            raise ValueError("wall clock moved backwards since original snapshot")
+        ResearchScopeCompiler(self._policy).restore_hosts(saved)
+        session = await self._collector.restore(
+            saved.run_id,
+            saved.progress.harvest,
+            saved.session,
+            search_calls=saved.progress.search_calls,
+            downtime_seconds=downtime,
+            model_return=recovery,
+        )
+        try:
+            ModelInvocation(
+                session.budget,
+                session.ledger,
+                phase=saved.phase,
+                model=saved.pending_model.model,
+                request=port_input(session.budget, saved.model_request),
+                decision=decision,
+            )
+            return authorization(session.ledger.snapshot()[-1])
+        finally:
+            session.close()
+
     async def recover(
         self,
         run_id: str,
         *,
         snapshot_sha256: str,
         boundary: Literal["model_return", "source_completion"] = "model_return",
+        attempt: ModelAttemptAuthorization | None = None,
     ) -> ResearchResult:
         """Adopt one acknowledged model return at its saved native phase.
 
@@ -755,6 +823,8 @@ class ResearchLoop:
         if policy is None:
             raise ValueError("model-boundary recovery requires explicit configured policy")
         if boundary == "source_completion":
+            if attempt is not None:
+                raise ValueError("model attempt cannot recover a source completion boundary")
             from ghimera.source_work import SourceWorkStore
 
             source = SourceWorkStore.completion(
@@ -785,6 +855,7 @@ class ResearchLoop:
         recovery = ResearchRecoveryStore(self._config, run_id, policy).read(
             snapshot_sha256,
             expected_models=self.recovery_models(),
+            attempt=attempt,
         )
         saved = recovery.snapshot
         downtime = time.time() - saved.saved_at

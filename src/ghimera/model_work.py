@@ -16,6 +16,11 @@ from typing import TYPE_CHECKING, Literal, TypeVar
 from pydantic import BaseModel
 
 from ghimera.ledger import Ledger
+from ghimera.model_reconciliation_types import (
+    ModelAttemptAuthorization,
+    ModelAttemptConsumption,
+    ModelReconciliationDecision,
+)
 from ghimera.model_types import ModelCallEvidence
 from ghimera.model_work_types import (
     ModelAcknowledgement,
@@ -196,11 +201,15 @@ class ModelInvocation:
         url: str | None = None,
         reserve: Callable[[], None] | None = None,
         replay_intent_sequence: int | None = None,
+        decision: ModelReconciliationDecision | None = None,
+        attempt: ModelAttemptAuthorization | None = None,
     ) -> None:
         self._ledger, self._model, self._scope, self._url = ledger, model, scope, url
+        self._budget = budget
         self._sequence: int | None = None
         self._invoked = False
         self._replay: tuple[LedgerRow, LedgerRow] | None = None
+        self._authorization: ModelAttemptAuthorization | None = None
         policy = budget.config.model_work
         self._results = policy.results if policy is not None else None
         reservation = reserve or budget.reserve_judge
@@ -216,14 +225,58 @@ class ModelInvocation:
         if not ledger.has_durable_binding(budget.config):
             raise FatalModelWorkFailure("configured model work requires the run's durable sink")
         rows = ledger.snapshot()
+        from ghimera.model_reconciliation import authorization, validate_decisions, validate_policy
+
         try:
+            validate_policy(budget.config, rows)
             if validate_model_rows(policy, budget.config.judge_budget, rows) != budget.judge_calls:
                 raise ValueError("budget does not preserve original model reservations")
         except ValueError as exc:
             raise FatalModelWorkFailure("original model reservations are inconsistent") from exc
         if replay_intent_sequence is not None:
+            if decision is not None or attempt is not None:
+                raise FatalModelWorkFailure("replay cannot authorize another model contact")
             self._bind_replay(budget, rows, phase, request, replay_intent_sequence)
             return
+        if attempt is not None:
+            if (
+                decision is not None
+                or attempt not in validate_decisions(rows)
+                or not ledger.has_replay_binding(budget.config)
+            ):
+                raise FatalModelWorkFailure(
+                    "attempt requires its owning exact committed authorization"
+                )
+            row = rows[attempt.attempt_intent_sequence]
+            intent = row.model_intent
+            if (
+                intent is None
+                or row.model != model
+                or row.url != url
+                or intent.phase != phase
+                or intent.input_scope != scope
+                or intent.input_sha256 != hashlib.sha256(request).hexdigest()
+                or intent.input_bytes != len(request)
+                or any(
+                    item.model_attempt is not None and item.model_attempt.authorization == attempt
+                    for item in rows
+                )
+            ):
+                raise FatalModelWorkFailure("model attempt is changed or already consumed")
+            self._sequence, self._authorization = row.sequence, attempt
+            return
+        if decision is not None:
+            recovery = budget.config.research_recovery
+            reconciliation = recovery.model_reconciliation if recovery is not None else None
+            if (
+                reconciliation is None
+                or len(validate_decisions(rows)) >= reconciliation.max_decisions_per_run
+                or len(decision.model_dump_json().encode()) > reconciliation.max_decision_bytes
+                or decision.observed.ledger_rows != len(rows)
+            ):
+                raise FatalModelWorkFailure(
+                    "decision is stale or exceeds original reconciliation policy"
+                )
         uncertain = uncertain_model_sequences(rows)
         if len(uncertain) >= policy.max_unanswered_calls:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
@@ -236,26 +289,41 @@ class ModelInvocation:
             reserved = (len(uncertain) + 1) * self._results.max_result_bytes
             if used + reserved > self._results.max_total_result_bytes:
                 raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
-        reservation()
         try:
             self._sequence = ledger.next_sequence
-            ledger.append(
-                LedgerRow(
-                    sequence=self._sequence,
-                    event="model_intent",
-                    model=model,
-                    url=url,
-                    reason="model_invocation_reserved",
-                    model_intent=ModelIntent(
-                        schema="ghimera.model-intent/1",
-                        phase=phase,
-                        input_scope=scope,
-                        input_sha256=hashlib.sha256(request).hexdigest(),
-                        input_bytes=len(request),
-                        judge_reservation=budget.judge_calls,
-                    ),
-                )
+            candidate = LedgerRow(
+                sequence=self._sequence,
+                event="model_intent",
+                model=model,
+                url=url,
+                reason="model_reconciliation_reserved"
+                if decision is not None
+                else "model_invocation_reserved",
+                model_intent=ModelIntent(
+                    schema="ghimera.model-intent/1",
+                    phase=phase,
+                    input_scope=scope,
+                    input_sha256=hashlib.sha256(request).hexdigest(),
+                    input_bytes=len(request),
+                    judge_reservation=budget.judge_calls + 1,
+                ),
+                model_decision=decision,
             )
+            if decision is not None:
+                validate_policy(budget.config, rows + (candidate,))
+        except ValueError as exc:
+            raise FatalModelWorkFailure("model decision is not admissible") from exc
+        reservation()
+        try:
+            if (
+                candidate.model_intent is None
+                or candidate.model_intent.judge_reservation != budget.judge_calls
+            ):
+                raise ValueError("model reservation changed its native accounting")
+            ledger.append(candidate)
+            if decision is not None:
+                validate_policy(budget.config, ledger.snapshot())
+                self._authorization = authorization(ledger.snapshot()[-1])
         except (GhimeraRefused, ValueError, OSError) as exc:
             raise FatalModelWorkFailure("model intent was not durably acknowledged") from exc
 
@@ -346,6 +414,38 @@ class ModelInvocation:
         if self._invoked:
             raise FatalModelWorkFailure("a model invocation cannot be reused or retried")
         self._invoked = True
+        if self._authorization is not None:
+            self._budget.check_time()
+            from ghimera.model_reconciliation import validate_policy
+
+            rows = self._ledger.snapshot()
+            validate_policy(self._budget.config, rows)
+            if (
+                not self._ledger.has_replay_binding(self._budget.config)
+                or self._ledger.next_sequence != self._authorization.attempt_intent_sequence + 1
+                or any(
+                    row.model_attempt is not None
+                    and row.model_attempt.authorization == self._authorization
+                    for row in rows
+                )
+            ):
+                raise FatalModelWorkFailure("model attempt was consumed or changed before contact")
+            try:
+                self._ledger.append(
+                    LedgerRow(
+                        sequence=self._ledger.next_sequence,
+                        event="model_attempt",
+                        model=self._model,
+                        url=self._url,
+                        reason="model_attempt_consumed",
+                        model_attempt=ModelAttemptConsumption(
+                            schema="ghimera.model-attempt-consumption/1",
+                            authorization=self._authorization,
+                        ),
+                    )
+                )
+            except (GhimeraRefused, ValueError, OSError) as exc:
+                raise FatalModelWorkFailure("model attempt was not durably consumed") from exc
         if self._sequence is None:
             return await call()
         outcome: Literal["returned", "refused", "cancelled", "failed"] = "failed"

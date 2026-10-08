@@ -101,6 +101,18 @@ class JournalReport(Record):
         validate_model_rows(
             self.header.config.model_work, self.header.config.judge_budget, self.rows
         )
+        from ghimera.model_reconciliation import validate_policy
+
+        validate_policy(self.header.config, self.rows)
+        if any(
+            row.model_decision is not None
+            and (
+                row.model_decision.observed.run_id != self.header.run_id
+                or row.model_decision.observed.header_sha256 != digest(self.header)
+            )
+            for row in self.rows
+        ):
+            raise ValueError("model decision differs from its original owning journal header")
         return self
 
     @property

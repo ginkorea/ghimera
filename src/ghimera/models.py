@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from ghimera.browser_operation_types import BrowserSourceAction
 from ghimera.browser_types import RenderResult
@@ -37,6 +38,7 @@ from ghimera.identity_automation_types import (
     IdentityReview,
 )
 from ghimera.local_input_types import LocalInputEvidence
+from ghimera.model_reconciliation_types import ModelAttemptConsumption, ModelReconciliationDecision
 from ghimera.model_types import IdentityCallEvidence, ModelCallEvidence
 from ghimera.model_work_types import ModelAcknowledgement, ModelIntent, ModelReplay
 from ghimera.page_transcription_config import PdfTranscriptionConfig
@@ -694,46 +696,49 @@ class RetainedOriginal(Record):
 
 class LedgerRow(Record):
     sequence: NonNegative
-    event: Literal[
-        "fetch",
-        "fallback",
-        "refusal",
-        "verdict",
-        "grade",
-        "duplicate",
-        "stop",
-        "policy",
-        "plan",
-        "assessment",
-        "answer",
-        "review",
-        "discovery",
-        "extraction",
-        "extraction_attempt",
-        "content_drift",
-        "render",
-        "encoding",
-        "scoring",
-        "intent_reference",
-        "reference",
-        "reference_query",
-        "challenge",
-        "local_input",
-        "semantic",
-        "semantic_review",
-        "identity_propose",
-        "identity_review",
-        "identity_resolution",
-        "identity_history",
-        "visual",
-        "visual_model",
-        "transcription_model",
-        "transcription",
-        "retained_source",
-        "model_intent",
-        "model_ack",
-        "model_replay",
-    ]
+    event: (
+        Literal[
+            "fetch",
+            "fallback",
+            "refusal",
+            "verdict",
+            "grade",
+            "duplicate",
+            "stop",
+            "policy",
+            "plan",
+            "assessment",
+            "answer",
+            "review",
+            "discovery",
+            "extraction",
+            "extraction_attempt",
+            "content_drift",
+            "render",
+            "encoding",
+            "scoring",
+            "intent_reference",
+            "reference",
+            "reference_query",
+            "challenge",
+            "local_input",
+            "semantic",
+            "semantic_review",
+            "identity_propose",
+            "identity_review",
+            "identity_resolution",
+            "identity_history",
+            "visual",
+            "visual_model",
+            "transcription_model",
+            "transcription",
+            "retained_source",
+            "model_intent",
+            "model_ack",
+            "model_replay",
+        ]
+        | SkipJsonSchema[Literal["model_attempt"]]
+    )
     url: str | None = None
     route: str | None = None
     status: int | None = None
@@ -751,6 +756,12 @@ class LedgerRow(Record):
     model_intent: ModelIntent | None = Field(default=None, exclude_if=lambda v: v is None)
     model_ack: ModelAcknowledgement | None = Field(default=None, exclude_if=lambda v: v is None)
     model_replay: ModelReplay | None = Field(default=None, exclude_if=lambda v: v is None)
+    model_decision: SkipJsonSchema[ModelReconciliationDecision | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    model_attempt: SkipJsonSchema[ModelAttemptConsumption | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     extraction: ExtractionEvidence | None = None
     extraction_attempt: HtmlExtractionAttempt | None = Field(
         default=None, exclude_if=lambda v: v is None
@@ -819,7 +830,11 @@ class LedgerRow(Record):
             raise ValueError("model operation rows require their typed invocation evidence")
         if (self.event == "model_replay") != (self.model_replay is not None):
             raise ValueError("model replay rows require their original observation reference")
-        if self.event in {"model_intent", "model_ack", "model_replay"} and (
+        if self.model_decision is not None and self.event != "model_intent":
+            raise ValueError("model decisions require an atomic separately reserved intent")
+        if (self.event == "model_attempt") != (self.model_attempt is not None):
+            raise ValueError("model attempt consumption requires its typed authorization")
+        if self.event in {"model_intent", "model_ack", "model_replay", "model_attempt"} and (
             self.model is None
             or self.bytes_read != 0
             or self.transport is not None
@@ -1261,9 +1276,16 @@ class Harvest(Record):
             raise ValueError("challenge attempts exceed their configured run budget")
         if self.receipt.bytes_read != sum(row.bytes_read for row in self.ledger):
             raise ValueError("byte spend does not match ledger")
-        observed_model_spend = (
-            sum(row.model_intent is not None for row in self.ledger)
-            if self.receipt.effective_config.model_work is not None
+        from ghimera.model_reconciliation import validate_policy as validate_model_decisions
+        from ghimera.model_work import validate_model_rows
+
+        native_model_policy = self.receipt.effective_config.model_work
+        validate_model_decisions(self.receipt.effective_config, self.ledger)
+        observed_judge_calls = (
+            validate_model_rows(
+                native_model_policy, self.receipt.effective_config.judge_budget, self.ledger
+            )
+            if native_model_policy is not None
             else sum(
                 row.event
                 in {
@@ -1283,7 +1305,7 @@ class Harvest(Record):
                 for row in self.ledger
             )
         )
-        if self.receipt.judge_calls != observed_model_spend:
+        if self.receipt.judge_calls != observed_judge_calls:
             raise ValueError("judge spend does not match ledger")
         if self.receipt.accepted_documents != len(self.documents):
             raise ValueError("accepted count does not match harvest")

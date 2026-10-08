@@ -19,6 +19,11 @@ from ghimera.continuation import CheckpointReceipt, CheckpointStore, ResearchSus
 from ghimera.corpus import EvidenceCorpus
 from ghimera.embedding_types import EmbeddingReferences
 from ghimera.human_browser_types import HumanAssistant
+from ghimera.model_reconciliation_types import (
+    ModelAttemptAuthorization,
+    ModelReconciliationDecision,
+    ModelUnknownObservation,
+)
 from ghimera.refusals import GhimeraRefused
 from ghimera.research_recovery_store import ResearchRecoveryStore
 from ghimera.research_types import ResearchRequest
@@ -40,9 +45,12 @@ EnvName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
 class CommandExecution(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal[
-        "ghimera.command-execution/1", "ghimera.command-execution/2", "ghimera.command-execution/3"
+        "ghimera.command-execution/1",
+        "ghimera.command-execution/2",
+        "ghimera.command-execution/3",
+        "ghimera.command-execution/4",
     ] = Field(alias="schema")
-    operation: Literal["run", "resume", "recover"]
+    operation: Literal["run", "resume", "recover", "observe_model_unknown", "reconcile_model"]
     checkpoint_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -55,9 +63,41 @@ class CommandExecution(BaseModel):
     recovery_boundary: Literal["source_completion"] | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    model_decision: ModelReconciliationDecision | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    model_attempt: ModelAttemptAuthorization | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def checkpoint_binding(self) -> "CommandExecution":
+        if self.schema_version == "ghimera.command-execution/4":
+            if (
+                self.operation not in {"observe_model_unknown", "reconcile_model", "recover"}
+                or self.snapshot_sha256 is None
+                or self.checkpoint_sha256 is not None
+                or self.suspend_after_rounds is not None
+                or self.recovery_boundary is not None
+                or (self.operation == "reconcile_model") != (self.model_decision is not None)
+                or self.model_attempt is not None
+                and self.operation != "recover"
+            ):
+                raise ValueError(
+                    "model caller route requires its explicit operation and exact snapshot"
+                )
+            if (
+                self.model_decision is not None
+                and self.model_decision.observed.snapshot_sha256 != self.snapshot_sha256
+            ):
+                raise ValueError("decision differs from command snapshot")
+            return self
+        if (
+            self.model_decision is not None
+            or self.model_attempt is not None
+            or self.operation in {"observe_model_unknown", "reconcile_model"}
+        ):
+            raise ValueError("model reconciliation requires command execution /4")
         if (self.operation == "resume") != (self.checkpoint_sha256 is not None):
             raise ValueError("only resume requires an explicit checkpoint digest")
         recovering = self.operation == "recover"
@@ -81,6 +121,7 @@ class CommandOptions(BaseModel):
         "ghimera.collector-command/2",
         "ghimera.collector-command/3",
         "ghimera.collector-command/4",
+        "ghimera.collector-command/5",
     ] = Field(alias="schema")
     config_path: Path
     request_path: Path | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -97,8 +138,21 @@ class CommandOptions(BaseModel):
 
     @model_validator(mode="after")
     def paths(self) -> "CommandOptions":
-        recovering = self.execution is not None and self.execution.operation == "recover"
-        if self.schema_version == "ghimera.collector-command/4":
+        caller_route = (
+            self.execution is not None
+            and self.execution.schema_version == "ghimera.command-execution/4"
+        )
+        recovering = self.execution is not None and self.execution.operation in {
+            "recover",
+            "observe_model_unknown",
+            "reconcile_model",
+        }
+        if self.schema_version == "ghimera.collector-command/5":
+            if not caller_route:
+                raise ValueError("command /5 requires explicit model caller route")
+        elif caller_route:
+            raise ValueError("model caller route requires command /5")
+        elif self.schema_version == "ghimera.collector-command/4":
             if not recovering:
                 raise ValueError("command /4 requires explicit recovery")
         elif recovering:
@@ -110,7 +164,7 @@ class CommandOptions(BaseModel):
             raise ValueError("human assistance requires command /3")
         elif (self.schema_version == "ghimera.collector-command/2") != (self.execution is not None):
             raise ValueError("command /2 requires an execution policy; legacy /1 forbids it")
-        resuming = self.execution is not None and self.execution.operation in {"resume", "recover"}
+        resuming = self.execution is not None and self.execution.operation != "run"
         if resuming == (self.request_path is not None):
             raise ValueError("run needs a request file; resume uses its pinned original request")
         for path in (
@@ -261,7 +315,7 @@ async def execute(
     source_resolver: Resolver | None = None,
     human_assistant: HumanAssistant | None = None,
     corpus: EvidenceCorpus | None = None,
-) -> ArchiveReceipt | CheckpointReceipt:
+) -> ArchiveReceipt | CheckpointReceipt | ModelUnknownObservation | ModelAttemptAuthorization:
     options = CommandOptions.model_validate(options.model_dump())
     config = GhimeraConfig.model_validate(
         tomllib.loads(bounded_file(options.config_path, options.max_input_bytes).decode())
@@ -274,9 +328,17 @@ async def execute(
     elif human_assistant is not None:
         raise ValueError("human assistance requires an explicit command policy")
     execution = options.execution
-    if execution is not None and execution.operation != "recover" and config.continuation is None:
+    if (
+        execution is not None
+        and execution.operation in {"run", "resume"}
+        and config.continuation is None
+    ):
         raise ValueError("command /2 requires the recipe's durable continuation policy")
-    if execution is not None and execution.operation == "recover":
+    if execution is not None and execution.operation in {
+        "recover",
+        "observe_model_unknown",
+        "reconcile_model",
+    }:
         if config.research_recovery is None or execution.snapshot_sha256 is None:
             raise ValueError("recovery requires the recipe's explicit policy and snapshot digest")
         request = (
@@ -286,7 +348,12 @@ async def execute(
             if execution.recovery_boundary == "source_completion"
             else (
                 ResearchRecoveryStore(config, options.run_id, config.research_recovery)
-                .read(execution.snapshot_sha256)
+                .read(
+                    execution.snapshot_sha256,
+                    decision=execution.model_decision,
+                    attempt=execution.model_attempt,
+                    observe_unknown=execution.operation == "observe_model_unknown",
+                )
                 .snapshot.request
             )
         )
@@ -333,7 +400,7 @@ async def execute(
             config_sha256=hashlib.sha256(config.model_dump_json().encode()).hexdigest(),
             request_sha256=request.content_digest(),
         )
-        if execution.operation in {"resume", "recover"}:
+        if execution.operation != "run":
             archive = ResearchResultArchive.resume(
                 options.output_directory, reservation=reservation, max_bytes=options.max_input_bytes
             )
@@ -342,6 +409,19 @@ async def execute(
                 options.output_directory, reservation=reservation, max_bytes=options.max_input_bytes
             )
     try:
+        if execution is not None and execution.operation == "observe_model_unknown":
+            if execution.snapshot_sha256 is None:
+                raise ValueError("observation requires its snapshot pin")
+            return collector.observe_model_unknown(
+                options.run_id, snapshot_sha256=execution.snapshot_sha256
+            )
+        if execution is not None and execution.operation == "reconcile_model":
+            if (
+                execution.model_decision is None
+                or execution.model_decision.observed.run_id != options.run_id
+            ):
+                raise ValueError("decision changed its original run")
+            return await collector.reconcile_model(execution.model_decision)
         if execution is not None and execution.operation == "recover":
             if execution.snapshot_sha256 is None:
                 raise ValueError("recovery requires its exact snapshot digest")
@@ -349,6 +429,7 @@ async def execute(
                 options.run_id,
                 snapshot_sha256=execution.snapshot_sha256,
                 boundary=execution.recovery_boundary or "model_return",
+                attempt=execution.model_attempt,
             )
         elif execution is not None and execution.operation == "resume":
             if execution.checkpoint_sha256 is None:
@@ -412,4 +493,6 @@ def main(argv: list[str] | None = None) -> int:
     sys.stdout.write(receipt.model_dump_json() + "\n")
     if isinstance(receipt, CheckpointReceipt):
         return 3
+    if isinstance(receipt, (ModelUnknownObservation, ModelAttemptAuthorization)):
+        return 0
     return 0 if receipt.status == "answered" else 1

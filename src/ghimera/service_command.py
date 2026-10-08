@@ -18,6 +18,10 @@ from ghimera.collection_service import CollectionService, CollectionServiceConfi
 from ghimera.delivery_config import DirectoryDeliveryConfig
 from ghimera.delivery_types import DeliveryItem, Positive
 from ghimera.directory_delivery import DirectoryDeliverySink
+from ghimera.model_reconciliation_types import (
+    ModelAttemptAuthorization,
+    ModelReconciliationDecision,
+)
 from ghimera.models import Record
 from ghimera.research_types import ResearchRequest
 from ghimera.result_archive import bounded_file
@@ -48,6 +52,11 @@ class CorpusSearchRequest(Record):
     text: Annotated[str, Field(min_length=1)]
     top_k: Positive
     languages: tuple[str, ...] = ()
+
+
+class ModelObservationRequest(Record):
+    schema_version: Literal["ghimera.model-observation-request/1"] = Field(alias="schema")
+    snapshot_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
 class CollectionHttpServer:
@@ -189,6 +198,33 @@ class CollectionHttpServer:
             run_id = parts[2]
             if method == "GET" and len(parts) == 3:
                 return 200, self.service.status(run_id).model_dump_json().encode()
+            if method == "GET" and len(parts) == 4 and parts[3] == "model-attempts":
+                return 200, json.dumps(
+                    [
+                        receipt.model_dump(mode="json")
+                        for receipt in self.service.model_attempt_history(run_id)
+                    ]
+                ).encode()
+            if method == "POST" and len(parts) == 4 and body:
+                if parts[3] == "observe-model-unknown":
+                    # A single digest, not an untyped configuration or request replacement.
+                    request = ModelObservationRequest.model_validate_json(body)
+                    observed = await self.service.observe_model_unknown(
+                        run_id, snapshot_sha256=request.snapshot_sha256
+                    )
+                    return 200, observed.model_dump_json().encode()
+                if parts[3] == "reconcile-model":
+                    receipt = await self.service.reconcile_model(
+                        run_id, ModelReconciliationDecision.model_validate_json(body)
+                    )
+                    return 200, receipt.model_dump_json().encode()
+                if parts[3] == "recover":
+                    job = await self.service.recover(
+                        run_id, attempt=ModelAttemptAuthorization.model_validate_json(body)
+                    )
+                    return (
+                        202 if job.phase == "recovering" else 409
+                    ), job.model_dump_json().encode()
             if method == "POST" and len(parts) == 4 and not body:
                 action = parts[3]
                 if action == "pause":

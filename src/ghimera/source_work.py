@@ -21,7 +21,8 @@ from pydantic import TypeAdapter
 from ghimera.config import GhimeraConfig
 from ghimera.journal import _run_path, read_journal
 from ghimera.journal_types import JournalHeader, digest
-from ghimera.model_work import uncertain_model_sequences, validate_model_rows
+from ghimera.model_reconciliation import unreconciled_model_sequences
+from ghimera.model_work import validate_model_rows
 from ghimera.models import Document, Goal, ModelIdentity, Page, RetainedOriginal
 from ghimera.private_database import PrivateDatabase
 from ghimera.refusals import GhimeraRefused
@@ -558,7 +559,7 @@ class SourceWorkStore:
             or journal.state != "unsealed"
             or journal.incomplete_tail
             or journal.rows != h.ledger
-            or uncertain_model_sequences(journal.rows)
+            or unreconciled_model_sequences(journal.rows)
             or validate_model_rows(self._config.model_work, self._config.judge_budget, journal.rows)
             != h.receipt.judge_calls
             or any(

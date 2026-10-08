@@ -9,7 +9,18 @@ from typing import Protocol
 from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.journal_types import JournalReport, canonical
-from ghimera.model_work import port_input, uncertain_model_sequences, validate_model_rows
+from ghimera.model_reconciliation import (
+    authorization,
+    observe,
+    unreconciled_model_sequences,
+    validate_decisions,
+)
+from ghimera.model_reconciliation_types import (
+    ModelAttemptAuthorization,
+    ModelReconciliationDecision,
+    ModelUnknownObservation,
+)
+from ghimera.model_work import port_input, validate_model_rows
 from ghimera.models import LedgerRow
 from ghimera.research_recovery_types import (
     ResearchControlSnapshot,
@@ -92,7 +103,7 @@ class ResearchRecoveryStore:
             or report.incomplete_tail
             or report.rows[: len(rows)] != rows
             or any(row.event == "stop" for row in report.rows)
-            or uncertain_model_sequences(rows)
+            or unreconciled_model_sequences(rows)
             or validate_model_rows(self._config.model_work, self._config.judge_budget, rows)
             != harvest.receipt.judge_calls
         ):
@@ -156,7 +167,7 @@ class ResearchRecoveryStore:
         tail = report.rows[len(snapshot.progress.harvest.ledger) :]
         if not tail:
             return None
-        if uncertain_model_sequences(report.rows):
+        if unreconciled_model_sequences(report.rows):
             raise ValueError("unknown model outcome requires reconciliation, never automatic retry")
         if len(tail) not in {2, 3}:
             raise ValueError("recovery cannot adopt effects beyond one original model return")
@@ -216,12 +227,183 @@ class ResearchRecoveryStore:
                 raise ValueError("recovery phase event must bind only the exact retained return")
         return original.sequence
 
+    def _unknown_tail(
+        self, snapshot: ResearchControlSnapshot, report: JournalReport, pin: str
+    ) -> ModelUnknownObservation:
+        tail = report.rows[len(snapshot.progress.harvest.ledger) :]
+        if len(tail) not in {1, 2, 3}:
+            raise ValueError("unknown recovery admits only one exact pending research invocation")
+        original = tail[0]
+        intent, pending = original.model_intent, snapshot.pending_model
+        if (
+            intent is None
+            or original.model_decision is not None
+            or original.model != pending.model
+            or intent.phase != pending.phase
+            or intent.input_scope != "port_input"
+            or intent.input_sha256 != pending.input_sha256
+            or intent.input_bytes != pending.input_bytes
+            or original
+            != LedgerRow(
+                sequence=original.sequence,
+                event="model_intent",
+                model=pending.model,
+                reason="model_invocation_reserved",
+                model_intent=intent,
+            )
+            or unreconciled_model_sequences(report.rows) != (original.sequence,)
+        ):
+            raise ValueError("unknown model tail changed its exact saved pending operation")
+        if len(tail) > 1:
+            ack = tail[1].model_ack
+            if (
+                ack is None
+                or ack.intent_sequence != original.sequence
+                or not ack.uncertain
+                or tail[1]
+                != LedgerRow(
+                    sequence=tail[1].sequence,
+                    event="model_ack",
+                    model=pending.model,
+                    reason="model_port_ended",
+                    model_ack=ack,
+                )
+            ):
+                raise ValueError("unknown tail lost its original local end evidence")
+        if len(tail) == 3:
+            phase = tail[2]
+            if (
+                phase.event != snapshot.phase
+                or phase.model != pending.model
+                or phase.model_call is not None
+                and (
+                    phase.model_call.service.model_id != pending.model.model_id
+                    or phase.model_call.service.revision != pending.model.revision
+                )
+                or phase.reason not in {"model_failed", "model_cancelled"}
+                or phase
+                != LedgerRow(
+                    sequence=phase.sequence,
+                    event=snapshot.phase,
+                    model=pending.model,
+                    model_call=phase.model_call,
+                    refusal=phase.refusal,
+                    reason=phase.reason,
+                    latency_seconds=phase.latency_seconds,
+                    planning_graph=snapshot.model_request.graph_context
+                    if isinstance(snapshot.model_request, PlanningRequest)
+                    else None,
+                )
+            ):
+                raise ValueError(
+                    "unknown tail includes later effects, not its failed original phase"
+                )
+        return observe(report, pin, original.sequence)
+
+    def _attempt_tail(
+        self,
+        snapshot: ResearchControlSnapshot,
+        report: JournalReport,
+        pin: str,
+        supplied: ModelAttemptAuthorization | None,
+    ) -> tuple[int | None, ModelAttemptAuthorization | None]:
+        tail = report.rows[len(snapshot.progress.harvest.ledger) :]
+        choices = tuple(row for row in tail if row.model_decision is not None)
+        if len(choices) != 1:
+            raise ValueError("recovery requires one original decision, never an unresolved chain")
+        chosen = choices[0]
+        decision = chosen.model_decision
+        if decision is None or decision.observed.snapshot_sha256 != pin:
+            raise ValueError("decision changed its exact original snapshot")
+        prefix = report.model_copy(update={"rows": report.rows[: chosen.sequence]})
+        if self._unknown_tail(snapshot, prefix, pin) != decision.observed:
+            raise ValueError("decision changed its original unknown phase observation")
+        receipt = authorization(chosen)
+        if chosen != LedgerRow(
+            sequence=chosen.sequence,
+            event="model_intent",
+            model=snapshot.pending_model.model,
+            reason="model_reconciliation_reserved",
+            model_intent=chosen.model_intent,
+            model_decision=decision,
+        ):
+            raise ValueError("attempt changed its atomic native decision reservation")
+        remainder = report.rows[chosen.sequence + 1 :]
+        if not remainder:
+            if supplied != receipt:
+                raise ValueError(
+                    "unconsumed attempt requires its caller's exact durable authorization"
+                )
+            return None, receipt
+        consumed = remainder[0]
+        if (
+            consumed.model_attempt is None
+            or consumed.model_attempt.authorization != receipt
+            or consumed
+            != LedgerRow(
+                sequence=consumed.sequence,
+                event="model_attempt",
+                model=chosen.model,
+                reason="model_attempt_consumed",
+                model_attempt=consumed.model_attempt,
+            )
+        ):
+            raise ValueError("attempt lost its durable one-shot consumption")
+        if len(remainder) not in {2, 3} or unreconciled_model_sequences(report.rows):
+            raise ValueError(
+                "consumed model attempt has unknown/later effects; never contact again"
+            )
+        ackrow = remainder[1]
+        ack = ackrow.model_ack
+        if (
+            ack is None
+            or ack.intent_sequence != chosen.sequence
+            or ack.outcome != "returned"
+            or ack.output_scope != "port_output"
+            or ack.stored_output is None
+            or ackrow
+            != LedgerRow(
+                sequence=ackrow.sequence,
+                event="model_ack",
+                model=chosen.model,
+                reason="model_port_ended",
+                model_ack=ack,
+            )
+        ):
+            raise ValueError("attempt requires its exact retained native return")
+        result = self._decode(snapshot, ack.stored_output.body())
+        if result.model_call is not None and (
+            result.model_call.service.model_id != snapshot.pending_model.model.model_id
+            or result.model_call.service.revision != snapshot.pending_model.model.revision
+        ):
+            raise ValueError("attempt result changed its original model")
+        if len(remainder) == 3:
+            row = remainder[2]
+            if row != LedgerRow(
+                sequence=row.sequence,
+                event=snapshot.phase,
+                model=chosen.model,
+                model_call=result.model_call,
+                reason="model_response:" + result.content_digest(),
+                latency_seconds=row.latency_seconds,
+                planning_graph=snapshot.model_request.graph_context
+                if isinstance(snapshot.model_request, PlanningRequest)
+                else None,
+            ):
+                raise ValueError("attempt phase changed its retained result")
+        if supplied is not None and supplied != receipt:
+            raise ValueError("supplied attempt authorization changed")
+        return chosen.sequence, None
+
     def read(
         self,
         expected_sha256: str,
         *,
         expected_request: ResearchRequest | None = None,
         expected_models: ResearchRecoveryModels | None = None,
+        decision: ModelReconciliationDecision | None = None,
+        attempt: ModelAttemptAuthorization | None = None,
+        observe_unknown: bool = False,
     ) -> ResearchRecoveryRead:
         from ghimera.journal import _read_file
 
@@ -238,8 +420,49 @@ class ResearchRecoveryStore:
         ):
             raise ValueError("recovery request or collaborator identity differs from the original")
         report = self._journal(snapshot)
+        tail = report.rows[len(snapshot.progress.harvest.ledger) :]
+        if any(row.model_decision is not None for row in tail):
+            validate_decisions(report.rows)
+            sequence, admitted = self._attempt_tail(snapshot, report, expected_sha256, attempt)
+            if decision is not None:
+                raise ValueError("original decision already reserved; use exact authorization")
+            return ResearchRecoveryRead(
+                snapshot=snapshot, journal=report, intent_sequence=sequence, attempt=admitted
+            )
+        if decision is not None or observe_unknown:
+            policy = self._config.research_recovery
+            if policy is None or policy.model_reconciliation is None:
+                raise ValueError("unknown reconciliation requires the original explicit policy")
+            observation = self._unknown_tail(snapshot, report, expected_sha256)
+            if decision is not None and (
+                decision.observed != observation
+                or len(decision.model_dump_json().encode())
+                > policy.model_reconciliation.max_decision_bytes
+            ):
+                raise ValueError("model decision is stale, changed or exceeds original bounds")
+            return ResearchRecoveryRead(
+                snapshot=snapshot,
+                journal=report,
+                intent_sequence=None,
+                decision=decision,
+                observation=observation,
+            )
+        if attempt is not None:
+            raise ValueError("attempt has no exact durable original decision")
         return ResearchRecoveryRead(
             snapshot=snapshot,
             journal=report,
             intent_sequence=self._admit_tail(snapshot, report),
         )
+
+    def attempt_history(self) -> tuple[ModelAttemptAuthorization, ...]:
+        """Read durable receipts, never another grant or a fresh reservation."""
+        from ghimera.journal import read_journal
+
+        self._check()
+        if self._config.journal is None:
+            raise ValueError("attempt history lost its native journal")
+        report = read_journal(self._config.journal, self._run_id)
+        if report.incomplete_tail or report.header.config != self._config:
+            raise ValueError("attempt history requires its intact original configuration")
+        return validate_decisions(report.rows)

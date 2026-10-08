@@ -400,6 +400,10 @@ class GoalLoop:
             verified = ResearchRecoveryStore(self._config, run_id, policy).read(
                 hashlib.sha256(canonical(model_return.snapshot)).hexdigest(),
                 expected_models=model_return.snapshot.models,
+                decision=model_return.decision,
+                attempt=model_return.attempt,
+                observe_unknown=model_return.observation is not None
+                and model_return.decision is None,
             )
             if verified != model_return:
                 raise ValueError("model return changed before native session restoration")
@@ -422,7 +426,12 @@ class GoalLoop:
 
                 source_work = SourceWorkStore.resume(self._config, run_id, len(rows))
             budget = RunBudget(self._config, self._clock)
-            budget.restore(receipt, rows, search_calls, downtime_seconds)
+            admission = (
+                (model_return.decision or model_return.attempt)
+                if model_return is not None
+                else None
+            )
+            budget.restore(receipt, rows, search_calls, downtime_seconds, admission)
             graph = None
             if self._config.graph is not None and self._config.graph.enabled:
                 graph_sink = self._graph_sink or DirectoryGraphSink(self._config.graph, run_id)
