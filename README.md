@@ -1,259 +1,28 @@
 # ghimera
 
-Intent-driven web research: discover sources, collect native-language documents,
-follow evidence gaps, and return a source-cited answer—or an explicit partial
-result when the evidence or budget is insufficient.
+Intent-driven web research with your own local model services: discover sources,
+collect native-language evidence, follow gaps, and return a source-cited answer
+or an explicit partial result when evidence or budget is insufficient.
 
-**Version 0.4.10 adds a standalone collection service and richer evidence workflows.**
+ghimera is an independent Python library and command-line application. You own
+the model services, search providers, authorized source sessions, networking and
+storage. It does not launch models, discover credentials, allocate compute or
+silently fall back to an external LLM.
 
-The 0.4.11 source candidate additionally preserves bounded research-model
-phase control and corpus encoding reservations across interruptions. Explicit
-recovery verifies original identities and budgets; acknowledged model results
-can replay locally, while unknown outcomes remain held. An explicit encoding
-decision can authorize one separately charged attempt without erasing the old
-uncertainty. See [research recovery](docs/RESEARCH_RECOVERY.md),
-[service recovery](docs/SERVICE_RECOVERY.md) and
-[encoding recovery](docs/ENCODING_RECOVERY.md). Candidate release acceptance
-is not implied by the published 0.4.10 checks below.
-An independently selected [completed-source boundary](docs/SOURCE_COMPLETION_RECOVERY.md)
-can also resume serial research after an atomic native source acknowledgement,
-preserving its original source queue, round cursor and spend. It does not adopt
-mid-source or concurrent interruptions, and never retries an unknown call.
+**Published release: 0.4.10.** Install this version for the supported release
+described below. Its source gate, independently installed-package checks and
+bounded public browser/Tor captures are recorded in
+[release acceptance](docs/RELEASE_0410.md). These checks do not establish live
+multilingual model quality or complete publisher coverage.
 
-It combines configured hybrid corpus retrieval, source API/reference expansion,
-guarded browser pagination and explicit Tor-browser route proof; native-layout
-PDF figure crops and visual graph/answer citations; reversible dated identity
-decisions; bounded model-return replay; and remote delivery with retention.
-The `ghimera-service` command exposes authenticated run/status/pause/resume/
-cancel, health, manifests and corpus queries. Existing library use needs no
-service, external scheduler or platform registry.
-
-Configuration owns endpoints, paths, models, budgets, networking and storage.
-Nothing downloads or serves a model on import. Source observations, OCR readings
-and reviewed model claims remain distinguishable. See the [core tracker](docs/PRD_INFRASTRUCTURE.md),
-[service guide](docs/OPERATIONS_CANDIDATE.md), [browser/retrieval guide](docs/DISCOVERY_BROWSER_CANDIDATE.md)
-and [visual/identity guide](docs/EVIDENCE_GRAPH_CANDIDATE.md).
-The combined source gate and independently installed-package checks passed.
-An actual browser-over-Tor public-source capture also passed. Live multilingual
-model quality and onion investigation acceptance remain separate requirements;
-they are not implied by protocol fixtures.
-
-**Published v0.4.9 adds durable model-call intent and explicit uncertainty holds.**
-
-With explicit model-work and journal configuration, the collector persists its
-reservation before invoking a model and links observed returns to the original
-request. A crash or unanswered call remains visible and cannot silently reset
-its allowance or retry. This is a recovery prerequisite, not whole-session
-adoption or acknowledged-answer replay. See [model work](docs/MODEL_WORK.md)
-and [release acceptance](docs/RELEASE_049.md).
-
-Explicit source-refresh configuration preserves native HTTP originals across
-runs and reuses them only after a guarded conditional request. Changed request
-authority, refusals and cache prohibitions cannot resurrect an earlier original.
-Real 304 observations retain version provenance without inventing transferred
-bytes. Repeated cancellation waits for an owned graph write and its exact
-acknowledgement before changing the live view. See
-[source refresh](docs/SOURCE_REFRESH.md) and [release acceptance](docs/RELEASE_048.md).
-
-Explicit source-work configuration retains fresh web/local originals before
-processing and records historical corpus admission separately. Its optional
-frontier preserves queued web intents and complete owned-file batches before
-first I/O. Quiescent continuation verifies pending order and pins without
-rereading handled files. Uncertain model/graph calls and whole-research crash
-adoption remain explicit requirements. See [source work](docs/SOURCE_WORK.md)
-and the earlier [release acceptance](docs/RELEASE_047.md).
-
-Configured RSS, Atom, sitemap/index and JSON Feed seeds use the same scoped
-HTTP/Tor fetch, robots, pacing and native evidence path as ordinary documents.
-Their outgoing links remain separately admitted frontier work. A configured
-corpus reader can supply retained originals to current assessment, citations
-and graph expansion without refetching them or treating old judgments as new.
-Retained source age is not inferred. Cross-run conditional refresh uses its own
-explicit configuration; semantic freshness and reranking remain separate
-requirements. See
-[source feeds](docs/SOURCE_FEEDS.md), [retained evidence](docs/RETAINED_EVIDENCE.md)
-and [release acceptance](docs/RELEASE_046.md).
-
-The scanned-PDF path renders retained originals into bounded pages, calls your
-explicitly selected private vision and review services, and preserves generated
-reading provenance through citations, corpus search, graphs and research planning.
-It does not download models, silently replace native extraction or certify a
-language's OCR accuracy. Simplified Chinese quality remains unaccepted. See
-[configuration and evidence](docs/PDF_TRANSCRIPTION.md) and
-[release acceptance](docs/RELEASE_045.md). Guarded browser collection and the
-background delivery worker from 0.4.4 remain available.
-The repository, distribution and import use `ghimera`.
-It succeeds the `go-spider` distribution and `chimera` implementation. It is not
-backward-compatible with v0.1.0's `spider_core` API or `spider` CLI. Python
-**3.11+** is required. Some planned browser/document adapters and public-corpus
-acceptance are still in progress; see the limitations below.
-
-ghimera is an independent library. Supply your own search provider,
-self-hosted model services, extraction policies and graph profile.
-
-## What is implemented
-
-- **Goal and intent loops.** Collect from configured seeds with `GoalLoop`, or
-  use `ResearchLoop` to plan questions, discover sources through an injected
-  search provider, assess gaps, and draft/review an evidence-cited answer.
-- **MCP discovery.** Borrow an explicitly bound MCP
-  session to obtain source leads; default mappings support the `web_search`
-  envelope. Other tools and result paths are configurable. See
-  [MCP leads](docs/MCP_LEADS.md).
-- **Configurable discovery routing.** Combine explicit
-  open-web and onion lead providers, with per-provider budgets, concurrent
-  fan-out or ordered fallback, and bounded switching when research stalls.
-  Continuation retains spent budgets and each provider's original response.
-  See [discovery routing](docs/DISCOVERY_ROUTING.md). An onion-index service
-  is not bundled.
-- **Ahmia index leads.** Query an explicitly configured,
-  operator-owned index, or expose its lead payload through an application-owned
-  `onion_search` MCP tool. Retain index provenance and fetch original documents
-  separately through Tor. See [Ahmia integration](docs/AHMIA_INTEGRATION.md).
-- **Human-proxy browser interaction.** An explicitly
-  configured CLI can pause while you act in the selected browser, then resume
-  native capture with request-bound terminal input. See
-  [interactive collection](docs/TERMINAL_ASSISTANCE.md).
-- **Local models first.** Configured, already-served self-hosted models supply
-  planning, judging, answer generation, review and embeddings. Compatible HTTP
-  interfaces are supported; no external LLM fallback, model weights or model
-  server are included.
-- **Bounded direct and Tor HTTP.** Native v3 onion collection and open-web
-  requests through Tor share the same route policy. Public-network validation,
-  pinned DNS for direct requests, per-hop redirect checks, robots policy,
-  concurrency/rate limits and retries are accounted for before returning data.
-  A failed Tor route never silently falls back to direct access.
-- **Isolated JavaScript rendering.** Patchright runs in a network-isolated
-  Linux worker; the parent fetch boundary handles its permitted HTTP resources,
-  redirects and accounting. Browser binaries are explicitly configured and
-  verified, not downloaded on import. Alternate passive renderers remain planned;
-  separately deployed challenge gateways are explicitly supported.
-- **Native extraction.** Configured HTML fit-Markdown, adaptive locator
-  profiles, language detection, DOCX tables and native PDF text preserve raw
-  bytes beside extracted native-language text. Full PDF/OCR and Marker
-  acceptance remain open.
-- **Selective visual evidence.** Configured infographic admission filters logos
-  before download, bounds raster decoding and runs offline language-routed OCR.
-  Optional local vision interpretation requires a separate image-bound review.
-  Accepted originals and OCR regions remain beside native text; rejected images
-  are not retained or vectorized. See [visuals and Pacific OCR](docs/VISUALS.md).
-- **Configurable browsing cadence.** Nonnegative jitter adds to origin/robots
-  spacing, while `429`/configured throttle responses and `Retry-After` impose
-  shared-origin cooldown without blocking unrelated origins. See
-  [browsing cadence](docs/BROWSING_CADENCE.md).
-- **Relevance and deduplication.** An injected self-hosted encoder scores
-  native text/windows and observed links against pinned reference vectors.
-  Keyword/semantic ranking, encoding budgets, canonical URL handling, SHA-256
-  and configured near-duplicate grouping retain source-qualified evidence.
-  Similarity is not a calibrated probability or a substitute for a verdict.
-- **Graphs and audit records.** A configurable research graph starts with the
-  intent. Typed harvests, receipts and ledger rows retain configuration,
-  transport, model-call spend, omissions, verdicts, refusals and source hashes.
-  Operational discovery traces are distinct from evidence-supported claims.
-
-Every candidate reaching acceptance receives an accept/reject/hold verdict. A hold gets a
-second model pass. An intent is marked answered only after the coverage,
-citations, review and configured confidence checks pass; budget exhaustion is
-not silently presented as success.
-
-### Additions since go-spider 0.2.0
-
-The current working branch also has explicit authorized source sessions,
-configurable references/citing-source discovery, persistent publisher-locator
-drift detection with generic recovery and a doctor, and offline model-based PDF
-layout, tables, OCR and column-aware reading order, durable run journals, and
-intent-based semantic scoring without a prebuilt reference-vector file, and a
-configuration-driven `Collector` facade using actual adapters. These were not included
-in the old `go-spider==0.2.0` wheel and are included in `ghimera==0.3.0`.
-See [source sessions](docs/SOURCE_SESSIONS.md),
-[references](docs/C3_REFERENCES.md), [locator health](docs/C2_HTML.md), and
-[PDF configuration/acceptance](docs/C2_DOCUMENTS.md),
-[run journals](docs/RUN_JOURNAL.md) and
-[intent scoring](docs/C3_EMBEDDING_SCORING.md#intent-references-unreleased-source).
-For the assembled intent-only API and full non-active template, see
-[configured collector](docs/COLLECTOR.md) and `examples/collector.toml`.
-The package also supports explicitly configured ordinary HTML search
-alongside JSON, and complete research archives retain successful discovery
-responses with query/fetch bindings. See [HTML search](docs/C3_SEARCH_HTML.md)
-and [search evidence](docs/C3_SEARCH_EVIDENCE.md). Neither mode solves access
-challenges, and a refusal is not a successful research result.
-Representative-corpus accuracy and Marker acceptance remain open; passing a
-controlled document check is not a universal quality claim.
-
-### Additions in 0.4.0
-
-This release adds explicitly configured local challenge recovery with
-FlareSolverr or Byparr (including its Camoufox-backed 2.x wire),
-private, origin-scoped clearance and guarded content verification; this is
-not a universal CAPTCHA solver. See [challenge recovery](docs/CHALLENGES.md).
-An explicit dedicated Chromium session can also use an application-supplied
-human assistance port: finish ordinary login or a challenge in that browser,
-then continue collection in the same session. DOM acquisition remains distinct
-from HTTP responses throughout extraction, graph evidence, private archives and
-completed-round resume. Browser egress is operator-managed; verified browser
-Tor routing and representative-publisher acceptance remain open. A bounded
-English/Traditional Chinese public-document capture is recorded in
-[publisher evidence](docs/C1_HUMAN_PUBLIC_EVIDENCE.md). See
-[human-assisted collection](docs/HUMAN_BROWSER.md).
-Version 0.4.2 also captures actual PDF/DOCX downloads through
-the caller's selected `BoundPageHumanSession`, injected into `Collector`.
-An explicit format policy lets scored native links supply previously unknown
-file URLs; the collector does not need a hard-coded attachment list. Original
-file bytes enter the same extraction, citation, graph and archive path.
-Caller-owned tabs remain open, and unknown browser-network usage is not
-represented as zero. The 0.4.3 inline-body path makes one separate,
-configured same-origin browser GET; it does not claim navigation bytes were
-intercepted. Redirected files and verified entitled-publisher/Tor compatibility
-remain separate acceptance work. See
-[browser downloads and configuration](docs/BROWSER_DOWNLOADS.md).
-It also admits hash-pinned owned PDF/DOCX seeds before intent planning through
-the same document pipeline. See [local inputs](docs/LOCAL_INPUTS.md).
-Configured [semantic extraction](docs/SEMANTIC_EXTRACTION.md) now produces
-native entity/relationship observations as source-local model assertions.
-Explicit [identity-aware planning](docs/IDENTITY_PLANNING.md) can turn repeated
-names, asserted aliases and potentially competing dated claims into source-bound
-follow-up research questions without merging the original nodes.
-These additions were not in the immutable `ghimera==0.3.0` artifacts. Alias
-resolution, graph-driven network expansion and organizational accuracy
-acceptance remain open, not claims of the existing research graph.
+**Unpublished source candidate: 0.4.11.** This checkout also contains opt-in
+recovery, identity, judgment and retrieval additions described
+[below](#unpublished-0411-candidate). They are not capabilities of the immutable
+0.4.10 wheel, and source checks are not release or real-model acceptance.
 
 ## Installation
 
-The 0.4.1 source line adds [bounded parallel collection](docs/CONCURRENT_COLLECTION.md)
-and a [durable native evidence corpus](docs/EVIDENCE_CORPUS.md). The corpus keeps
-accepted originals, text/OCR/visual provenance and model-bound vectors for later
-similarity queries. These additions are not in the immutable 0.4.0 wheel;
-representative Pacific-language quality and the full infrastructure tracker
-remain explicit acceptance work.
-
-An explicitly composed `PersistentCollector` automatically appends completed
-collection/research evidence to that corpus and returns its acknowledgement
-beside the unchanged original result. Failed handoffs retain completed source
-work for persistence-only retry. The configured collection service also exposes
-run/status/control and archive-only handoff retries; see
-[service usage](docs/OPERATIONS_CANDIDATE.md). Arbitrary interrupted-operation
-reconciliation remains separate from completed-result persistence.
-
-This source line can also use an explicitly bound corpus as a discovery
-provider, alone or beside configured web/MCP/onion providers. It preserves native
-query and source observations; returned matches are leads that still go through
-ordinary collection and citation checks. Cross-language quality and direct
-cached-source answer reuse remain separate acceptance work.
-
-An explicit [delivery outbox](docs/DELIVERY_OUTBOX.md) can queue complete results
-before returning and dispatch them concurrently when its configured destination
-is available. Destination readback precedes acknowledgement and any explicit
-local-payload pruning. The included local durable destination is not off-host
-backup. The configured remote adapter supports guarded PUT and exact readback;
-see [remote delivery](docs/OPERATIONS_CANDIDATE.md). Off-host deployment, destination
-durability and outage/scale acceptance remain explicit operator requirements.
-
-Version 0.4.4 includes a configurable `DeliveryWorker` and
-`ghimera-delivery` command for background retries, JSONL health and optional
-readback-confirmed outbox cleanup. Previous release artifacts remain immutable.
-See [delivery lifecycle and configuration](docs/DELIVERY_OUTBOX.md).
-
-Use a dedicated virtual environment:
+Python **3.11+** is required. Use a dedicated environment:
 
 ```bash
 python3.11 -m venv .venv
@@ -267,80 +36,27 @@ Install the adapters you intend to configure:
 python -m pip install 'ghimera[html,documents,browser]==0.4.10'
 ```
 
-The base package contains the typed core, HTTP/Tor transport, research/search
-and self-hosted model/embedding clients. Extras add pinned HTML, document and
-Patchright dependencies. They do **not** install an inference server, browser
-binary, Tor daemon or PDF/OCR model artifacts. The isolated browser adapter
-requires Linux, a compatible explicitly supplied Chromium binary and Bubblewrap;
-other operating systems have not been accepted for that adapter.
+The base package supplies typed collection/research contracts, HTTP/Tor
+transport, search and self-hosted model/embedding clients. Extras add HTML,
+document and Patchright dependencies. They do **not** install an inference
+server, browser binary, Tor daemon or PDF/OCR model artifacts. The isolated
+browser adapter requires Linux, an explicitly supplied compatible Chromium
+binary and Bubblewrap; other operating systems have not been accepted for it.
 
-## Configuration and API
+## Configure and run an intent
 
-Operational choices are typed, versioned configuration—not Python constants:
-scope, budgets, endpoints, model identities/revisions, thresholds, private
-worker directories, browser provenance and direct/Tor policy. Parse once with
-`GhimeraConfig.from_toml(Path(...))`; inject the matching collaborators.
+Start with the [published 0.4.10 examples](https://github.com/ginkorea/ghimera/tree/v0.4.10/examples),
+especially `collector.toml`. Templates are non-active: replace invalid endpoints,
+private paths, model identifiers and contact details. Use examples matching your
+installed version; this checkout's candidate-only recipes are not wheel updates.
 
-The [examples](https://github.com/ginkorea/ghimera/tree/v0.4.0/examples) are non-active templates. Replace invalid endpoints,
-contact information, private paths and model identifiers; reference-vector
-fixtures are **not** production relevance data. Adapter blocks belong in the
-main configuration under their named keys, not as unrelated root settings.
-Supply any model credential separately in memory, only to its authorized exact
-endpoint; configuration is not credential or destination approval.
+Configure already-served private completion and embedding services, a search
+provider, source scope, extraction policies and explicit budgets. Endpoints,
+model revisions, language artifacts, thresholds, direct/Tor routes and storage
+belong in typed, versioned configuration. Reference-vector fixtures are not
+production relevance data. See the [collector guide](docs/COLLECTOR.md).
 
-Download the starter configuration, or copy it from the repository:
-
-```bash
-curl --fail --proto '=https' --tlsv1.2 \
-  https://raw.githubusercontent.com/ginkorea/ghimera/v0.4.0/examples/chimera.toml \
-  --output chimera.toml
-```
-
-An entirely offline smoke example, using explicitly named test doubles:
-
-```python
-import asyncio
-from pathlib import Path
-
-from ghimera import GhimeraConfig, Goal, GoalLoop, Harvest, Scope
-from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
-from ghimera.fetch import FetchLadder
-
-
-async def main() -> None:
-    config = GhimeraConfig.from_toml(Path("chimera.toml"))
-    collector = GoalLoop(
-        config=config,
-        fetcher=FetchLadder((FakeRoute(),)),
-        extractor=FakeExtractor(),
-        scorer=KeywordScorer(),
-        judge=FakeJudge(),
-    )
-    result = await collector.run(
-        Goal(text="ports", seeds=("https://example.org/start",)),
-        Scope(allowed_hosts=("example.org",), max_depth=1, content_types=("text/html",)),
-    )
-    # Reader revalidates retained sources, provenance and receipt accounting.
-    restored = Harvest.model_validate_json(result.model_dump_json())
-    print(restored.receipt.stop_reason)
-
-
-asyncio.run(main())
-```
-
-This example makes no network or real model calls and proves no research
-accuracy. For actual collection bind `CurlRoute`, configured extraction and
-scoring adapters, and the self-hosted judge through their ports. For intent-only
-research, inject those into `ResearchLoop` alongside `GroundedSearch`,
-`IntentPlanner`, `ResearchAnalyst` and `AnswerReviewer`, then call
-`run(ResearchRequest(intent="your research question"))`. `SearxSearch` is the
-implemented search adapter.
-
-### Configured intent API
-
-The configured collector assembles real adapters, so applications need not manually
-wire every port. Unlike the offline smoke above, this needs your configured
-services and the adapted `examples/collector.toml` template:
+`Collector` assembles the native adapters and runs the full intent workflow:
 
 ```python
 import asyncio
@@ -358,145 +74,198 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Use the [collector guide](docs/COLLECTOR.md) to configure actual private models,
-source routing, extraction, optional graph/journal and separately supplied
-credentials. This API is included in `ghimera==0.3.0`, not the old `go-spider==0.2.0` wheel. The
-lower-level APIs remain supported for custom providers and composition.
+Planning, discovery, collection, assessment, answer generation and independent
+review share the configured allowances. A result is answered only after native
+coverage, citation, review and confidence checks pass. Budget exhaustion is not
+success; retained model assertions are not independent corroboration.
 
-The package also supplies a configured intent command that retains the
-full result, original documents and citations in a private, checksum-sealed archive:
+Supply model and source credentials separately through the documented inputs,
+not secret values in TOML. Credentials are scoped to their exact configured
+service or source session. Neither configuration nor a model response grants
+access to a destination. Lower-level `GoalLoop` and `ResearchLoop` remain
+available for explicitly injected providers and custom composition.
+
+### Command and private result archive
+
+Adapt the published `collector-command.toml`, `research-request.json` and
+collector recipe. Select a fresh run identity and output directory whose parent
+already exists on your storage volume:
 
 ```bash
 python -m ghimera --job /absolute/path/collector-command.toml --max-job-bytes 100000
 ```
 
-See the [command guide](docs/COLLECTOR_COMMAND.md) and
-`examples/collector-command.toml`. Existing output identities are never overwritten;
-partial results remain partial. This command is not in the published 0.2.0 wheel.
+The `ghimera` executable runs the same command. It retains the full typed result,
+original documents, native text, provenance, observations and citations in a
+private checksum-sealed archive. Stdout is a small receipt, not the answer.
+Existing output identities are never overwritten; partial results stay partial.
+Optional credential bindings name environment variables, not credential values.
+See [command configuration and readback](docs/COLLECTOR_COMMAND.md).
 
-The following guides cover the existing lower-level wiring:
+## Authorized sources and discovery routes
 
-| Area | Guide |
-|---|---|
-| Intent, discovery, coverage and answer review | [Intent research](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C3_RESEARCH.md) |
-| Model roles, credentials and native evidence context | [Self-hosted models](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C3_MODELS.md) |
-| Reference vectors, encoding and frontier ranking | [Embedding scoring](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C3_EMBEDDING_SCORING.md) |
-| Open web and native onion routing | [Tor policy](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/TOR.md) |
-| Browser isolation, resources and redirects | [Browser rendering](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C1_BROWSER.md) |
-| HTML extraction and adaptive locators | [HTML extraction](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C2_HTML.md) |
-| DOCX/native PDF and offline artifacts | [Document extraction](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C2_DOCUMENTS.md) |
-| Canonical and near-duplicate source evidence | [Deduplication](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C2_DEDUP.md) |
-| Configurable research graphs | [Research graph](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/RESEARCH_GRAPH.md) |
-| Architecture, contracts and completion tracker | [Specification](https://github.com/ginkorea/ghimera/blob/v0.3.0/docs/C0.md) |
+Collection is not restricted to anonymous sources. Your authorized cookies or
+headers can be supplied through [source sessions](docs/SOURCE_SESSIONS.md),
+with exact origin/path scope. Login, paywall and challenge refusals are not
+permission to bypass controls. Robots are honored by default; an override needs
+an explicit, reasoned exact-host decision and does not disable access refusal.
 
-## Scope and limitations
+- **Direct HTTP:** public-network admission, pinned DNS, per-hop redirect
+  checks, robots, pacing and byte/time budgets apply at the native fetch boundary.
+- **Tor and onion:** explicitly select the Tor route for public web or native
+  v3 onion sources. A failed Tor route never silently falls back to direct.
+  Private model control uses its separate service boundary. See [Tor policy](docs/TOR.md).
+- **Browser and human assistance:** isolated Patchright rendering routes admitted
+  resources through the parent fetch boundary. Alternatively, explicitly bind
+  your authorized dedicated Chromium session or caller-owned page and complete
+  normal login/challenge interaction there. Native capture resumes in that same
+  session; there is no personal-profile copying or anonymous fallback. The
+  [interactive command](docs/TERMINAL_ASSISTANCE.md) accepts request-bound
+  resume/decline input, never passwords, cookies or MFA values in the terminal.
+- **MCP:** borrow an explicitly initialized, caller-bound MCP session for leads;
+  tool names and result mappings are configured. Source originals still require
+  their own admitted fetch. No platform registry or implicit session is needed.
+  See [MCP leads](docs/MCP_LEADS.md).
+- **Ahmia and other discovery providers:** use an explicitly configured
+  operator-owned Ahmia-compatible index, SearXNG, or configured web/onion/MCP
+  providers. Fan-out, ordered fallback, switching and per-provider budgets are
+  explicit. No onion-index service is bundled. See
+  [discovery routing](docs/DISCOVERY_ROUTING.md) and [Ahmia integration](docs/AHMIA_INTEGRATION.md).
 
-Robots are honored by default. An override requires a recorded, reasoned,
-exact-host configuration decision; it does not disable login/paywall refusal.
-Post-release source adds an opt-in local challenge gateway with bounded,
-exact-origin clearance reuse; see [challenge recovery](docs/CHALLENGES.md).
-That addition is not in the published 0.3.0 artifacts and does not guarantee
-universal CAPTCHA solving or provide an authenticated-site bypass.
+Separately deployed [FlareSolverr/Byparr challenge gateways](docs/CHALLENGES.md)
+support bounded, origin-scoped recovery; they are not universal CAPTCHA solvers.
+Transport support, including verified browser-over-Tor capture, is not an
+anonymity guarantee or source-access authority.
 
-The defined-ontology profile provides separately configured semantic
-verification, quarantined proposals and source-bound coverage gaps that can
-motivate follow-up discovery. See [semantic verification](docs/SEMANTIC_VERIFICATION.md).
-Model agreement is not corroboration; real organizational extraction quality
-remains an open acceptance item.
-An explicit `ghimera.semantic-verification/2` recipe additionally separates
-named-instance/type checks from relationship entailment, direction and dates.
-Contradictory summaries refuse instead of overriding a failed dimension;
-the original review recipe remains unchanged. See the non-active
-[dimensioned example](examples/semantics-factorized.toml).
-An explicit version-4 [batched review profile](docs/SEMANTIC_BATCHING.md)
-preserves the complete original proposal while limiting assessments per answer
-and retaining a separate coverage call. Its bounds and budgets are configured;
-it does not claim to fix a model that returns no final answer.
+## Native evidence, retrieval and graphs
 
-The semantic extraction stage can also feed a configured, bounded
-graph view into follow-up research planning. Queries retain references to the
-observed entities/relations and omissions remain explicit; see
-[graph-aware planning](docs/GRAPH_PLANNING.md). Explicit completed-round
-[suspend/resume](docs/CONTINUATION.md) preserves evidence, acknowledged graph,
-pending frontier and cumulative budgets across processes, through the library
-and a [versioned resumable command](docs/COMMAND_CONTINUATION.md). Alias resolution,
-fine-grained interrupted-call reconciliation and real organizational-network
-quality acceptance remain open.
-Tor routing is a transport capability, not a guarantee of anonymity or authority
-to access a source.
+- **Documents:** HTML/Markdown, native PDF and DOCX, hash-pinned owned-file seeds,
+  configured feeds and source APIs enter the native extraction path. Browser
+  downloads and inline bodies retain their acquisition provenance. References,
+  next-page links and citing-source discovery are bounded frontier work; a search
+  hit does not prove a citation exists. See [documents](docs/C2_DOCUMENTS.md),
+  [local inputs](docs/LOCAL_INPUTS.md), [browser downloads](docs/BROWSER_DOWNLOADS.md)
+  and [references](docs/C3_REFERENCES.md).
+- **OCR and images:** configured offline language-routed OCR, PDF layout/tables
+  and column-aware reading order preserve originals and native locators.
+  Selective image admission filters logos before download; accepted images and
+  PDF figure crops retain OCR regions and optional separately reviewed vision
+  claims. Full scanned-PDF model readings remain identified as generated, not
+  native text. See [visuals](docs/VISUALS.md) and [PDF transcription](docs/PDF_TRANSCRIPTION.md).
+- **Source-aware vectors:** the explicitly owned disk corpus keeps originals,
+  chunks, text/OCR/visual provenance and model-bound vectors. Configured hybrid
+  lexical/vector retrieval returns source-qualified leads. A retained reader can
+  supply original evidence to current assessment without refetching it or
+  treating old judgments as new. Source age is not inferred; similarity is not
+  calibrated confidence. See [corpus storage](docs/EVIDENCE_CORPUS.md),
+  [corpus discovery](docs/GROUNDED_DISCOVERY.md) and [retained evidence](docs/RETAINED_EVIDENCE.md).
+- **Graphs and citations:** configured semantic extraction and separate review
+  preserve source-local entity/relationship assertions, quoted spans, dates and
+  omissions. Graph-aware planning can pursue evidence gaps; reversible dated
+  identity decisions do not merge away source originals. Answers retain native
+  citation bounds and evidence basis. See [semantic verification](docs/SEMANTIC_VERIFICATION.md),
+  [graph planning](docs/GRAPH_PLANNING.md) and [identity planning](docs/IDENTITY_PLANNING.md).
+- **Durable observations:** native journals, source-work records and optional
+  conditional refresh preserve original spend, uncertainty and source versions.
+  A receipt proves the documented storage/readback checks, not publisher truth
+  or model accuracy. See [journals](docs/RUN_JOURNAL.md),
+  [source work](docs/SOURCE_WORK.md) and [source refresh](docs/SOURCE_REFRESH.md).
 
-Collection is not limited to anonymous access. Supply your own authorized
-cookies or headers through explicitly configured source sessions, with exact
-origin/path scope and no credential values in receipts. Browser resources use
-the same parent-owned session boundary. See [authorized sessions](docs/SOURCE_SESSIONS.md).
+Corpus use is explicit: library callers supply the native corpus/reader;
+the configured service can own it. The published standalone collection command
+does not itself create or bind a disk corpus. `PersistentCollector` composes
+collection with acknowledged corpus handoff; a failed handoff retains completed
+work for persistence-only retry rather than another crawl.
 
-Source/search requests run on the host executing the crawler. Model control is
-a separate private-service boundary. Your application owns authorization,
-deployment and storage; no external scheduler or registry is required to import
-or use the library.
+## Unattended service, delivery and continuation
 
-Configurable source expansion follows observed document URLs and discovers
-candidate citing sources through your search provider. Depth, host policy and
-budgets live in `[references]`, not in Python. Source hashes and native locators
-are retained; a citing-source search hit is not proof that a citation exists.
-See [reference expansion](docs/C3_REFERENCES.md).
-
-For durable observations, configure `[journal]` and pass a unique `run_id`.
-The collector persists JSONL events before acknowledgment and seals a completion
-summary only after receipt reconciliation. Interrupted prefixes remain inspectable
-without silently refetching sources. See [run journals](docs/RUN_JOURNAL.md).
-
-The 0.4.7 [source-work extension](docs/SOURCE_WORK.md) captures fresh web
-and owned-file originals before processing, accepted results, queued web intents,
-and complete pending local-file batches. It also records admission of an already
-read corpus original before current graph/model work, without inventing a new
-fetch. Use its explicit configuration beside the native journal; inspection does
-not contact sources, retry uncertain calls or print private input paths.
-Quiescent continuation preserves pending work and the original budgets.
-Arbitrary interrupted-call reconciliation and whole-session recovery remain
-open requirements, not claims made by these records.
-
-Still required for the complete planned spider: the remaining browser adapters,
-representative publisher/locator acceptance, full PDF/OCR and Marker validation,
-real reference/cited-by adequacy, real served-model quality/admission and
-calibrated decision policy and live runtime/egress acceptance.
-The repository's detailed tracker retains those requirements; this release
-does not erase them or describe fixture results as real-world model accuracy.
-
-## Development
+Adapt the published `collection-service.toml`: choose private storage, bounded
+jobs/connections, the collector recipe and the named bearer-credential input.
+Create optional corpus/outbox/destination stores through their native APIs before
+startup. First startup explicitly creates the service store:
 
 ```bash
-git clone https://github.com/ginkorea/ghimera.git
-cd ghimera
-uv sync --locked --extra html --extra documents --extra browser --python 3.11
-# Explicit browser/isolation paths are required for the complete gate.
-export CHIMERA_TEST_BROWSER=/absolute/path/to/compatible/chrome
-export CHIMERA_TEST_ISOLATOR=/absolute/path/to/bwrap
-bash scripts/gate.sh
-uv build --no-sources
+ghimera-service --config /absolute/path/collection-service.toml \
+  --max-config-bytes 1000000 --create-service-store
 ```
 
-The gate checks the actual interpreter/import path, lockfile, Ruff, strict mypy
-and the entire test suite. Browser tests refuse absent acceptance prerequisites
-rather than pretending they ran. Evidence records distinguish protocol fixtures,
-installed-artifact checks, public-corpus acceptance and production activation.
+Reopen the same store without `--create-service-store`. Every route requires the
+configured bearer: run submission/status, pause/resume/cancel, health, manifests
+and optional corpus query/delivery routes. The included HTTP server is loopback
+only; off-host exposure needs your authenticated TLS boundary and supervisor.
+Unattended service does not inherit interactive terminal assistance.
 
-## Migration from go-spider
+Pause takes effect at a completed checkpoint quantum, not at an arbitrary
+in-flight call. Native [completed-round continuation](docs/CONTINUATION.md)
+preserves the original run, frontier, graph acknowledgement and cumulative
+budgets. Durable job/archive receipts and archive-only handoff retries prevent
+an acknowledged completed result from becoming a fresh collection.
 
-Install `ghimera==0.3.0` explicitly; this is a new distribution, not an in-place
-rename of old PyPI releases. Use `from ghimera import Collector, GhimeraConfig`,
-`ghimera.*` for submodules, and `ghimera` or `python -m ghimera` for the command.
-The legacy root `from chimera import Collector, ChimeraConfig` and
-`python -m chimera` forward to the same implementation. Old nested
-`chimera.*` imports must migrate; there is no second implementation or import hook.
-Existing versioned `chimera.*` configuration, graph, harvest, journal and result
-schemas are retained so existing saved evidence does not change identity.
+An explicit outbox and `ghimera-delivery` worker support background delivery.
+The configured remote adapter uses guarded PUT and exact readback; destination
+readback precedes acknowledgement and optional local-payload pruning. Retention,
+audit rotation and optional compaction are bounded configuration. A local
+destination is not off-host backup. See the [service guide](docs/OPERATIONS_CANDIDATE.md)
+and [delivery lifecycle](docs/DELIVERY_OUTBOX.md). Destination durability, outage/
+scale behavior and deployed off-host acceptance remain operator requirements.
 
-The v0.1.0 `spider_core` API and old `spider` command are not supplied; keep
-`go-spider==0.1.0` while migrating those applications. The old cloud-client,
-VPN-manager and implicit fallback design is not retained. Prototype source
-remains in Git history.
+## Unpublished 0.4.11 candidate
 
-See [CHANGELOG.md](https://github.com/ginkorea/ghimera/blob/v0.3.0/CHANGELOG.md) for release changes. Josh Gompert maintains
-the project at [ginkorea/ghimera](https://github.com/ginkorea/ghimera).
-Licensed under [MIT](https://github.com/ginkorea/ghimera/blob/v0.3.0/LICENSE), matching the existing PyPI licence declaration.
+These opt-in source capabilities are not in the published 0.4.10 package:
+
+- [Research recovery](docs/RESEARCH_RECOVERY.md) and [service restart admission](docs/SERVICE_RECOVERY.md)
+  restore exact acknowledged research-model boundaries with original identities,
+  output reservation and budgets. Retained ACKs replay locally; unknown outcomes
+  remain held and charged. Recovery does not promise immediate pause.
+- Explicit [model](docs/MODEL_UNKNOWN_RECONCILIATION.md) and
+  [encoding](docs/ENCODING_RECOVERY.md) decisions can authorize one separately
+  charged bounded attempt without erasing or claiming to resolve the original
+  uncertain outcome. They are not automatic retries or budget resets.
+- [Completed-source recovery](docs/SOURCE_COMPLETION_RECOVERY.md) can adopt an
+  atomic serial source acknowledgement, preserving the original cursor, dedup,
+  frontier, references, graph and spend. Selected unsupported overlap refuses;
+  ordinary concurrent collection is unchanged.
+- [Run-bound learned retrieval](docs/RESEARCH_RERANKING.md),
+  [identity proposal/review](docs/IDENTITY_AUTOMATION.md),
+  [contribution-aware document judgment](docs/DOCUMENT_JUDGMENT.md) and
+  [intent-ranked native windows](docs/SEMANTIC_WINDOW_SELECTION.md) have explicit
+  recipes and audit boundaries. They do not establish real ranking, identity or
+  organizational-research accuracy.
+
+Arbitrary mid-source, concurrent, discovery/retained-reader or graph interruptions
+are not transparently adopted. Unknown calls, torn tails, changed source/corpus/
+recipe/model identities and active writers remain guarded holds unless a
+specifically supported native decision or acknowledged boundary admits them.
+
+## Acceptance limits and further reading
+
+Real served-model quality, calibrated decisions, multilingual omission/citation
+adequacy, organizational relationships and reference/cited-by coverage remain
+open acceptance work. Native-script retention is not a language-quality claim:
+Simplified Chinese scanned-PDF quality remains unaccepted. OCR text is not a
+diagram's arrows, and model agreement is not corroboration.
+
+Marker validation, alternate passive browser adapters, representative entitled
+publisher/locator behavior and model-driven onion investigation remain separate
+requirements. Byparr's Camoufox-backed gateway is not a passive Camoufox renderer.
+Controlled protocol fixtures, installed-wheel checks and bounded real public
+captures establish different things; none substitutes for those requirements.
+
+Use the [core completion tracker](docs/PRD_INFRASTRUCTURE.md) for current gaps,
+[architecture](docs/C0.md) for the original contracts, and [CHANGELOG](CHANGELOG.md)
+for release history. Guides/examples in this source tree may include candidate
+features; the [v0.4.10 tree](https://github.com/ginkorea/ghimera/tree/v0.4.10)
+is the matching reference for the published wheel.
+
+## Migration
+
+Install `ghimera==0.4.10` explicitly when migrating from `go-spider`. Use
+`from ghimera import Collector, GhimeraConfig`, `ghimera.*` submodules and
+`ghimera` or `python -m ghimera`. The legacy root `chimera` import and
+`python -m chimera` forward to the same implementation; old nested `chimera.*`
+imports must migrate. Existing versioned `chimera.*` evidence/configuration
+schemas retain their identities. The old `spider_core` API and `spider` CLI are
+not supplied; prototype releases remain in Git history.
+
+Maintained by Josh Gompert at [ginkorea/ghimera](https://github.com/ginkorea/ghimera).
+Licensed under [MIT](LICENSE).
