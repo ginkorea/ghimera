@@ -1,0 +1,14 @@
+# Inert exact command /4 using source-completion execution /3.
+# Replace the digest only with the acknowledged native source capsule digest.
+schema = "ghimera.collector-command/4"
+config_path = "/var/lib/ghimera/operator/collector.toml"
+output_directory = "/var/lib/ghimera/results/original-unfinished-output"
+run_id = "original-run"
+max_input_bytes = 1000000
+max_result_bytes = 10000000
+
+[execution]
+schema = "ghimera.command-execution/3"
+operation = "recover"
+recovery_boundary = "source_completion"
+snapshot_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"

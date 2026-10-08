@@ -181,6 +181,23 @@ class GhimeraConfig(BaseModel):
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
+        if (
+            self.research_recovery is not None
+            and self.research_recovery.source_completion is not None
+        ):
+            if (
+                self.execution is not None
+                or self.source_work is None
+                or self.source_work.frontier is None
+            ):
+                raise ValueError(
+                    "source recovery requires serial execution and native source frontier"
+                )
+            if (
+                self.research_recovery.source_completion.max_capsule_bytes
+                >= self.source_work.max_store_bytes
+            ):
+                raise ValueError("source capsule must fit within native source-work capacity")
         if self.research_recovery is not None and (
             self.journal is None
             or self.research is None

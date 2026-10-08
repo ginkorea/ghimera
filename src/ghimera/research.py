@@ -73,6 +73,11 @@ from ghimera.research_types import (
 )
 from ghimera.search import GroundedSearch
 from ghimera.search_history import SearchHistory
+from ghimera.source_completion import (
+    SourceCompletionRead,
+    SourceCompletionRuntime,
+    SourceCompletionSnapshot,
+)
 
 T = TypeVar("T", bound=ResearchModelResult)
 R = TypeVar("R", bound=ResearchRecord)
@@ -179,7 +184,9 @@ class ResearchScopeCompiler:
     def hosts(self) -> tuple[str, ...]:
         return tuple(sorted(self._hosts))
 
-    def restore_hosts(self, checkpoint: ResearchCheckpoint | ResearchControlSnapshot) -> None:
+    def restore_hosts(
+        self, checkpoint: ResearchCheckpoint | ResearchControlSnapshot | SourceCompletionSnapshot
+    ) -> None:
         observed = {
             urlsplit(row.url).hostname
             for row in checkpoint.progress.harvest.ledger
@@ -729,7 +736,16 @@ class ResearchLoop:
             search_revision=self._search.identity[1],
         )
 
-    async def recover(self, run_id: str, *, snapshot_sha256: str) -> ResearchResult:
+    def source_runtime(self) -> SourceCompletionRuntime:
+        return self._collector.source_runtime()
+
+    async def recover(
+        self,
+        run_id: str,
+        *,
+        snapshot_sha256: str,
+        boundary: Literal["model_return", "source_completion"] = "model_return",
+    ) -> ResearchResult:
         """Adopt one acknowledged model return at its saved native phase.
 
         Unknown calls and later source/graph effects require reconciliation;
@@ -738,6 +754,34 @@ class ResearchLoop:
         policy = self._config.research_recovery
         if policy is None:
             raise ValueError("model-boundary recovery requires explicit configured policy")
+        if boundary == "source_completion":
+            from ghimera.source_work import SourceWorkStore
+
+            source = SourceWorkStore.completion(
+                self._config,
+                run_id,
+                snapshot_sha256,
+                expected_models=self.recovery_models(),
+                expected_runtime=self.source_runtime(),
+            )
+            saved_source = source.snapshot
+            downtime = time.time() - saved_source.saved_at
+            if downtime < 0:
+                raise ValueError("wall clock moved backwards since source completion")
+            ResearchScopeCompiler(self._policy).restore_hosts(saved_source)
+            session = await self._collector.restore(
+                run_id,
+                saved_source.progress.harvest,
+                saved_source.session,
+                search_calls=saved_source.progress.search_calls,
+                downtime_seconds=downtime,
+            )
+            try:
+                return await self._drive(
+                    saved_source.request, session, run_id=run_id, source_recovery=source
+                )
+            finally:
+                session.close()
         recovery = ResearchRecoveryStore(self._config, run_id, policy).read(
             snapshot_sha256,
             expected_models=self.recovery_models(),
@@ -939,11 +983,18 @@ class ResearchLoop:
         run_id: str | None,
         checkpoint: ResearchCheckpoint | None = None,
         recovery: ResearchRecoveryRead | None = None,
+        source_recovery: SourceCompletionRead | None = None,
         suspend_after_rounds: int | None = None,
     ) -> ResearchResult:
-        if checkpoint is not None and recovery is not None:
+        if sum(item is not None for item in (checkpoint, recovery, source_recovery)) > 1:
             raise ValueError("choose one native continuation boundary")
-        saved = recovery.snapshot if recovery is not None else None
+        saved = (
+            recovery.snapshot
+            if recovery is not None
+            else source_recovery.snapshot
+            if source_recovery is not None
+            else None
+        )
         progress = (
             checkpoint.progress if checkpoint is not None else saved.progress if saved else None
         )
@@ -982,6 +1033,73 @@ class ResearchLoop:
         before_answers = set(saved.before_answers) if saved else set()
         assessment_context: Literal["post_collection", "retained_first"] = (
             saved.assessment_context if saved else "post_collection"
+        )
+        quantum_start = session.budget.fetches
+        collection_leg: Literal["primary", "cited_by"] = "primary"
+        collection_scope: Scope | None = None
+
+        def source_control(starting_fetches: int, stop: str) -> SourceCompletionSnapshot:
+            policy = self._config.research_recovery
+            if (
+                policy is None
+                or policy.source_completion is None
+                or run_id is None
+                or plan is None
+                or collection_scope is None
+            ):
+                raise ValueError("completed source requires native research round control")
+            current = ResearchResult(
+                schema="chimera.research-result/3"
+                if reuse is not None
+                else "chimera.research-result/2",
+                status="partial",
+                stop_reason="rounds_exhausted",
+                harvest=self._collector.snapshot(session),
+                questions=questions,
+                rounds=tuple(rounds),
+                unresolved=tuple(q.id for q in questions),
+                answer=None,
+                review=None,
+                planner=self._planner.model,
+                analyst=self._analyst.model,
+                reviewer=self._reviewer.model,
+                search_provider=self._search.identity[0],
+                search_revision=self._search.identity[1],
+                search_calls=session.budget.search_calls,
+                search_observations=history.observations,
+                retrieval=reuse.report if reuse is not None else None,
+            )
+            return SourceCompletionSnapshot(
+                schema="ghimera.source-completion-control/1",
+                run_id=run_id,
+                saved_at=time.time(),
+                max_capsule_bytes=policy.source_completion.max_capsule_bytes,
+                request=request,
+                progress=current,
+                runtime=self.source_runtime(),
+                session=session.checkpoint_state(),
+                admitted_hosts=compiler.hosts,
+                round_number=number,
+                current_plan=plan,
+                assessment=assessment,
+                assessment_context=assessment_context,
+                discovered_urls=urls,
+                collection_stop=stop,
+                before_documents=tuple(sorted(before_documents)),
+                before_answers=tuple(sorted(before_answers)),
+                allow_retained_completion=allow_retained_completion,
+                scope=collection_scope,
+                leg=collection_leg,
+                quantum_start=quantum_start,
+                starting_fetches=starting_fetches,
+                fetch_limit=self._policy.max_pages_per_round
+                if collection_leg == "primary"
+                else self._policy.max_pages_per_round - (starting_fetches - quantum_start),
+            )
+
+        source_policy = self._config.research_recovery
+        completion_enabled = (
+            source_policy is not None and source_policy.source_completion is not None
         )
 
         def before_model(event: ModelEvent, model: ModelIdentity, inputs: ResearchRecord) -> None:
@@ -1101,7 +1219,10 @@ class ResearchLoop:
                     and saved.phase == "assessment"
                     and number == saved.round_number
                 )
-                if not resuming_assessment:
+                resuming_source = (
+                    isinstance(saved, SourceCompletionSnapshot) and number == saved.round_number
+                )
+                if not resuming_assessment and not resuming_source:
                     planning = (
                         saved.model_request
                         if (
@@ -1173,6 +1294,7 @@ class ResearchLoop:
                     and reuse.report.policy.assess_before_discovery
                     and allow_retained_completion
                     and not request.seeds
+                    and not resuming_source
                     and (not resuming_assessment or assessment_context == "retained_first")
                 ):
                     assessment_context = "retained_first"
@@ -1206,9 +1328,11 @@ class ResearchLoop:
                         )
                         reason = "answered"
                         break
-                if not resuming_assessment or assessment_context == "retained_first":
+                if not resuming_source and (
+                    not resuming_assessment or assessment_context == "retained_first"
+                ):
                     urls = await self._discover(session, plan.queries, compiler, trace, history)
-                if number == 1 and not resuming_assessment:
+                if number == 1 and not resuming_assessment and not resuming_source:
                     allowed_seeds: list[str] = []
                     for seed in request.seeds:
                         if compiler.accept(seed):
@@ -1217,33 +1341,61 @@ class ResearchLoop:
                             self._refuse(session, RefusalCode.OUT_OF_SCOPE, url=seed)
                     seeds = tuple(allowed_seeds)
                     urls = tuple(dict.fromkeys(seeds + urls))
-                scope = compiler.scope()
-                if not resuming_assessment or assessment_context == "retained_first":
+                scope = (
+                    saved.scope
+                    if resuming_source and isinstance(saved, SourceCompletionSnapshot)
+                    else compiler.scope()
+                )
+                collection_scope = scope
+                if not resuming_source and (
+                    not resuming_assessment or assessment_context == "retained_first"
+                ):
                     collection_stop = "frontier_empty"
-                quantum_start = session.budget.fetches
+                quantum_start = (
+                    saved.quantum_start
+                    if resuming_source and isinstance(saved, SourceCompletionSnapshot)
+                    else session.budget.fetches
+                )
                 if scope is not None and (
                     not resuming_assessment or assessment_context == "retained_first"
                 ):
-                    collection_stop = await self._collector.collect(
-                        session,
-                        scope,
-                        urls,
-                        fetch_limit=self._policy.max_pages_per_round,
-                        allow_grade=False,
+                    collection_leg = (
+                        saved.leg
+                        if resuming_source and isinstance(saved, SourceCompletionSnapshot)
+                        else "primary"
                     )
-                    if collection_stop not in {"failed", "budget_exhausted"}:
+                    if not resuming_source or collection_stop == "frontier_empty":
+                        collection_stop = await self._collector.collect(
+                            session,
+                            scope,
+                            () if resuming_source else urls,
+                            fetch_limit=saved.fetch_limit
+                            if resuming_source and isinstance(saved, SourceCompletionSnapshot)
+                            else self._policy.max_pages_per_round,
+                            allow_grade=False,
+                            source_control=source_control if completion_enabled else None,
+                            starting_fetches=saved.starting_fetches
+                            if resuming_source and isinstance(saved, SourceCompletionSnapshot)
+                            else None,
+                        )
+                    if (
+                        collection_stop not in {"failed", "budget_exhausted"}
+                        and collection_leg == "primary"
+                    ):
                         cited_urls = await self._cited_by(session, scope, questions, history)
                         urls = tuple(dict.fromkeys(urls + cited_urls))
                         remaining = self._policy.max_pages_per_round - (
                             session.budget.fetches - quantum_start
                         )
                         if cited_urls and remaining > 0:
+                            collection_leg = "cited_by"
                             collection_stop = await self._collector.collect(
                                 session,
                                 scope,
                                 (),
                                 fetch_limit=remaining,
                                 allow_grade=False,
+                                source_control=source_control if completion_enabled else None,
                             )
                 if collection_stop in {"failed", "budget_exhausted"}:
                     rounds.append(

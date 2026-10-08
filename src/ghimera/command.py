@@ -29,7 +29,7 @@ from ghimera.result_archive import (
     bounded_file,
 )
 from ghimera.source_sessions import SourceCredentials
-from ghimera.source_work import SourceWorkFailure
+from ghimera.source_work import SourceWorkFailure, SourceWorkStore
 from ghimera.terminal_assistance import TerminalAssistanceConfig, TerminalHumanAssistant
 from ghimera.transport import Resolver
 
@@ -39,9 +39,9 @@ EnvName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
 
 class CommandExecution(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["ghimera.command-execution/1", "ghimera.command-execution/2"] = Field(
-        alias="schema"
-    )
+    schema_version: Literal[
+        "ghimera.command-execution/1", "ghimera.command-execution/2", "ghimera.command-execution/3"
+    ] = Field(alias="schema")
     operation: Literal["run", "resume", "recover"]
     checkpoint_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
         default=None, exclude_if=lambda value: value is None
@@ -52,16 +52,23 @@ class CommandExecution(BaseModel):
     snapshot_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    recovery_boundary: Literal["source_completion"] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def checkpoint_binding(self) -> "CommandExecution":
         if (self.operation == "resume") != (self.checkpoint_sha256 is not None):
             raise ValueError("only resume requires an explicit checkpoint digest")
         recovering = self.operation == "recover"
-        if recovering != (self.schema_version == "ghimera.command-execution/2") or recovering != (
-            self.snapshot_sha256 is not None
-        ):
+        if recovering != (
+            self.schema_version in {"ghimera.command-execution/2", "ghimera.command-execution/3"}
+        ) or recovering != (self.snapshot_sha256 is not None):
             raise ValueError("recovery requires execution /2 and its exact snapshot digest")
+        if (self.schema_version == "ghimera.command-execution/3") != (
+            self.recovery_boundary is not None
+        ):
+            raise ValueError("source completion requires execution /3 and explicit boundary")
         if recovering and self.suspend_after_rounds is not None:
             raise ValueError("model-boundary recovery cannot introduce a new suspension policy")
         return self
@@ -273,9 +280,15 @@ async def execute(
         if config.research_recovery is None or execution.snapshot_sha256 is None:
             raise ValueError("recovery requires the recipe's explicit policy and snapshot digest")
         request = (
-            ResearchRecoveryStore(config, options.run_id, config.research_recovery)
-            .read(execution.snapshot_sha256)
-            .snapshot.request
+            SourceWorkStore.completion(
+                config, options.run_id, execution.snapshot_sha256
+            ).snapshot.request
+            if execution.recovery_boundary == "source_completion"
+            else (
+                ResearchRecoveryStore(config, options.run_id, config.research_recovery)
+                .read(execution.snapshot_sha256)
+                .snapshot.request
+            )
         )
     elif execution is not None and execution.operation == "resume":
         if execution.checkpoint_sha256 is None:
@@ -333,7 +346,9 @@ async def execute(
             if execution.snapshot_sha256 is None:
                 raise ValueError("recovery requires its exact snapshot digest")
             result = await collector.recover(
-                options.run_id, snapshot_sha256=execution.snapshot_sha256
+                options.run_id,
+                snapshot_sha256=execution.snapshot_sha256,
+                boundary=execution.recovery_boundary or "model_return",
             )
         elif execution is not None and execution.operation == "resume":
             if execution.checkpoint_sha256 is None:

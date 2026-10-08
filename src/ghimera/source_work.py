@@ -11,6 +11,7 @@ import hashlib
 import sqlite3
 import sys
 import time
+from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,11 +21,19 @@ from pydantic import TypeAdapter
 from ghimera.config import GhimeraConfig
 from ghimera.journal import _run_path, read_journal
 from ghimera.journal_types import JournalHeader, digest
+from ghimera.model_work import uncertain_model_sequences, validate_model_rows
 from ghimera.models import Document, Goal, ModelIdentity, Page, RetainedOriginal
 from ghimera.private_database import PrivateDatabase
 from ghimera.refusals import GhimeraRefused
+from ghimera.research_recovery_types import ResearchRecoveryModels
+from ghimera.research_types import ResearchRequest
 from ghimera.retained_graph import validate_original
 from ghimera.session_state import SessionState
+from ghimera.source_completion import (
+    SourceCompletionRead,
+    SourceCompletionRuntime,
+    SourceCompletionSnapshot,
+)
 from ghimera.source_frontier import SourceFrontier
 from ghimera.source_work_types import (
     LocalSourceRequest,
@@ -76,6 +85,14 @@ class SourceWorkStore:
         self._operations: dict[str, Operation] = {}
         self._reservation = 0
         self._frontier: SourceFrontier | None = None
+        recovery = config.research_recovery
+        self._completion = recovery.source_completion if recovery is not None else None
+        self._completion_bytes = 0
+        schema = (
+            "ghimera.source-work-store/2"
+            if self._completion is not None
+            else "ghimera.source-work-store/1"
+        )
         try:
             if create:
                 self._owner.enter_context(self._private.writer())
@@ -89,18 +106,31 @@ class SourceWorkStore:
                 )
                 self._private.db.execute(
                     "INSERT INTO binding VALUES(1,?,?,0)",
-                    ("ghimera.source-work-store/1", self._header),
+                    (schema, self._header),
                 )
+                if self._completion is not None:
+                    self._private.db.execute(
+                        "CREATE TABLE source_completion(id INTEGER PRIMARY KEY CHECK(id=1),"
+                        " operation_id TEXT NOT NULL, operation_sha256 TEXT NOT NULL,"
+                        " payload BLOB NOT NULL, sha256 TEXT NOT NULL)"
+                    )
                 self._private.db.commit()
             else:
                 row = self._private.db.execute(
                     "SELECT schema,header FROM binding WHERE id=1"
                 ).fetchone()
-                if row != ("ghimera.source-work-store/1", self._header):
+                if row != (schema, self._header):
                     raise ValueError("source store does not belong to the recorded run")
                 operations = self._read_operations()
                 self._operations = {item.operation_id: item for item in operations}
                 self._reservation = sum(self._reserved(item) for item in operations)
+                if self._completion is not None:
+                    row = self._private.db.execute(
+                        "SELECT length(payload) FROM source_completion WHERE id=1"
+                    ).fetchone()
+                    self._completion_bytes = row[0] if row is not None else 0
+                    if self._completion_bytes > self._completion.max_capsule_bytes:
+                        raise ValueError("source control exceeds its declared byte bound")
             if self._policy.frontier is not None:
                 self._frontier = SourceFrontier(
                     self._private,
@@ -108,7 +138,10 @@ class SourceWorkStore:
                     create=create,
                     input_policy=self._config.local_inputs,
                 )
-                if self._reservation + self._frontier.payload_bytes > self._policy.max_store_bytes:
+                if (
+                    self._reservation + self._frontier.payload_bytes + self._completion_bytes
+                    > self._policy.max_store_bytes
+                ):
                     raise ValueError("source work and frontier exceed their shared capacity")
             if create:
                 self._private.seal_directory()
@@ -239,7 +272,13 @@ class SourceWorkStore:
             return self._policy.max_operation_bytes
         return len(item.model_dump_json().encode())
 
-    def _write(self, item: Operation, *, new: bool) -> None:
+    def _write(
+        self,
+        item: Operation,
+        *,
+        new: bool,
+        control: Callable[[], SourceCompletionSnapshot] | None = None,
+    ) -> None:
         if not self._writing:
             raise SourceWorkFailure("source-work writer is not owned by this session")
         try:
@@ -256,7 +295,10 @@ class SourceWorkStore:
                     + self._reserved(item)
                     - (self._reserved(previous) if previous is not None else 0)
                 )
-                if size + self._frontier_bytes > self._policy.max_store_bytes:
+                if (
+                    size + self._frontier_bytes + self._completion_bytes
+                    > self._policy.max_store_bytes
+                ):
                     raise ValueError("source-work byte capacity exhausted")
                 payload = item.model_dump_json().encode()
                 if len(payload) > self._policy.max_operation_bytes:
@@ -278,8 +320,44 @@ class SourceWorkStore:
                     self._private.db.execute(
                         "UPDATE binding SET operation_count=operation_count+1 WHERE id=1"
                     )
+                completion_bytes = self._completion_bytes
+                if control is not None:
+                    if self._completion is None or previous is None or item.state != "processed":
+                        raise ValueError(
+                            "source control requires explicit policy and a completed original"
+                        )
+                    # Stage only the proved terminal state during this SAME transaction.
+                    # The driver has naturally released its source operation and every
+                    # other operation must be quiescent. Failure rolls back both rows.
+                    self._operations[item.operation_id] = item
+                    try:
+                        self.assert_quiescent()
+                        snapshot = control()
+                        data = snapshot.model_dump_json().encode()
+                        self._validate_completion(snapshot)
+                    finally:
+                        self._operations[item.operation_id] = previous
+                    completion_bytes = len(data)
+                    if (
+                        completion_bytes > self._completion.max_capsule_bytes
+                        or size + self._frontier_bytes + completion_bytes
+                        > self._policy.max_store_bytes
+                    ):
+                        raise ValueError(
+                            "source completion exceeds configured shared storage capacity"
+                        )
+                    self._private.db.execute(
+                        "INSERT OR REPLACE INTO source_completion VALUES(1,?,?,?,?)",
+                        (
+                            item.operation_id,
+                            hashlib.sha256(payload).hexdigest(),
+                            data,
+                            hashlib.sha256(data).hexdigest(),
+                        ),
+                    )
             self._operations[item.operation_id] = item
             self._reservation = size
+            self._completion_bytes = completion_bytes
         except (OSError, ValueError, sqlite3.Error, GhimeraRefused) as exc:
             raise SourceWorkFailure("source work was not durably acknowledged") from exc
 
@@ -289,7 +367,12 @@ class SourceWorkStore:
 
     @property
     def _available_bytes(self) -> int:
-        return self._policy.max_store_bytes - self._reservation - self._frontier_bytes
+        return (
+            self._policy.max_store_bytes
+            - self._reservation
+            - self._frontier_bytes
+            - self._completion_bytes
+        )
 
     def enqueue(self, request: SourceCoordinates, priority: float, ledger_start: int) -> None:
         if not self._writing:
@@ -434,7 +517,14 @@ class SourceWorkStore:
             type(item).model_validate(dict(item.model_dump(), state="processing")), new=False
         )
 
-    def processed(self, token: SourceWorkToken, result: Document | None, ledger_end: int) -> None:
+    def processed(
+        self,
+        token: SourceWorkToken,
+        result: Document | None,
+        ledger_end: int,
+        *,
+        control: Callable[[], SourceCompletionSnapshot] | None = None,
+    ) -> None:
         item = self._get(token)
         if not isinstance(item, SourceOperation) or item.state != "processing":
             raise SourceWorkFailure("source processing was not started")
@@ -447,7 +537,99 @@ class SourceWorkStore:
                 finished_at=time.time(),
             )
         )
-        self._write(updated, new=False)
+        self._write(updated, new=False, control=control)
+
+    def _validate_completion(self, snapshot: SourceCompletionSnapshot) -> None:
+        journal = (
+            read_journal(self._config.journal, self._run_id)
+            if self._config.journal is not None
+            else None
+        )
+        h = snapshot.progress.harvest
+        if (
+            self._completion is None
+            or journal is None
+            or snapshot.run_id != self._run_id
+            or snapshot.max_capsule_bytes != self._completion.max_capsule_bytes
+            or h.receipt.effective_config != self._config
+            or journal.header.config != self._config
+            or journal.header.goal != h.goal
+            or journal.header.judge != h.receipt.judge
+            or journal.state != "unsealed"
+            or journal.incomplete_tail
+            or journal.rows != h.ledger
+            or uncertain_model_sequences(journal.rows)
+            or validate_model_rows(self._config.model_work, self._config.judge_budget, journal.rows)
+            != h.receipt.judge_calls
+            or any(
+                op.ledger_end is None or op.ledger_end > len(journal.rows)
+                for op in self._operations.values()
+            )
+        ):
+            raise ValueError("source completion requires the exact quiescent original journal")
+        self.verify_frontier(snapshot.session)
+
+    @classmethod
+    def completion(
+        cls,
+        config: GhimeraConfig,
+        run_id: str,
+        expected_sha256: str | None = None,
+        *,
+        expected_request: ResearchRequest | None = None,
+        expected_models: ResearchRecoveryModels | None = None,
+        expected_runtime: SourceCompletionRuntime | None = None,
+    ) -> SourceCompletionRead:
+        """Bounded read/admission under the native writer lock; never replay or repair."""
+        store = cls(config, run_id, create=False)
+        try:
+            with store._private.writer(), store._private.transaction():
+                if store._completion is None:
+                    raise ValueError("source completion recovery is not configured")
+                row = store._private.db.execute(
+                    "SELECT operation_id,operation_sha256,payload,sha256"
+                    " FROM source_completion WHERE id=1"
+                ).fetchone()
+                if row is None:
+                    raise ValueError("no atomic completed source control exists")
+                operation_id, operation_sha256, data, pin = row
+                if (
+                    not isinstance(data, bytes)
+                    or len(data) > store._completion.max_capsule_bytes
+                    or hashlib.sha256(data).hexdigest() != pin
+                    or expected_sha256 is not None
+                    and pin != expected_sha256
+                ):
+                    raise ValueError("source control differs from its original bounded digest")
+                operations = store._read_operations()
+                if (
+                    not operations
+                    or operations[-1].operation_id != operation_id
+                    or operations[-1].state != "processed"
+                    or hashlib.sha256(operations[-1].model_dump_json().encode()).hexdigest()
+                    != operation_sha256
+                ):
+                    raise ValueError("source control cannot omit later or changed source intents")
+                snapshot = SourceCompletionSnapshot.model_validate_json(data)
+                if (
+                    expected_request is not None
+                    and snapshot.request != expected_request
+                    or expected_models is not None
+                    and snapshot.models != expected_models
+                    or expected_runtime is not None
+                    and snapshot.runtime != expected_runtime
+                ):
+                    raise ValueError("source control request or current collaborators changed")
+                store._validate_completion(snapshot)
+                if operations[-1].ledger_end != len(snapshot.progress.harvest.ledger):
+                    raise ValueError("source completion ledger cursor changed")
+                if config.journal is None:
+                    raise ValueError("source completion lost journal policy")
+                return SourceCompletionRead(
+                    snapshot=snapshot, journal=read_journal(config.journal, run_id), sha256=pin
+                )
+        finally:
+            store.close()
 
     def completed_retained(self, token: SourceWorkToken, ledger_end: int) -> None:
         item = self._get(token)
@@ -541,15 +723,19 @@ class SourceWorkStore:
     def _report(self, active: bool) -> SourceWorkReport:
         # One read snapshot binds the frontier to its acquisition acknowledgements.
         # A live writer may otherwise advance between the two SELECTs.
-        self._private.db.execute("BEGIN")
+        own_transaction = not self._private.db.in_transaction
+        if own_transaction:
+            self._private.db.execute("BEGIN")
         try:
             operations = self._read_operations()
             frontier = self._frontier.read() if self._frontier is not None else None
         finally:
-            self._private.db.rollback()
+            if own_transaction:
+                self._private.db.rollback()
         if (
             sum(self._reserved(item) for item in operations)
             + sum(len(item.model_dump_json().encode()) for item in frontier or ())
+            + self._completion_bytes
             > self._policy.max_store_bytes
         ):
             raise ValueError("source work and frontier exceed their shared capacity")

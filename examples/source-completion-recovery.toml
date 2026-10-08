@@ -1,0 +1,21 @@
+# Inert policy fragment: explicitly merge into an operator-owned collector recipe.
+# Requires existing research, retained model work, journal, source_work.frontier.
+# It has no endpoint, credential, active job, path or implicit scheduler.
+[research_recovery]
+schema = "ghimera.research-recovery/2"
+max_snapshot_bytes = 4000000
+clock_policy = "include_downtime"
+tail_policy = "acknowledged_model_return"
+
+[research_recovery.source_completion]
+schema = "ghimera.source-completion-recovery/1"
+execution = "serial"
+max_capsule_bytes = 8000000
+
+# Optional collection-service /2 recovery policy fragment. Original per-job
+# adoption attempts persist across restarts; this policy selects SOURCE cuts.
+[service_recovery]
+schema = "ghimera.service-recovery/2"
+boundary = "source_completion"
+on_restart = "hold"
+max_adoption_attempts = 1

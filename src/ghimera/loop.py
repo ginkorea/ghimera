@@ -53,6 +53,7 @@ from ghimera.scoring import Scorer
 from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, SemanticStage
 from ghimera.semantic_recovery import SemanticRecoveryStopped
 from ghimera.session_state import SessionState
+from ghimera.source_completion import SourceCompletionRuntime
 from ghimera.source_work_types import LocalSourceRequest, SourceCoordinates, SourceRequest
 from ghimera.visual_evidence import graph_visual_readings, project_visuals
 from ghimera.visual_stage import VisualStage
@@ -62,7 +63,8 @@ CollectionStop = StopReason | Literal["round_limit"]
 
 if TYPE_CHECKING:
     from ghimera.research_recovery_types import ResearchRecoveryRead
-    from ghimera.source_work import SourceWorkStore
+    from ghimera.source_completion import SourceCompletionSnapshot
+    from ghimera.source_work import SourceWorkStore, SourceWorkToken
 
 
 class CollectionSession:
@@ -88,6 +90,7 @@ class CollectionSession:
         self._reference_hops: dict[str, int] = {}
         self._reference_origins: dict[str, str] = {}
         self._window_start, self._window_new, self._last_grade = 0, 0, 0
+        self._driving = False
         self._closed = False
         self._operating = False
         self._slots = StageSlots(budget.config.execution, budget)
@@ -182,6 +185,17 @@ class CollectionSession:
         if self.source_work is not None:
             self.source_work.verify_frontier(state)
         return state
+
+    @contextmanager
+    def serial_driver(self) -> Iterator[None]:
+        """Own one serial driver, independently from its naturally ended I/O."""
+        if self._closed or self._operating or self._driving:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        self._driving = True
+        try:
+            yield
+        finally:
+            self._driving = False
 
     @contextmanager
     def operation(self) -> Iterator[None]:
@@ -399,6 +413,14 @@ class GoalLoop:
             ledger.close()
             raise
 
+    def source_runtime(self) -> SourceCompletionRuntime:
+        return SourceCompletionRuntime(
+            extractor_revision=self._extractor.revision,
+            scorer_name=self._scorer.name,
+            scorer_cost=self._scorer.cost,
+            judge=self._judge.model,
+        )
+
     async def run(self, goal: Goal, scope: Scope, *, run_id: str | None = None) -> Harvest:
         session = await self.open(goal, run_id=run_id)
         try:
@@ -592,7 +614,33 @@ class GoalLoop:
         *,
         fetch_limit: int | None = None,
         allow_grade: bool = True,
+        source_control: "Callable[[int, str], SourceCompletionSnapshot] | None" = None,
+        starting_fetches: int | None = None,
     ) -> CollectionStop:
+        if source_control is not None:
+            policy = self._config.research_recovery
+            if (
+                policy is None
+                or policy.source_completion is None
+                or self._config.execution is not None
+                or session.source_work is None
+                or allow_grade
+                or fetch_limit is None
+            ):
+                raise ValueError(
+                    "completed source control requires explicit serial research policy"
+                )
+            with session.serial_driver():
+                return await self._collect_completed_serial(
+                    session,
+                    scope,
+                    seeds,
+                    fetch_limit=fetch_limit,
+                    source_control=source_control,
+                    starting_fetches=starting_fetches,
+                )
+        if session._driving:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         with session.operation():
             if self._config.execution is not None:
                 return await self._collect_parallel(
@@ -601,6 +649,77 @@ class GoalLoop:
             return await self._collect_serial(
                 session, scope, seeds, fetch_limit=fetch_limit, allow_grade=allow_grade
             )
+
+    async def _collect_completed_serial(
+        self,
+        session: CollectionSession,
+        scope: Scope,
+        seeds: tuple[str, ...],
+        *,
+        fetch_limit: int,
+        source_control: "Callable[[int, str], SourceCompletionSnapshot]",
+        starting_fetches: int | None,
+    ) -> CollectionStop:
+        if session._closed or session.budget.config != self._config or fetch_limit <= 0:
+            raise ValueError("source completion requires its original positive collection quantum")
+        budget, work = session.budget, session.source_work
+        if work is None:
+            raise ValueError("completed source control lost its native store")
+        start = budget.fetches if starting_fetches is None else starting_fetches
+        if not 0 <= start <= budget.fetches:
+            raise ValueError("original collection cursor exceeds acknowledged spend")
+        for seed in seeds:
+            if seed not in session._visited:
+                session.queue_source(scope, seed, 0, -1.0)
+        while session._frontier:
+            if budget.fetches - start >= fetch_limit:
+                return "round_limit"
+            _, url, depth = heapq.heappop(session._frontier)
+            if url in session._visited:
+                session.discard_source(scope, url, depth, "already_visited")
+                continue
+            session._visited.add(url)
+            completed: list[tuple[SourceWorkToken, Document | None]] = []
+
+            def captured(
+                token: "SourceWorkToken",
+                document: Document | None,
+                target: "list[tuple[SourceWorkToken, Document | None]]" = completed,
+            ) -> None:
+                target.append((token, document))
+
+            with session.operation():
+                result = await self._collect_source(
+                    session,
+                    scope,
+                    url,
+                    depth,
+                    completion=captured,
+                )
+            stop: CollectionStop | None = result
+            if (
+                stop is None
+                and budget.fetches - session._window_start >= self._config.saturation_window
+            ):
+                if session._window_new < self._config.saturation_min_new:
+                    stop = "saturated"
+                else:
+                    session._window_start, session._window_new = budget.fetches, 0
+            if completed:
+                token, document = completed[0]
+
+                def snapshot(result: CollectionStop | None = stop) -> "SourceCompletionSnapshot":
+                    return source_control(start, result or "frontier_empty")
+
+                work.processed(
+                    token,
+                    document,
+                    session.ledger.next_sequence,
+                    control=snapshot,
+                )
+            if stop is not None:
+                return stop
+        return "frontier_empty"
 
     async def _collect_serial(
         self,
@@ -648,7 +767,13 @@ class GoalLoop:
         return stop
 
     async def _collect_source(
-        self, session: CollectionSession, scope: Scope, url: str, depth: int
+        self,
+        session: CollectionSession,
+        scope: Scope,
+        url: str,
+        depth: int,
+        *,
+        completion: "Callable[[SourceWorkToken, Document | None], None] | None" = None,
     ) -> CollectionStop | None:
         budget, ledger = session.budget, session.ledger
         work, token = session.source_work, None
@@ -679,7 +804,10 @@ class GoalLoop:
                 work.processing(token)
             result = await self._process_page(session, page, url, depth, active_scope, parent_hops)
             if work is not None and token is not None:
-                work.processed(token, result, ledger.next_sequence)
+                if completion is None:
+                    work.processed(token, result, ledger.next_sequence)
+                else:
+                    completion(token, result)
         except asyncio.CancelledError:
             ledger.append(
                 LedgerRow(

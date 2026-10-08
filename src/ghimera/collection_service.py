@@ -85,9 +85,20 @@ Hold = Literal[
 class ServiceRecoveryPolicy(Record):
     """Service admission only; native research owns recovery and all run bounds."""
 
-    schema_version: Literal["ghimera.service-recovery/1"] = Field(alias="schema")
+    schema_version: Literal["ghimera.service-recovery/1", "ghimera.service-recovery/2"] = Field(
+        alias="schema"
+    )
     on_restart: Literal["hold", "adopt_acknowledged"]
     max_adoption_attempts: Positive
+    boundary: Literal["source_completion"] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+
+    @model_validator(mode="after")
+    def versioned(self) -> "ServiceRecoveryPolicy":
+        if (self.schema_version == "ghimera.service-recovery/2") != (self.boundary is not None):
+            raise ValueError("source service recovery requires /2 and explicit boundary")
+        return self
 
 
 class CollectionServiceConfig(Record):
@@ -134,9 +145,9 @@ class CollectionServiceConfig(Record):
 
 
 class CollectionJob(Record):
-    schema_version: Literal["ghimera.collection-job/1", "ghimera.collection-job/2"] = Field(
-        alias="schema"
-    )
+    schema_version: Literal[
+        "ghimera.collection-job/1", "ghimera.collection-job/2", "ghimera.collection-job/3"
+    ] = Field(alias="schema")
     run_id: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
     policy_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     recipe_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -158,9 +169,16 @@ class CollectionJob(Record):
         default=0, exclude_if=lambda v: v == 0
     )
     recovery_hold: Hold | None = Field(default=None, exclude_if=lambda v: v is None)
+    recovery_boundary: Literal["source_completion"] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def recovery_binding(self) -> "CollectionJob":
+        if (self.schema_version == "ghimera.collection-job/3") != (
+            self.recovery_boundary is not None
+        ):
+            raise ValueError("source jobs require explicit versioned boundary")
         if self.schema_version == "ghimera.collection-job/1":
             if (
                 self.request_sha256
@@ -284,6 +302,12 @@ class CollectionService:
             raise ValueError("service requires durable native journal and continuation")
         if self.config.recovery is not None and recipe.research_recovery is None:
             raise ValueError("service recovery requires the native research recovery policy")
+        if self.config.recovery is not None and self.config.recovery.boundary is not None:
+            if (
+                recipe.research_recovery is None
+                or recipe.research_recovery.source_completion is None
+            ):
+                raise ValueError("source service adoption requires native source-completion policy")
         bindings = (
             CredentialBindings.model_validate_json(
                 bounded_file(self.config.command.bindings_path, self.config.command.max_input_bytes)
@@ -361,7 +385,9 @@ class CollectionService:
                     else None
                 )
                 if mismatch is not None and (
-                    self.config.recovery is None or job.schema_version != "ghimera.collection-job/2"
+                    self.config.recovery is None
+                    or job.schema_version
+                    not in {"ghimera.collection-job/2", "ghimera.collection-job/3"}
                 ):
                     raise ValueError("service job belongs to a different policy")
                 self._jobs[job.run_id] = job
@@ -488,7 +514,9 @@ class CollectionService:
         if len(request_data) > self.config.command.max_input_bytes:
             raise ValueError("request exceeds configured allowance")
         job = CollectionJob(
-            schema="ghimera.collection-job/2"
+            schema="ghimera.collection-job/3"
+            if self.config.recovery is not None and self.config.recovery.boundary is not None
+            else "ghimera.collection-job/2"
             if self.config.recovery is not None
             else "ghimera.collection-job/1",
             run_id=run_id,
@@ -497,6 +525,9 @@ class CollectionService:
             phase="queued",
             updated_at=time.time(),
             request_sha256=request.content_digest() if self.config.recovery is not None else None,
+            recovery_boundary=self.config.recovery.boundary
+            if self.config.recovery is not None
+            else None,
         )
         self._save(job)
         # The durable bounded admission precedes request bytes. A crash here
@@ -586,22 +617,41 @@ class CollectionService:
             )
             if request.content_digest() != job.request_sha256:
                 raise ValueError("original request changed")
-            pin = hashlib.sha256(
-                _read_file(
-                    _run_path(recipe.journal, run_id) / "research-control.json",
-                    recipe.research_recovery.max_snapshot_bytes,
+            if job.recovery_boundary == "source_completion":
+                source_saved = SourceWorkStore.completion(
+                    recipe,
+                    run_id,
+                    expected_request=request,
+                    expected_models=self._validator.recovery_models()
+                    if self._validator is not None
+                    else None,
+                    expected_runtime=self._validator.source_runtime()
+                    if self._validator is not None
+                    else None,
                 )
-            ).hexdigest()
-            saved = ResearchRecoveryStore(recipe, run_id, recipe.research_recovery).read(
-                pin,
-                expected_request=request,
-                expected_models=self._validator.recovery_models()
-                if self._validator is not None
-                else None,
-            )
-            # Service adoption requires an actual retained ACK, not a no-call snapshot.
-            if saved.intent_sequence is None:
-                raise ValueError("no retained original model return")
+                pin = source_saved.sha256
+                harvest, journal_rows = (
+                    source_saved.snapshot.progress.harvest,
+                    source_saved.journal.rows,
+                )
+            else:
+                pin = hashlib.sha256(
+                    _read_file(
+                        _run_path(recipe.journal, run_id) / "research-control.json",
+                        recipe.research_recovery.max_snapshot_bytes,
+                    )
+                ).hexdigest()
+                saved = ResearchRecoveryStore(recipe, run_id, recipe.research_recovery).read(
+                    pin,
+                    expected_request=request,
+                    expected_models=self._validator.recovery_models()
+                    if self._validator is not None
+                    else None,
+                )
+                # Service adoption requires an actual retained ACK, not a no-call snapshot.
+                if saved.intent_sequence is None:
+                    raise ValueError("no retained original model return")
+                harvest, journal_rows = saved.snapshot.progress.harvest, saved.journal.rows
             archive = ResearchResultArchive.resume(
                 self.config.directory / (run_id + ".output"),
                 reservation=ArchiveReservation(
@@ -613,17 +663,16 @@ class CollectionService:
                 max_bytes=self.config.command.max_input_bytes,
             )
             try:
-                harvest = saved.snapshot.progress.harvest
                 ledger = DirectoryLedgerSink(
                     recipe,
                     run_id,
                     harvest.goal,
                     harvest.receipt.judge,
-                    resume_rows=saved.journal.rows,
+                    resume_rows=journal_rows,
                 )
                 try:
                     if recipe.source_work is not None:
-                        source = SourceWorkStore.resume(recipe, run_id, len(saved.journal.rows))
+                        source = SourceWorkStore.resume(recipe, run_id, len(journal_rows))
                         source.close()
                     if recipe.graph is not None and recipe.graph.enabled:
                         if harvest.graph is None:
@@ -904,22 +953,39 @@ class CollectionService:
                         )
                         if request.content_digest() != job.request_sha256:
                             raise ValueError("original service request changed before recovery")
-                        ResearchRecoveryStore(recipe, run_id, recipe.research_recovery).read(
-                            job.snapshot_sha256,
-                            expected_request=request,
-                            expected_models=self._validator.recovery_models()
-                            if self._validator is not None
-                            else None,
-                        )
+                        if job.recovery_boundary == "source_completion":
+                            SourceWorkStore.completion(
+                                recipe,
+                                run_id,
+                                job.snapshot_sha256,
+                                expected_request=request,
+                                expected_models=self._validator.recovery_models()
+                                if self._validator is not None
+                                else None,
+                                expected_runtime=self._validator.source_runtime()
+                                if self._validator is not None
+                                else None,
+                            )
+                        else:
+                            ResearchRecoveryStore(recipe, run_id, recipe.research_recovery).read(
+                                job.snapshot_sha256,
+                                expected_request=request,
+                                expected_models=self._validator.recovery_models()
+                                if self._validator is not None
+                                else None,
+                            )
                         options = CommandOptions.model_validate(
                             dict(
                                 options.model_dump(),
                                 schema="ghimera.collector-command/4",
                                 request_path=None,
                                 execution=CommandExecution(
-                                    schema="ghimera.command-execution/2",
+                                    schema="ghimera.command-execution/3"
+                                    if job.recovery_boundary is not None
+                                    else "ghimera.command-execution/2",
                                     operation="recover",
                                     snapshot_sha256=job.snapshot_sha256,
+                                    recovery_boundary=job.recovery_boundary,
                                 ),
                             )
                         )

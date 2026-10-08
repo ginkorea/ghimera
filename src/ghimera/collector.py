@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr
 
@@ -40,6 +41,7 @@ from ghimera.research_types import ResearchRequest, ResearchResult
 from ghimera.search import GroundedSearch
 from ghimera.searxng import SearxHtmlSearch, SearxSearch
 from ghimera.semantic_scoring import EmbeddingScorer
+from ghimera.source_completion import SourceCompletionRuntime
 from ghimera.source_feeds import SourceFeedExtractionSuite, SourceFeedExtractor
 from ghimera.source_refresh import SourceRefreshStore
 from ghimera.source_sessions import SourceCredentials
@@ -369,9 +371,20 @@ class Collector:
         """Expose native collaborator identities for inert service admission."""
         return self._research.recovery_models()
 
-    async def recover(self, run_id: str, *, snapshot_sha256: str) -> ResearchResult:
+    def source_runtime(self) -> SourceCompletionRuntime:
+        return self._research.source_runtime()
+
+    async def recover(
+        self,
+        run_id: str,
+        *,
+        snapshot_sha256: str,
+        boundary: Literal["model_return", "source_completion"] = "model_return",
+    ) -> ResearchResult:
         """Adopt an exact native model boundary; never retry an unknown contact."""
-        return await self._research.recover(run_id, snapshot_sha256=snapshot_sha256)
+        return await self._research.recover(
+            run_id, snapshot_sha256=snapshot_sha256, boundary=boundary
+        )
 
     def validate_request(self, request: str | ResearchRequest) -> ResearchRequest:
         """Validate an intent before a caller reserves output or launches work."""
