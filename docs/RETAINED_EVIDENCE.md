@@ -1,6 +1,6 @@
 # Retained evidence context and research reuse
 
-Included in the 0.4.6 release candidate, not in the immutable 0.4.5 artifacts. This
+Published in 0.4.6, not in the immutable 0.4.5 artifacts. This
 implements the direct-context boundary and configured research-loop reuse of
 I05. The integrated follow-up connects retained native/PDF originals to
 the current evidence graph. Freshness, reranking, visual graph projection and

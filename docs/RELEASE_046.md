@@ -1,8 +1,9 @@
 # Ghimera 0.4.6 release acceptance
 
-Status: RELEASE CANDIDATE, not yet published. Public 0.4.5 identities and
-artifacts remain unchanged. This increment does not close the full
-infrastructure PRD.
+Status: **PUBLISHED AND ORIGINAL ARTIFACTS VERIFIED**. Public 0.4.5 identities
+and artifacts remain unchanged. The original official 0.4.6 files matched the
+independently validated local artifacts exactly. This increment does not close
+the full infrastructure PRD.
 
 ## Gated source
 
@@ -14,9 +15,10 @@ failures/skips, exit zero. Python 3.11.16 at
 Ruff/check/format (254 files), strict mypy (169 source files) and the unchanged
 142-package offline lock also passed. No gated input changed during execution.
 
-This release changes version metadata, its exact test assertion and documentation
-only. Production modules and examples must remain byte-identical to that candidate.
-Independent wheel installation and publication readback are separate checks.
+Release commit `528ade0bee693c33dff0c8405c9d7d589373fcd8` changes version
+metadata, its exact test assertion and documentation only. Production modules
+and examples were verified byte-identical to that candidate. This evidence
+follow-up does not move the immutable tag or replace any published artifact.
 
 ## Real public-source observations
 
@@ -38,17 +40,44 @@ it was not counted as a successful source capture.
 
 ## Artifact acceptance and publication
 
-Pending: offline build, exact tracked archive bytes, independent installed API,
-feed-original/parser and retained native/PDF graph/journal/corpus/delivery
-readback; new GitHub tag/ref verification; official PyPI upload and original
-public artifact byte equality. No package is described as published before
-these observations exist.
-
 Release metadata tests passed five checks with no skips under the same Python
 3.11.16 interpreter, importing the isolated release tree. The offline lock
 validated its unchanged 142-package closure. A Git source/example comparison
 against the complete gated candidate is empty; no production module or example
 changed for release metadata.
+
+- Offline wheel built from its source archive. Inspection matched all 169
+  tracked wheel package members and 428 tracked source-archive members, with
+  complete package closure and no untracked archive content. Both Twine checks
+  passed under the private Python 3.11.16 publication environment.
+- The exact wheel installed into a fresh Python 3.11.16 virtual environment,
+  `wheel-046-env/bin/python`, and resolved its installed site-packages, not an
+  editable checkout. The standalone API and both command entry points passed.
+- That installed interpreter re-parsed both retained public RSS observations,
+  including the 304-backed original. It used its installed passive worker,
+  preserved all 50 entries/links, exact reading and raw-source hash, and made
+  zero new source or model calls.
+- Installed retained-native and reviewed-PDF fixtures passed exact original/
+  citation/planning bindings, durable graph replay, journal-summary/2,
+  SQLite/FAISS corpus passage readback, destination acknowledgement and independent
+  result decode. The fixtures retained seven and six graph nodes respectively
+  and made zero source/model calls. Scripted model observations establish
+  persistence/protocol compatibility, not real-model accuracy.
+- GitHub main was atomically fast-forwarded to the exact release commit.
+  Annotated tag `v0.4.6`, object `dc7630860f81de3cf52726a9dbf2b1dedafbe568`,
+  peels to that commit; both public refs were independently verified.
+- Only the two hash-checked artifacts were uploaded to
+  `https://upload.pypi.org/legacy/` with the existing named publication profile.
+  TLS verification and redirect refusal were retained; credentials stayed in
+  memory without logging or copying. Official unauthenticated metadata and
+  both original artifact files were read back and matched exactly, with no yanks.
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `ghimera-0.4.6-py3-none-any.whl` | 389864 | `36f6bdddcae3596ea84f160775a11a19793eae5981e931c16cf0aa06ca7f68ef` |
+| `ghimera-0.4.6.tar.gz` | 1120285 | `9b5159525ab0356b8f37e066ac13e4d18983cf4b9f11f5334a022d61d14b54f8` |
+
+This is standalone package publication, not an unattended service deployment.
 
 ## Remaining required scope
 
