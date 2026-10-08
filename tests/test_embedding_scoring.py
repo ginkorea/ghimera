@@ -477,6 +477,137 @@ def intent_policy(cfg, **changes):
     )
 
 
+def test_separate_query_policy_is_versioned_and_same_space(endpoint):
+    passage = service(endpoint[0], text_prefix="passage: ")
+    query = service(endpoint[0], text_prefix="query: ")
+    old = intent_policy(passage)
+    assert "query_encoder" not in old.model_dump()
+    parsed = intent_policy(passage, schema="ghimera.scoring/2", query_encoder=query)
+    assert parsed.intent_encoder == query
+    assert ScoringConfig.model_validate_json(parsed.model_dump_json()) == parsed
+    with pytest.raises(ValidationError, match="requires scoring/2"):
+        intent_policy(passage, query_encoder=query)
+    with pytest.raises(ValidationError, match="requires intent"):
+        intent_policy(passage, schema="ghimera.scoring/2")
+    with pytest.raises(ValidationError, match="requires intent"):
+        policy(passage, references(passage), schema="ghimera.scoring/2", query_encoder=query)
+    for field, value in (("model_id", "another"), ("revision", "different"), ("dimensions", 3)):
+        with pytest.raises(ValidationError, match="same vector space"):
+            intent_policy(
+                passage,
+                schema="ghimera.scoring/2",
+                query_encoder=service(endpoint[0], text_prefix="query: ", **{field: value}),
+            )
+    assert not endpoint[1]
+
+
+def test_separate_query_injection_is_explicit_before_contact(endpoint):
+    passage = service(endpoint[0], text_prefix="passage: ")
+    query = service(endpoint[0], text_prefix="query: ")
+    scoring = intent_policy(passage, schema="ghimera.scoring/2", query_encoder=query)
+    with pytest.raises(ValueError, match="injection"):
+        EmbeddingScorer(scoring, SelfHostedEncoder(passage))
+    with pytest.raises(ValueError, match="recorded policy"):
+        EmbeddingScorer(
+            scoring, SelfHostedEncoder(passage), query_encoder=SelfHostedEncoder(passage)
+        )
+    with pytest.raises(ValueError, match="injection"):
+        EmbeddingScorer(
+            intent_policy(passage),
+            SelfHostedEncoder(passage),
+            query_encoder=SelfHostedEncoder(query),
+        )
+    assert not endpoint[1]
+
+
+def test_separate_query_prefixes_share_spend_and_native_replay(endpoint):
+    passage = service(endpoint[0], text_prefix="passage: ")
+    query = service(endpoint[0], text_prefix="query: ")
+    scoring = intent_policy(passage, schema="ghimera.scoring/2", query_encoder=query, max_windows=1)
+    config = run_config(scoring)
+    goal = Goal(text="港口 ports")
+    document = Extracted(title="native", text="港口 evidence", language="zh")
+    budget, ledger = RunBudget(config, lambda: 0.0), Ledger()
+    scorer = EmbeddingScorer(
+        scoring, SelfHostedEncoder(passage), query_encoder=SelfHostedEncoder(query)
+    )
+    asyncio.run(scorer.score(goal, document, budget, ledger))
+    before = ledger.snapshot()
+    restored = Ledger(restored_rows=before)
+    second = EmbeddingScorer(
+        scoring, SelfHostedEncoder(passage), query_encoder=SelfHostedEncoder(query)
+    )
+    asyncio.run(second.score(goal, document, budget, restored))
+    assert [item[1]["input"] for item in endpoint[1]] == [
+        ["query: 港口 ports"],
+        ["passage: 港口 evidence"],
+        ["passage: 港口 evidence"],
+    ]
+    assert budget.encoding_calls == 3
+    assert budget.encoding_chars == sum(len(item[1]["input"][0]) for item in endpoint[1])
+    assert restored.snapshot()[: len(before)] == before
+    assert sum(row.intent_reference is not None for row in restored.snapshot()) == 1
+    from ghimera.scoring_validation import validate_reference_rows
+
+    validate_reference_rows(config, goal.text, restored.snapshot())
+
+
+def test_separate_query_full_harvest_readback_and_drift_refusal(endpoint):
+    passage = service(endpoint[0], text_prefix="passage: ")
+    query = service(endpoint[0], text_prefix="query: ")
+    scoring = intent_policy(passage, schema="ghimera.scoring/2", query_encoder=query, max_windows=1)
+    loop = GoalLoop(
+        config=run_config(scoring),
+        fetcher=FetchLadder((FakeRoute(),)),
+        extractor=FakeExtractor(),
+        scorer=EmbeddingScorer(
+            scoring, SelfHostedEncoder(passage), query_encoder=SelfHostedEncoder(query)
+        ),
+        judge=FakeJudge(),
+    )
+    result = asyncio.run(
+        loop.run(
+            Goal(text="ports", seeds=("https://example.org",)),
+            Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",)),
+        )
+    )
+    assert result.documents
+    assert Harvest.model_validate_json(result.model_dump_json()) == result
+    raw = result.model_dump(mode="json")
+    raw["receipt"]["effective_config"]["scoring"]["query_encoder"]["text_prefix"] = "other: "
+    with pytest.raises(ValueError):
+        Harvest.model_validate(raw)
+
+
+def test_separate_query_keeps_charge_when_document_budget_exhausts(endpoint):
+    passage = service(endpoint[0], text_prefix="passage: ")
+    query = service(endpoint[0], text_prefix="query: ")
+    scoring = intent_policy(
+        passage,
+        schema="ghimera.scoring/2",
+        query_encoder=query,
+        max_windows=1,
+        encoding_call_budget=1,
+    )
+    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    scorer = EmbeddingScorer(
+        scoring, SelfHostedEncoder(passage), query_encoder=SelfHostedEncoder(query)
+    )
+    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
+        asyncio.run(
+            scorer.score(
+                Goal(text="ports"),
+                Extracted(title="native", text="ports", language="en"),
+                budget,
+                ledger,
+            )
+        )
+    assert budget.encoding_calls == 1
+    assert len(endpoint[1]) == 1
+    assert endpoint[1][0][1]["input"] == ["query: ports"]
+    assert sum(row.intent_reference is not None for row in ledger.snapshot()) == 1
+
+
 def test_intent_mode_is_explicit_and_preserves_pinned_serialization(endpoint):
     cfg = service(endpoint[0])
     refs = references(cfg)

@@ -1248,7 +1248,10 @@ class Harvest(Record):
         scoring_policy = self.receipt.effective_config.scoring
         if encoding and (
             scoring_policy is None
-            or any(call.service != scoring_policy.encoder for call in encoding)
+            or any(
+                call.service not in (scoring_policy.encoder, scoring_policy.intent_encoder)
+                for call in encoding
+            )
         ):
             raise ValueError("encoding ledger must bind the effective service configuration")
         if scoring_policy is not None and (

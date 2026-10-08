@@ -66,6 +66,7 @@ class Collector:
         references: EmbeddingReferences | None = None,
         model_credentials: Mapping[str, SecretStr] | None = None,
         encoder_credential: SecretStr | None = None,
+        query_encoder_credential: SecretStr | None = None,
         source_credentials: Mapping[str, SourceCredentials] | None = None,
         source_resolver: Resolver | None = None,
         human_assistant: HumanAssistant | None = None,
@@ -209,7 +210,14 @@ class Collector:
             search = search_type(config, config.search, resolver=source_resolver)
         models = SelfHostedModels.from_config(config, credentials=model_credentials)
         encoder = SelfHostedEncoder(config.scoring.encoder, credential=encoder_credential)
-        scorer = EmbeddingScorer(config.scoring, encoder, references)
+        if config.scoring.query_encoder is None and query_encoder_credential is not None:
+            raise ValueError("query credentials require an explicit query encoder policy")
+        query_encoder = (
+            SelfHostedEncoder(config.scoring.query_encoder, credential=query_encoder_credential)
+            if config.scoring.query_encoder is not None
+            else None
+        )
+        scorer = EmbeddingScorer(config.scoring, encoder, references, query_encoder=query_encoder)
         route = CurlRoute(config, resolver=source_resolver, source_credentials=source_credentials)
         routes: tuple[FetchRoute, ...] = (route,)
         if human_session is not None and config.human_browser is not None:

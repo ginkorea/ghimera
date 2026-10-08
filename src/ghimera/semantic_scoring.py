@@ -74,6 +74,8 @@ class EmbeddingScorer(Scorer):
         policy: ScoringConfig,
         encoder: EvidenceEncoder,
         references: EmbeddingReferences | None = None,
+        *,
+        query_encoder: EvidenceEncoder | None = None,
     ) -> None:
         if encoder.model.location != "self_hosted":
             raise ValueError("semantic scoring requires the explicitly self-hosted encoder")
@@ -87,6 +89,15 @@ class EmbeddingScorer(Scorer):
             raise ValueError(
                 "pinned scoring requires shelf vectors; intent scoring prepares its own"
             )
+        if (policy.query_encoder is not None) != (query_encoder is not None):
+            raise ValueError("query encoder injection must match its explicit scoring policy")
+        if query_encoder is not None and (
+            query_encoder.model.location != "self_hosted"
+            or query_encoder.config != policy.intent_encoder
+            or (query_encoder.model.model_id, query_encoder.model.revision)
+            != (policy.intent_encoder.model_id, policy.intent_encoder.revision)
+        ):
+            raise ValueError("query encoder must match its recorded policy and identity")
         if references is not None and (
             references.sha256 != policy.references_sha256
             or len(references.chunks) > policy.max_reference_chunks
@@ -100,6 +111,7 @@ class EmbeddingScorer(Scorer):
         ):
             raise ValueError("shelf vectors must match the pinned encoder, dimensions and prefix")
         self._policy, self._encoder, self._references = policy, encoder, references
+        self._query_encoder = query_encoder or encoder
         self._sessions: WeakKeyDictionary[RunBudget, _IntentSession] = WeakKeyDictionary()
 
     def validate_config(self, config: GhimeraConfig) -> None:
@@ -157,11 +169,13 @@ class EmbeddingScorer(Scorer):
                 retained_call = observed[prepared.encoding_sequence].encoding_call
                 if retained_call is None:
                     raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-                prepared.validate_binding(goal.text, self._policy.encoder, retained_call)
+                prepared.validate_binding(goal.text, self._policy.intent_encoder, retained_call)
                 session.references = prepared.references
                 return session.references
-            vectors = await self._encode((goal.text,), budget, ledger, None)
-            service = self._policy.encoder
+            vectors = await self._encode(
+                (goal.text,), budget, ledger, None, encoder=self._query_encoder
+            )
+            service = self._policy.intent_encoder
             references = EmbeddingReferences(
                 schema="chimera.embedding-references/1",
                 model_id=service.model_id,
@@ -192,7 +206,7 @@ class EmbeddingScorer(Scorer):
                 LedgerRow(
                     sequence=ledger.next_sequence,
                     event="intent_reference",
-                    model=self._encoder.model,
+                    model=self._query_encoder.model,
                     intent_reference=evidence,
                     reason="original_intent_reference_not_probability",
                 )
@@ -203,9 +217,16 @@ class EmbeddingScorer(Scorer):
             return references
 
     async def _encode(
-        self, texts: tuple[str, ...], budget: RunBudget, ledger: Ledger, url: str | None
+        self,
+        texts: tuple[str, ...],
+        budget: RunBudget,
+        ledger: Ledger,
+        url: str | None,
+        *,
+        encoder: EvidenceEncoder | None = None,
     ) -> tuple[tuple[float, ...], ...]:
-        service = self._policy.encoder
+        encoder = encoder or self._encoder
+        service = encoder.config
         output: list[tuple[float, ...]] = []
         pending: list[str] = []
         size = 0
@@ -224,7 +245,7 @@ class EmbeddingScorer(Scorer):
             call: EncodingCall | None = None
             refusal = None
             try:
-                batch = await self._encoder.encode_batch(batch_texts)
+                batch = await encoder.encode_batch(batch_texts)
                 call = batch.call
                 # Revalidate injected objects: model_copy/update can bypass Pydantic guards.
                 batch = EncodingBatch.model_validate(batch.model_dump())
@@ -277,7 +298,7 @@ class EmbeddingScorer(Scorer):
                     LedgerRow(
                         sequence=ledger.next_sequence,
                         event="encoding",
-                        model=self._encoder.model,
+                        model=encoder.model,
                         url=url,
                         reason=call.outcome,
                         refusal=refusal,

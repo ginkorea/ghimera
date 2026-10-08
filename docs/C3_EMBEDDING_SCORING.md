@@ -59,6 +59,22 @@ scored document. Empty collection performs no reference call. Oversized intents
 refuse rather than silently clipping them. The configured encoder prefix applies
 to both intent and source windows; select a compatible model input recipe.
 
+Models with different query/passage input recipes may explicitly select
+`ghimera.scoring/2`: intent references and a complete `query_encoder` service
+are required. See `examples/query-passage-scoring.toml`. The two services must
+declare the same model id, revision and vector dimensions, but their prefixes,
+endpoints and input bounds are individually configured. No model-name heuristic
+changes a prefix, truncates an intent, copies credentials to another endpoint or
+silently replaces an encoder. Existing scoring/1 serializations remain unchanged.
+
+Inject `EmbeddingScorer(policy, passage_encoder, query_encoder=query_encoder)`;
+the native Collector constructs both from these explicit policies. Supply a
+separate `query_encoder_credential` when its configured service requires one.
+Both calls consume the same original run allowance. The query preparation's
+original service, prefixed input hash and retained ACK must match on replay;
+passage calls still use the passage policy. Cosine remains a similarity, not a
+probability or a model-quality guarantee.
+
 The reference call reserves the same encoding call/character budget and run
 deadline as source scoring. Its successful `encoding` ledger row precedes a
 `chimera.intent-reference/1` observation containing the goal hash, model-bound

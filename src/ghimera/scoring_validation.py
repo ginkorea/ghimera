@@ -13,6 +13,23 @@ def validate_reference_rows(
 ) -> None:
     policy = config.scoring
     prepared = None
+    if policy is not None and policy.intent_encoder != policy.encoder:
+        query_sequences = {
+            row.intent_reference.encoding_sequence
+            for row in rows
+            if row.intent_reference is not None
+        }
+        for row in rows:
+            call = row.encoding_call
+            if (
+                call is not None
+                and call.service == policy.intent_encoder
+                and (
+                    row.url is not None
+                    or (call.outcome == "success" and row.sequence not in query_sequences)
+                )
+            ):
+                raise ValueError("successful query encoding must prepare the original intent")
     for row in rows:
         if row.intent_reference is not None:
             observed = row.intent_reference
@@ -26,7 +43,7 @@ def validate_reference_rows(
             encoding = rows[observed.encoding_sequence]
             if encoding.encoding_call is None or encoding.url is not None:
                 raise ValueError("intent references must identify their prior encoding call")
-            observed.validate_binding(goal_text, policy.encoder, encoding.encoding_call)
+            observed.validate_binding(goal_text, policy.intent_encoder, encoding.encoding_call)
             prepared = observed
         if row.similarity is None:
             continue

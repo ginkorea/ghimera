@@ -11,8 +11,11 @@ Positive = Annotated[int, Field(strict=True, gt=0)]
 
 class ScoringConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
-    schema_version: Literal["chimera.scoring/1"] = Field(alias="schema")
+    schema_version: Literal["chimera.scoring/1", "ghimera.scoring/2"] = Field(alias="schema")
     encoder: EmbeddingServiceConfig
+    query_encoder: EmbeddingServiceConfig | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     reference_source: Literal["pinned", "intent"] = Field(
         default="pinned", exclude_if=lambda value: value == "pinned"
     )
@@ -31,6 +34,18 @@ class ScoringConfig(BaseModel):
 
     @model_validator(mode="after")
     def coherent(self) -> "ScoringConfig":
+        if self.schema_version == "chimera.scoring/1" and self.query_encoder is not None:
+            raise ValueError("a distinct query encoder requires scoring/2")
+        if self.schema_version == "ghimera.scoring/2" and (
+            self.reference_source != "intent" or self.query_encoder is None
+        ):
+            raise ValueError("scoring/2 requires intent references and an explicit query encoder")
+        if self.query_encoder is not None and (
+            self.query_encoder.model_id,
+            self.query_encoder.revision,
+            self.query_encoder.dimensions,
+        ) != (self.encoder.model_id, self.encoder.revision, self.encoder.dimensions):
+            raise ValueError("query and passage encoders must declare the same vector space")
         if (self.reference_source == "pinned") != (self.references_sha256 is not None):
             raise ValueError(
                 "pinned scoring requires a reference digest; intent scoring forbids it"
@@ -40,3 +55,7 @@ class ScoringConfig(BaseModel):
         if self.window_chars + len(self.encoder.text_prefix) > self.encoder.max_text_chars:
             raise ValueError("native windows and prefix must fit the encoder's text limit")
         return self
+
+    @property
+    def intent_encoder(self) -> EmbeddingServiceConfig:
+        return self.query_encoder or self.encoder
