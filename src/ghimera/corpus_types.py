@@ -5,10 +5,12 @@ from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from ghimera.embedding_types import EncodingCall, EncodingRecoveryEvidence
 from ghimera.models import Document
 from ghimera.reranking_types import RerankingEvidence
+from ghimera.research_reranking_types import RerankRunEvidence
 from ghimera.retrieval import RetrievalEvidence
 from ghimera.visual_types import ImageRegion
 
@@ -160,9 +162,14 @@ class CorpusQuery(CorpusRecord):
     approximate: Literal[True] = True
     retrieval: RetrievalEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
     reranking: RerankingEvidence | None = Field(default=None, exclude_if=lambda v: v is None)
+    reranking_run: SkipJsonSchema[RerankRunEvidence | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     @model_validator(mode="after")
     def reconciled(self) -> "CorpusQuery":
+        if self.reranking_run is not None and self.reranking is None:
+            raise ValueError("run rerank proof requires native learned relevance evidence")
         if (self.schema_version == "ghimera.corpus-query/2") != (self.reranking is not None):
             raise ValueError("learned query requires its versioned complete reranking evidence")
         if (

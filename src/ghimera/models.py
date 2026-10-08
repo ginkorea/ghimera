@@ -51,6 +51,7 @@ from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.page_transcription_types import PageTranscriptionCall, ReviewedPageTranscription
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.research_reranking_types import RerankReservation
 from ghimera.scoring_types import SimilarityEvidence
 from ghimera.semantic_selection_types import SemanticSelection
 from ghimera.semantic_types import (
@@ -765,6 +766,9 @@ class LedgerRow(Record):
     model_intent: ModelIntent | None = Field(default=None, exclude_if=lambda v: v is None)
     model_ack: ModelAcknowledgement | None = Field(default=None, exclude_if=lambda v: v is None)
     model_replay: ModelReplay | None = Field(default=None, exclude_if=lambda v: v is None)
+    rerank_reservation: SkipJsonSchema[RerankReservation | None] = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     model_decision: SkipJsonSchema[ModelReconciliationDecision | None] = Field(
         default=None, exclude_if=lambda v: v is None
     )
@@ -848,6 +852,10 @@ class LedgerRow(Record):
 
     @model_validator(mode="after")
     def identity_evidence(self) -> "LedgerRow":
+        if (self.rerank_reservation is not None) != (
+            self.model_intent is not None and self.model_intent.phase == "reranking"
+        ):
+            raise ValueError("rerank source/quota binding belongs to its original model intent")
         if (self.event == "model_intent") != (self.model_intent is not None) or (
             self.event == "model_ack"
         ) != (self.model_ack is not None):
@@ -1343,9 +1351,11 @@ class Harvest(Record):
             raise ValueError("byte spend does not match ledger")
         from ghimera.model_reconciliation import validate_policy as validate_model_decisions
         from ghimera.model_work import validate_model_rows
+        from ghimera.research_reranking import validate_rerank_rows
 
         native_model_policy = self.receipt.effective_config.model_work
         validate_model_decisions(self.receipt.effective_config, self.ledger)
+        validate_rerank_rows(self.receipt.effective_config, self.ledger)
         observed_judge_calls = (
             validate_model_rows(
                 native_model_policy, self.receipt.effective_config.judge_budget, self.ledger

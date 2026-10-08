@@ -1,6 +1,7 @@
 """Run-owned routing, quotas and retained responses; no uncharged composite search."""
 
 import asyncio
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -10,6 +11,7 @@ from ghimera.discovery_config import SearchCallLimits
 from ghimera.ledger import Ledger
 from ghimera.models import LedgerRow
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.research_reranking_types import RerankDecision
 from ghimera.research_types import ResearchRound, SearchObservation, SearchQuery, SearchResponse
 from ghimera.search import GroundedSearch
 
@@ -101,7 +103,24 @@ class SearchHistory:
     ) -> SearchObservation:
         if before_call is not None:
             before_call(provider)
-        response = await provider.discover(query, self._budget, self._ledger, limits=limits)
+        decision = (
+            RerankDecision(
+                schema="ghimera.rerank-decision/1",
+                action="fresh",
+                operation_key=hashlib.sha256(
+                    (
+                        f"discovery:{len(self._rounds) + 1}:{provider.identity}:"
+                        f"{query.content_digest()}"
+                    ).encode()
+                ).hexdigest(),
+            )
+            if self._budget.config.research is not None
+            and self._budget.config.research.reranking is not None
+            else None
+        )
+        response = await provider.discover(
+            query, self._budget, self._ledger, limits=limits, rerank_decision=decision
+        )
         # The final provider template appends before return, with no intervening
         # await. Capture immediately here, before graph/model work or gather can
         # fail. Concurrent completions therefore bind their own append position.

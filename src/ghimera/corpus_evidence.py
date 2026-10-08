@@ -13,6 +13,7 @@ from ghimera.corpus_types import BoundCorpusDocument, CorpusHit, CorpusQuery, Co
 from ghimera.embedding_types import EncodingCall
 from ghimera.models import Document
 from ghimera.reranking_config import OfflineRerankingConfig
+from ghimera.research_reranking_types import RerankInvoker
 
 PassageId = Annotated[int, Field(strict=True, gt=0)]
 OmissionReason = Literal["minimum_cosine", "document_limit", "original_bytes", "response_bytes"]
@@ -117,7 +118,11 @@ class CorpusEvidenceReader:
         return self._corpus.config.reranking
 
     async def read(
-        self, text: str, *, encoding_observer: Callable[[EncodingCall], None] | None = None
+        self,
+        text: str,
+        *,
+        encoding_observer: Callable[[EncodingCall], None] | None = None,
+        rerank_invoker: RerankInvoker | None = None,
     ) -> CorpusEvidenceBundle:
         self._check()
         policy = self.policy
@@ -130,6 +135,7 @@ class CorpusEvidenceReader:
                 languages=policy.languages,
                 encoding_observer=encoding_observer,
                 retrieval=policy.retrieval,
+                rerank_invoker=rerank_invoker,
             )
             bundle = CorpusEvidenceBundle(
                 schema="ghimera.corpus-evidence/1",

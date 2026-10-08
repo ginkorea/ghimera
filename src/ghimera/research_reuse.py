@@ -2,7 +2,7 @@
 
 import asyncio
 import hashlib
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import Field, model_validator
 
@@ -12,7 +12,15 @@ from ghimera.embedding_types import EncodingCall, EncodingRecoveryEvidence
 from ghimera.graph_types import GraphRetainedOrigin
 from ghimera.models import Document, RetainedOriginal
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.research_reranking import RunBoundReranker, validate_run_evidence
+from ghimera.research_reranking_types import RerankDecision, ResearchRerankingConfig
 from ghimera.research_reuse_config import ResearchReuseConfig
+
+if TYPE_CHECKING:
+    from ghimera.budget import RunBudget
+    from ghimera.config import GhimeraConfig
+    from ghimera.ledger import Ledger
+    from ghimera.models import LedgerRow
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
@@ -75,11 +83,32 @@ def validate_notices(
 
 
 class ResearchRetrievalReport(CorpusRecord):
-    schema_version: Literal["ghimera.research-retrieval/1"] = Field(alias="schema")
+    schema_version: Literal["ghimera.research-retrieval/1", "ghimera.research-retrieval/2"] = Field(
+        alias="schema"
+    )
     policy: ResearchReuseConfig
     intent: Annotated[str, Field(min_length=1)]
     observations: tuple[RetrievalObservation, ...]
     snapshots: tuple[CorpusEvidenceBundle, ...]
+    reranking_policy: ResearchRerankingConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+
+    def validate_run(self, config: "GhimeraConfig", rows: tuple["LedgerRow", ...]) -> None:
+        policy = config.research.reranking if config.research is not None else None
+        if self.reranking_policy != policy:
+            raise ValueError("retained reranking must preserve its original run policy")
+        for bundle in self.snapshots:
+            learned = bundle.query.reranking
+            if learned is not None:
+                validate_run_evidence(
+                    config,
+                    rows,
+                    learned.request,
+                    learned.scores,
+                    bundle.query.reranking_run,
+                    channel="retained",
+                )
 
     @property
     def graph_originals(self) -> tuple[RetainedOriginal, ...]:
@@ -132,9 +161,17 @@ class ResearchRetrievalReport(CorpusRecord):
 
     @model_validator(mode="after")
     def reconcile(self) -> "ResearchRetrievalReport":
-        if any(bundle.query.reranking is not None for bundle in self.snapshots):
+        if (self.schema_version == "ghimera.research-retrieval/2") != (
+            self.reranking_policy is not None
+        ):
+            raise ValueError("learned research requires its versioned run-policy report")
+        if any(
+            bundle.query.reranking is not None
+            and (self.reranking_policy is None or bundle.query.reranking_run is None)
+            for bundle in self.snapshots
+        ):
             raise ValueError(
-                "learned research snapshots require future run-bound rerank reservations/replay"
+                "learned research snapshots require original run-bound rerank reservation/ACK proof"
             )
         policy = self.policy
         reader = policy.reader
@@ -194,12 +231,20 @@ class RetainedResearchSession:
         intent: str,
         *,
         restored: ResearchRetrievalReport | None = None,
+        budget: "RunBudget | None" = None,
+        ledger: "Ledger | None" = None,
     ) -> None:
         self._policy = ResearchReuseConfig.model_validate(policy.model_dump())
-        if reader.reranking_policy is not None:
-            raise ValueError(
-                "learned research retrieval requires future run-bound rerank reservations/replay"
-            )
+        self._budget, self._ledger = budget, ledger
+        self._reranking = (
+            budget.config.research.reranking
+            if budget is not None and budget.config.research is not None
+            else None
+        )
+        if reader.reranking_policy is not None and (
+            budget is None or ledger is None or self._reranking is None
+        ):
+            raise ValueError("learned research retrieval requires original run-bound rerank owners")
         self._reader, self._intent = reader, intent
         if reader.policy != self._policy.reader:
             raise ValueError("research reuse requires its exact configured reader")
@@ -208,6 +253,8 @@ class RetainedResearchSession:
         )
         if initial is not None and (initial.policy != self._policy or initial.intent != intent):
             raise ValueError("resumed retrieval requires its original intent and policy")
+        if initial is not None and budget is not None and ledger is not None:
+            initial.validate_run(budget.config, ledger.snapshot())
         self._observations = list(initial.observations) if initial is not None else []
         self._snapshots = list(initial.snapshots) if initial is not None else []
         self._active = False
@@ -218,18 +265,36 @@ class RetainedResearchSession:
         if self._active:
             raise ValueError("retrieval cannot checkpoint an active query")
         return ResearchRetrievalReport(
-            schema="ghimera.research-retrieval/1",
+            schema="ghimera.research-retrieval/2"
+            if self._reranking is not None
+            else "ghimera.research-retrieval/1",
             policy=self._policy,
             intent=self._intent,
             observations=tuple(self._observations),
             snapshots=tuple(self._snapshots),
+            reranking_policy=self._reranking,
         )
 
-    async def query(self, text: str, *, remaining_seconds: float) -> None:
+    async def query(
+        self,
+        text: str,
+        *,
+        remaining_seconds: float,
+        rerank_decision: RerankDecision | None = None,
+    ) -> None:
         if self._active:
             raise ValueError("one retained research session cannot overlap queries")
-        if any(bundle.query_text == text for bundle in self._snapshots):
+        if any(bundle.query_text == text for bundle in self._snapshots) and (
+            rerank_decision is None or rerank_decision.action == "fresh"
+        ):
             return  # Includes a successful empty query; resume does not repeat it.
+        invoker = None
+        if self._reader.reranking_policy is not None:
+            if self._budget is None or self._ledger is None or rerank_decision is None:
+                raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+            invoker = RunBoundReranker(
+                self._budget, self._ledger, channel="retained", decision=rerank_decision
+            )
         reader, policy = self._policy.reader, self._policy
         if not text.strip() or len(text) > reader.max_query_chars:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
@@ -259,7 +324,9 @@ class RetainedResearchSession:
 
         try:
             async with asyncio.timeout(min(remaining_seconds, reader.timeout_seconds)):
-                candidate = await self._reader.read(text, encoding_observer=observe)
+                candidate = await self._reader.read(
+                    text, encoding_observer=observe, rerank_invoker=invoker
+                )
             recovered = candidate.query.encoding_recovery
             if call is None:
                 if recovered is None or not recovered.reused:
@@ -269,7 +336,9 @@ class RetainedResearchSession:
                 # records this read; corpus lifetime reservations never reset.
                 call = EncodingCall.model_validate(candidate.query.encoding_call.model_dump())
             probe = ResearchRetrievalReport(
-                schema="ghimera.research-retrieval/1",
+                schema="ghimera.research-retrieval/2"
+                if self._reranking is not None
+                else "ghimera.research-retrieval/1",
                 policy=policy,
                 intent=self._intent,
                 observations=tuple(self._observations)
@@ -284,7 +353,10 @@ class RetainedResearchSession:
                     ),
                 ),
                 snapshots=tuple(self._snapshots) + (candidate,),
+                reranking_policy=self._reranking,
             )
+            if self._budget is not None and self._ledger is not None:
+                probe.validate_run(self._budget.config, self._ledger.snapshot())
             bundle, outcome = probe.snapshots[-1], "success"
         except asyncio.CancelledError:
             outcome = "cancelled"

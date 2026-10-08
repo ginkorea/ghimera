@@ -3,7 +3,10 @@
 from collections.abc import Mapping
 from urllib.parse import urlsplit
 
+from ghimera.budget import RunBudget
 from ghimera.discovery_config import DiscoveryConfig, DiscoveryProvider, Domain
+from ghimera.ledger import Ledger
+from ghimera.research_reranking_types import RerankDecision
 from ghimera.research_types import SearchRequest, SearchResponse
 from ghimera.search import GroundedSearch
 from ghimera.transport_types import TransportEvidence
@@ -30,6 +33,19 @@ class BoundSearch(GroundedSearch):
     async def request(self, request: SearchRequest) -> SearchResponse:
         # Only the inherited final template owns reservations and observations.
         response = await self._adapter.request(request)
+        return self._filter(request, response)
+
+    async def request_for_run(
+        self,
+        request: SearchRequest,
+        budget: RunBudget,
+        ledger: Ledger,
+        rerank_decision: RerankDecision | None,
+    ) -> SearchResponse:
+        response = await self._adapter.request_for_run(request, budget, ledger, rerank_decision)
+        return self._filter(request, response)
+
+    def _filter(self, request: SearchRequest, response: SearchResponse) -> SearchResponse:
         if len(response.hits) > request.limit:
             return response  # The final accounting template must detect the violation.
         hits = []

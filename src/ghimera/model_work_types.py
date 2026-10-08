@@ -6,25 +6,29 @@ import hashlib
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from ghimera.model_types import ModelCallEvidence
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Count = Annotated[int, Field(strict=True, ge=0)]
-ModelPhase = Literal[
-    "plan",
-    "assessment",
-    "answer",
-    "review",
-    "verdict",
-    "grade",
-    "semantic_extract",
-    "semantic_review",
-    "visual_model",
-    "transcription_model",
-    "identity_propose",
-    "identity_review",
-]
+ModelPhase = (
+    Literal[
+        "plan",
+        "assessment",
+        "answer",
+        "review",
+        "verdict",
+        "grade",
+        "semantic_extract",
+        "semantic_review",
+        "visual_model",
+        "transcription_model",
+        "identity_propose",
+        "identity_review",
+    ]
+    | SkipJsonSchema[Literal["reranking"]]
+)
 
 
 class ModelResultsConfig(BaseModel):

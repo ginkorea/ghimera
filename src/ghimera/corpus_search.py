@@ -2,12 +2,16 @@
 
 import asyncio
 
+from ghimera.budget import RunBudget
 from ghimera.corpus import EvidenceCorpus
 from ghimera.corpus_bindings import validate_reader
 from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.corpus_search_wire import CorpusLeadOmission, CorpusSearchWire, corpus_source_url
 from ghimera.corpus_types import BoundCorpusDocument
+from ghimera.ledger import Ledger
 from ghimera.refusals import FetchFailure, GhimeraRefused, RefusalCode
+from ghimera.research_reranking import RunBoundReranker
+from ghimera.research_reranking_types import RerankDecision, RerankInvoker, ResearchRerankingConfig
 from ghimera.research_types import SearchHit, SearchRequest, SearchResponse
 from ghimera.search import GroundedSearch
 
@@ -40,17 +44,26 @@ class CorpusLeadSearch(GroundedSearch):
     name = "evidence-corpus"
     revision = "corpus-search/1"
 
-    def __init__(self, policy: CorpusSearchConfig, corpus: EvidenceCorpus) -> None:
+    def __init__(
+        self,
+        policy: CorpusSearchConfig,
+        corpus: EvidenceCorpus,
+        *,
+        run_policy: ResearchRerankingConfig | None = None,
+    ) -> None:
         self.policy = CorpusSearchConfig.model_validate(policy.model_dump())
         self._corpus = corpus
+        self._run_policy = (
+            ResearchRerankingConfig.model_validate(run_policy.model_dump())
+            if run_policy is not None
+            else None
+        )
         self._check()
 
     def _check(self) -> None:
         corpus, policy = self._corpus, self.policy
-        if corpus.config.reranking is not None:
-            raise ValueError(
-                "learned corpus discovery requires future run-bound rerank reservations/replay"
-            )
+        if corpus.config.reranking is not None and self._run_policy is None:
+            raise ValueError("learned corpus discovery requires explicit run-bound rerank policy")
         validate_reader(
             corpus,
             corpus_id=policy.corpus_id,
@@ -66,12 +79,37 @@ class CorpusLeadSearch(GroundedSearch):
         return self.policy.identity
 
     async def request(self, request: SearchRequest) -> SearchResponse:
+        if self._corpus.config.reranking is not None:
+            raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
         try:
             return await self._request(request)
         except (ValueError, OSError) as exc:
             raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE) from exc
 
-    async def _request(self, request: SearchRequest) -> SearchResponse:
+    async def request_for_run(
+        self,
+        request: SearchRequest,
+        budget: RunBudget,
+        ledger: Ledger,
+        rerank_decision: RerankDecision | None,
+    ) -> SearchResponse:
+        if self._corpus.config.reranking is None:
+            return await self.request(request)
+        if (
+            rerank_decision is None
+            or budget.config.research is None
+            or budget.config.research.reranking != self._run_policy
+        ):
+            raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
+        invoker = RunBoundReranker(budget, ledger, channel="discovery", decision=rerank_decision)
+        try:
+            return await self._request(request, rerank_invoker=invoker)
+        except (ValueError, OSError) as exc:
+            raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE) from exc
+
+    async def _request(
+        self, request: SearchRequest, *, rerank_invoker: RerankInvoker | None = None
+    ) -> SearchResponse:
         request = SearchRequest.model_validate(request.model_dump())
         policy = self.policy
         self._check()
@@ -83,6 +121,7 @@ class CorpusLeadSearch(GroundedSearch):
                 top_k=policy.max_passage_hits,
                 languages=policy.languages,
                 retrieval=policy.retrieval,
+                rerank_invoker=rerank_invoker,
             )
             if (
                 query.corpus_id != policy.corpus_id

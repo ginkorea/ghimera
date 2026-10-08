@@ -104,6 +104,9 @@ class JournalReport(Record):
         from ghimera.model_reconciliation import validate_policy
 
         validate_policy(self.header.config, self.rows)
+        from ghimera.research_reranking import validate_rerank_rows
+
+        validate_rerank_rows(self.header.config, self.rows)
         if any(
             row.model_decision is not None
             and (

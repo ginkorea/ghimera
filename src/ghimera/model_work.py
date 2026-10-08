@@ -33,6 +33,7 @@ from ghimera.model_work_types import (
 )
 from ghimera.models import LedgerRow, ModelIdentity
 from ghimera.refusals import GhimeraRefused, ModelFailure, RefusalCode
+from ghimera.research_reranking_types import RerankReservation
 
 if TYPE_CHECKING:
     from ghimera.budget import RunBudget
@@ -203,16 +204,33 @@ class ModelInvocation:
         replay_intent_sequence: int | None = None,
         decision: ModelReconciliationDecision | None = None,
         attempt: ModelAttemptAuthorization | None = None,
+        rerank_reservation: RerankReservation | None = None,
     ) -> None:
         self._ledger, self._model, self._scope, self._url = ledger, model, scope, url
         self._budget = budget
+        if (phase == "reranking") != (rerank_reservation is not None):
+            raise FatalModelWorkFailure("reranking requires its exact native reservation")
+        self._rerank_reservation = rerank_reservation
         self._sequence: int | None = None
         self._invoked = False
         self._replay: tuple[LedgerRow, LedgerRow] | None = None
         self._authorization: ModelAttemptAuthorization | None = None
         policy = budget.config.model_work
         self._results = policy.results if policy is not None else None
-        reservation = reserve or budget.reserve_judge
+        reservation: Callable[[], None]
+        if rerank_reservation is not None:
+            if reserve is not None:
+                raise FatalModelWorkFailure("CPU reranking uses the original native budget owner")
+            native_reservation = rerank_reservation
+
+            def reserve_native() -> None:
+                budget.reserve_rerank(
+                    len(native_reservation.request.candidates), native_reservation.input_chars
+                )
+
+            reservation = reserve_native
+        else:
+            reservation = reserve or budget.reserve_judge
         if policy is None:
             if replay_intent_sequence is not None:
                 raise FatalModelWorkFailure("replay requires the original result-retention policy")
@@ -226,9 +244,13 @@ class ModelInvocation:
             raise FatalModelWorkFailure("configured model work requires the run's durable sink")
         rows = ledger.snapshot()
         from ghimera.model_reconciliation import authorization, validate_decisions, validate_policy
+        from ghimera.research_reranking import validate_rerank_rows
 
         try:
             validate_policy(budget.config, rows)
+            usage = validate_rerank_rows(budget.config, rows)
+            if usage != (budget.rerank_calls, budget.rerank_pairs, budget.rerank_chars):
+                raise ValueError("budget does not preserve original rerank reservations")
             if validate_model_rows(policy, budget.config.judge_budget, rows) != budget.judge_calls:
                 raise ValueError("budget does not preserve original model reservations")
         except ValueError as exc:
@@ -308,9 +330,11 @@ class ModelInvocation:
                     judge_reservation=budget.judge_calls + 1,
                 ),
                 model_decision=decision,
+                rerank_reservation=rerank_reservation,
             )
             if decision is not None:
                 validate_policy(budget.config, rows + (candidate,))
+            validate_rerank_rows(budget.config, rows + (candidate,))
         except ValueError as exc:
             raise FatalModelWorkFailure("model decision is not admissible") from exc
         reservation()
@@ -351,6 +375,7 @@ class ModelInvocation:
         )
         if (
             intent is None
+            or original.rerank_reservation != self._rerank_reservation
             or original.model != self._model
             or original.url != self._url
             or intent.phase != phase

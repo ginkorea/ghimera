@@ -277,6 +277,16 @@ class GhimeraConfig(BaseModel):
             or self.model_work.results is None
         ):
             raise ValueError("research recovery requires journal, research and retained model work")
+        reranking = self.research.reranking if self.research is not None else None
+        if reranking is not None and (
+            self.journal is None
+            or self.model_work is None
+            or self.model_work.results is None
+            or reranking.max_calls > self.judge_budget
+        ):
+            raise ValueError(
+                "research reranking requires retained durable model work and judge allowance"
+            )
         if self.model_work is not None and (
             self.journal is None or self.model_work.max_unanswered_calls > self.judge_budget
         ):

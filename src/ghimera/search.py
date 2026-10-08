@@ -11,6 +11,7 @@ from ghimera.discovery_config import SearchCallLimits
 from ghimera.ledger import Ledger
 from ghimera.models import LedgerRow
 from ghimera.refusals import FetchCancelled, FetchFailure, GhimeraRefused, RefusalCode
+from ghimera.research_reranking_types import RerankDecision
 from ghimera.research_types import SearchQuery, SearchRequest, SearchResponse
 from ghimera.transport_types import TransportEvidence
 
@@ -46,6 +47,7 @@ class GroundedSearch(ABC):
         ledger: Ledger,
         *,
         limits: SearchCallLimits | None = None,
+        rerank_decision: RerankDecision | None = None,
     ) -> SearchResponse:
         policy = budget.config.research
         if policy is None or len(query.text) > policy.max_query_chars or not query.text.strip():
@@ -86,7 +88,7 @@ class GroundedSearch(ABC):
         try:
             try:
                 async with asyncio.timeout(request.timeout_seconds):
-                    response = await self.request(request)
+                    response = await self.request_for_run(request, budget, ledger, rerank_decision)
                 size = min(len(response.raw), allowance)
                 if len(response.raw) > allowance or len(response.hits) > request.limit:
                     code = RefusalCode.ADAPTER_CONTRACT
@@ -132,6 +134,16 @@ class GroundedSearch(ABC):
             return response
         finally:
             budget.release_bytes(allowance)
+
+    async def request_for_run(
+        self,
+        request: SearchRequest,
+        budget: RunBudget,
+        ledger: Ledger,
+        rerank_decision: RerankDecision | None,
+    ) -> SearchResponse:
+        """Default providers retain their port; the final template owns all accounting."""
+        return await self.request(request)
 
     @abstractmethod
     async def request(self, request: SearchRequest) -> SearchResponse: ...

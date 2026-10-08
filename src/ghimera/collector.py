@@ -177,7 +177,9 @@ class Collector:
                 if isinstance(binding, McpLeadConfig):
                     adapters[provider.id] = McpLeadSearch(binding, clients[provider.id])
                 elif isinstance(binding, CorpusSearchConfig):
-                    adapters[provider.id] = CorpusLeadSearch(binding, corpora[provider.id])
+                    adapters[provider.id] = CorpusLeadSearch(
+                        binding, corpora[provider.id], run_policy=config.research.reranking
+                    )
                 elif isinstance(binding, AhmiaConfig):
                     adapters[provider.id] = AhmiaIndexSearch(
                         binding, credential=credentials.get(provider.id), resolver=source_resolver
@@ -193,7 +195,7 @@ class Collector:
         elif isinstance(config.search, CorpusSearchConfig):
             if corpus is None or mcp_client is not None or ahmia_credential is not None:
                 raise ValueError("corpus discovery requires its own explicit, borrowed corpus")
-            search = CorpusLeadSearch(config.search, corpus)
+            search = CorpusLeadSearch(config.search, corpus, run_policy=config.research.reranking)
         elif isinstance(config.search, AhmiaConfig):
             if mcp_client is not None:
                 raise ValueError("Ahmia index search does not borrow an MCP credential/client")

@@ -355,6 +355,7 @@ class ResearchResult(ResearchRecord):
                 "retained research requires its exact intent, policy and result schema"
             )
         if self.retrieval is not None:
+            self.retrieval.validate_run(self.harvest.receipt.effective_config, self.harvest.ledger)
             originals = {
                 item.origin.document_sha256: item for item in self.retrieval.graph_originals
             }
@@ -493,6 +494,19 @@ class ResearchResult(ResearchRecord):
                     )
                 native_corpus = CorpusSearchWire.model_validate_json(response.raw)
                 native_corpus.validate_policy(binding, observation.query.text)
+                if native_corpus.query.reranking is not None:
+                    from ghimera.research_reranking import validate_run_evidence
+
+                    learned = native_corpus.query.reranking
+                    validate_run_evidence(
+                        self.harvest.receipt.effective_config,
+                        self.harvest.ledger,
+                        learned.request,
+                        learned.scores,
+                        native_corpus.query.reranking_run,
+                        channel="discovery",
+                        before_sequence=observation.sequence,
+                    )
                 expected_corpus = corpus_leads(native_corpus, binding)
                 if discovery is not None:
                     selected_provider = next(

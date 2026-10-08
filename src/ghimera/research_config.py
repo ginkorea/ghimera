@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.graph_planning_types import GraphPlanningConfig
+from ghimera.research_reranking_types import ResearchRerankingConfig
 from ghimera.research_reuse_config import ResearchReuseConfig
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
@@ -39,6 +40,7 @@ class ResearchConfig(BaseModel):
     retained_evidence: ResearchReuseConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    reranking: ResearchRerankingConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def coherent(self) -> "ResearchConfig":

@@ -1,0 +1,8 @@
+# Inert policy fragment for research.reranking. No model runs on parsing this file.
+# Select a separately configured native corpus/2 and exact reader/search binding.
+schema = "ghimera.research-reranking/1"
+max_calls = 4
+max_pairs = 128
+max_input_chars = 64000
+uncertain_policy = "hold"
+replay_policy = "explicit_original_ack"

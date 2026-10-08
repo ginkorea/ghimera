@@ -57,6 +57,7 @@ from ghimera.research_recovery_types import (
     ResearchRecoveryModels,
     ResearchRecoveryRead,
 )
+from ghimera.research_reranking_types import RerankDecision
 from ghimera.research_reuse import RetainedResearchSession, RetainedSourceNotice
 from ghimera.research_types import (
     AnswerDraft,
@@ -901,7 +902,18 @@ class ResearchLoop:
         if session.budget.remaining_seconds <= 0:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         try:
-            await reuse.query(text, remaining_seconds=session.budget.remaining_seconds)
+            decision = (
+                RerankDecision(
+                    schema="ghimera.rerank-decision/1",
+                    action="fresh",
+                    operation_key="retained:" + hashlib.sha256(text.encode()).hexdigest(),
+                )
+                if self._policy.reranking is not None
+                else None
+            )
+            await reuse.query(
+                text, remaining_seconds=session.budget.remaining_seconds, rerank_decision=decision
+            )
         except GhimeraRefused as exc:
             self._refuse(session, exc.code)
             if session.budget.remaining_seconds <= 0:
@@ -1076,6 +1088,8 @@ class ResearchLoop:
                 self._retained_reader,
                 request.intent,
                 restored=progress.retrieval if progress is not None else None,
+                budget=session.budget,
+                ledger=session.ledger,
             )
             if self._policy.retained_evidence is not None and self._retained_reader is not None
             else None

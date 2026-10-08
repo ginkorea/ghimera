@@ -1,7 +1,8 @@
 """Reserve before spend; the run owns one budget shared by its injected collaborators."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 from ghimera.config import GhimeraConfig
 from ghimera.model_reconciliation_types import (
@@ -31,6 +32,10 @@ class RunBudget:
         self.local_input_bytes = 0
         self.encoding_calls = 0
         self.encoding_chars = 0
+        self.rerank_calls = 0
+        self.rerank_pairs = 0
+        self.rerank_chars = 0
+        self._active_reranks: set[int] = set()
         self._bytes_reserved = 0
         self._bytes_released = asyncio.Event()
 
@@ -65,6 +70,9 @@ class RunBudget:
         from ghimera.model_reconciliation import unreconciled_model_sequences, validate_policy
 
         validate_policy(self.config, rows)
+        from ghimera.research_reranking import validate_rerank_rows
+
+        rerank_usage = validate_rerank_rows(self.config, rows)
         admitted_unknown: tuple[int, ...] = ()
         if admission is not None:
             recovery = self.config.research_recovery
@@ -110,6 +118,7 @@ class RunBudget:
         self.started -= receipt.elapsed_seconds + downtime_seconds
         self.fetches, self.bytes_read = receipt.fetches, receipt.bytes_read
         self.judge_calls = receipt.judge_calls
+        self.rerank_calls, self.rerank_pairs, self.rerank_chars = rerank_usage
         self.encoding_calls, self.encoding_chars = receipt.encoding_calls, receipt.encoding_chars
         self.search_calls = search_calls
         self.challenge_attempts = sum(row.event == "challenge" for row in rows)
@@ -188,6 +197,40 @@ class RunBudget:
         if self.judge_calls >= self.config.judge_budget:
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         self.judge_calls += 1
+
+    def check_rerank(self, pairs: int, chars: int) -> None:
+        self.check_time()
+        policy = self.config.research.reranking if self.config.research is not None else None
+        if (
+            policy is None
+            or self.rerank_calls >= policy.max_calls
+            or self.rerank_pairs + pairs > policy.max_pairs
+            or self.rerank_chars + chars > policy.max_input_chars
+            or self.judge_calls >= self.config.judge_budget
+        ):
+            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+
+    def reserve_rerank(self, pairs: int, chars: int) -> None:
+        self.check_rerank(pairs, chars)
+        self.reserve_judge()
+        self.rerank_calls += 1
+        self.rerank_pairs += pairs
+        self.rerank_chars += chars
+
+    @property
+    def active_rerank_sequences(self) -> frozenset[int]:
+        """Live contacts only; never restored or treated as retained acknowledgements."""
+        return frozenset(self._active_reranks)
+
+    @contextmanager
+    def rerank_contact(self, sequence: int) -> Iterator[None]:
+        if sequence in self._active_reranks:
+            raise ValueError("one original rerank contact cannot be entered twice")
+        self._active_reranks.add(sequence)
+        try:
+            yield
+        finally:
+            self._active_reranks.remove(sequence)
 
     def reserve_challenge(self) -> None:
         self.check_time()

@@ -43,6 +43,7 @@ from ghimera.reranking_types import (
     RerankScores,
     selection_decisions,
 )
+from ghimera.research_reranking_types import RerankInvoker
 from ghimera.retrieval import HybridRetrievalConfig, NativeLexicalIndex
 from ghimera.visual_types import ImageRegion
 
@@ -540,6 +541,7 @@ class EvidenceCorpus:
         encoding_observer: Callable[[EncodingCall], None] | None = None,
         retrieval: HybridRetrievalConfig | None = None,
         encoding_authorization: EncodingAttemptAuthorization | None = None,
+        rerank_invoker: RerankInvoker | None = None,
     ) -> CorpusQuery:
         with self._operation():
             if (
@@ -559,11 +561,23 @@ class EvidenceCorpus:
                 raise ValueError(
                     "learned reranking requires the explicit complete hybrid candidate union"
                 )
+            if rerank_invoker is not None:
+                rerank_invoker.admit(
+                    self.config, self._storage.identity, query=text, retrieval=retrieval
+                )
             query_hash = hashlib.sha256(text.encode()).hexdigest()
             self._storage.start(operation, kind="query", input_sha=query_hash, calls=1)
             try:
                 async with asyncio.timeout(self.config.operation_timeout_seconds):
                     generation, ids, index = await self._snapshot()
+                    if rerank_invoker is not None:
+                        rerank_invoker.admit(
+                            self.config,
+                            self._storage.identity,
+                            query=text,
+                            retrieval=retrieval,
+                            generation=generation,
+                        )
                     lexical = None
                     if retrieval is not None:
                         policy = retrieval
@@ -594,8 +608,9 @@ class EvidenceCorpus:
                     if self._reranker is not None:
                         if self._reranker.config != self.config.reranking:
                             raise ValueError("reranker changed its exact configured policy")
-                        async with asyncio.timeout(self._reranker.config.timeout_seconds):
-                            await self._reranker.prepare()
+                        if rerank_invoker is None or not rerank_invoker.replaying:
+                            async with asyncio.timeout(self._reranker.config.timeout_seconds):
+                                await self._reranker.prepare()
                         if self._reranker.config != self.config.reranking:
                             raise ValueError("reranker changed its exact configured policy")
                     batch, _, evidence = await self._encode(
@@ -632,6 +647,7 @@ class EvidenceCorpus:
                             for row in ranking.ranking
                         )
                     learned = None
+                    run_proof = None
                     if self._reranker is not None:
                         if self.config.reranking is None:
                             raise ValueError("reranker lost its native configured policy")
@@ -666,9 +682,17 @@ class EvidenceCorpus:
                         if self._reranker.config != self.config.reranking:
                             raise ValueError("reranker changed its exact configured policy")
                         async with asyncio.timeout(self.config.reranking.timeout_seconds):
-                            scores = RerankScores.model_validate(
-                                (await self._reranker.score(request)).model_dump()
-                            )
+                            if rerank_invoker is None:
+                                scores = RerankScores.model_validate(
+                                    (await self._reranker.score(request)).model_dump()
+                                )
+                            else:
+                                if ranking is None:
+                                    raise ValueError("run reranking requires its native RRF union")
+                                observed = await rerank_invoker.score(
+                                    request, self._reranker, corpus=self.config, retrieval=ranking
+                                )
+                                scores, run_proof = observed.scores, observed.evidence
                         learned = RerankingEvidence(
                             schema="ghimera.reranking-evidence/1",
                             request=request,
@@ -709,6 +733,7 @@ class EvidenceCorpus:
                         hits=tuple(hits),
                         retrieval=ranking,
                         reranking=learned,
+                        reranking_run=run_proof,
                     )
                 self._storage.terminal(operation, "committed")
                 return result
