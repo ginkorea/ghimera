@@ -26,6 +26,10 @@ response_format = "json_schema"
 [model.gateway]
 schema = "ghimera.self-hosted-gateway/1"
 origin = "https://inference.example.invalid"
+# Default scope is global-only and omitted from serialized recipes.
+# For an explicitly approved origin resolving into RFC 6598 space, configure
+# its real shared approved_addresses above and opt in here:
+# address_scope = "global_or_shared"
 [model.context]
 schema = "chimera.evidence-context/1"
 max_documents = 8
@@ -58,3 +62,5 @@ text_prefix = ""
 [embedding.gateway]
 schema = "ghimera.self-hosted-gateway/1"
 origin = "https://inference.example.invalid"
+# The encoder must declare its own explicit scope when shared DNS pins are used.
+# address_scope = "global_or_shared"

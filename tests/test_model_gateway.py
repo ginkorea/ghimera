@@ -348,3 +348,140 @@ def test_gateway_retains_existing_header_bound(native_wire):
     with pytest.raises(ModelWireFailure):
         asyncio.run(client.post(b"{}"))
     assert len(handles) == 1
+
+
+def shared_config(kind="model", *, addresses=("100.64.0.2",), **updates):
+    return configured(
+        kind,
+        approved_addresses=addresses,
+        gateway=dict(
+            schema="ghimera.self-hosted-gateway/1",
+            origin=ORIGIN,
+            address_scope="global_or_shared",
+        ),
+        **updates,
+    )
+
+
+@pytest.mark.parametrize("kind", ["model", "embedding"])
+def test_shared_control_scope_is_explicit_and_retained_in_native_recipe(kind):
+    for address in ("100.64.0.0", "100.64.0.2", "100.127.255.255"):
+        with pytest.raises(ValidationError):
+            configured(kind, approved_addresses=(address,))
+        selected = shared_config(kind, addresses=(address,))
+        assert type(selected).model_validate_json(selected.model_dump_json()) == selected
+        assert selected.gateway.address_scope == "global_or_shared"
+        assert selected.model_dump()["gateway"]["address_scope"] == "global_or_shared"
+        with pytest.raises(ValueError, match="private service addresses"):
+            PinnedJsonHttp(selected, credential=SecretStr("fixture-credential"))
+
+
+def test_global_default_keeps_gateway_serialization_and_opt_in_must_be_typed():
+    old = configured().gateway
+    assert old.address_scope == "global"
+    assert old.model_dump_json() == (
+        '{"schema":"ghimera.self-hosted-gateway/1","origin":"https://inference.example.invalid"}'
+    )
+    explicit = SelfHostedGatewayConfig.model_validate(
+        dict(old.model_dump(), address_scope="global")
+    )
+    assert explicit.model_dump_json() == old.model_dump_json()
+    for value in (None, True, "shared", "private", "all"):
+        with pytest.raises(ValidationError):
+            SelfHostedGatewayConfig.model_validate(dict(old.model_dump(), address_scope=value))
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "100.100.100.200",
+        "168.63.129.16",
+        "127.0.0.1",
+        "10.0.0.1",
+        "169.254.169.254",
+        "192.0.2.1",
+        "224.0.0.1",
+        "::ffff:100.64.0.2",
+        "fe80::1",
+        "fc00::1",
+    ],
+)
+def test_shared_opt_in_cannot_expand_to_metadata_or_other_non_global_scopes(address):
+    with pytest.raises(ValidationError):
+        shared_config(addresses=(address,))
+
+
+@pytest.mark.parametrize("address", ["100.63.255.255", "100.128.0.0"])
+def test_shared_scope_keeps_global_addresses_outside_shared_range(address):
+    assert configured(approved_addresses=(address,)).approved_addresses == (address,)
+    assert shared_config(addresses=(address,)).approved_addresses == (address,)
+
+
+@pytest.mark.parametrize("kind", ["model", "embedding"])
+def test_native_transport_keeps_real_shared_pin_hostname_and_https_contract(native_wire, kind):
+    handles, _ = native_wire
+    selected = shared_config(kind)
+    resolver = ResolvedPins(("100.64.0.2",))
+    client = PinnedModelHttp(
+        selected, credential=SecretStr("fixture-credential"), resolver=resolver
+    )
+    assert asyncio.run(client.post(b"{}")).status == 200
+    assert resolver.calls == [("inference.example.invalid", 443)]
+    assert len(handles) == 1
+    options = handles[0].options
+    assert options[CurlOpt.RESOLVE] == ["inference.example.invalid:443:100.64.0.2"]
+    assert options[CurlOpt.URL] == selected.endpoint
+    assert options[CurlOpt.SSL_VERIFYPEER] == 1 and options[CurlOpt.SSL_VERIFYHOST] == 2
+    assert options[CurlOpt.PROTOCOLS_STR] == "https" and options[CurlOpt.FOLLOWLOCATION] == 0
+    assert b"Authorization: Bearer fixture-credential" in options[CurlOpt.HTTPHEADER]
+
+
+@pytest.mark.parametrize(
+    "addresses",
+    [
+        ("100.64.0.3",),
+        ("100.64.0.2", "100.64.0.3"),
+        ("100.64.0.2", "127.0.0.1"),
+    ],
+)
+def test_shared_opt_in_still_refuses_any_unpinned_dns_answer_before_contact(native_wire, addresses):
+    handles, _ = native_wire
+    client = PinnedModelHttp(
+        shared_config(),
+        credential=SecretStr("fixture-credential"),
+        resolver=ResolvedPins(addresses),
+    )
+    with pytest.raises(ModelWireFailure):
+        asyncio.run(client.post(b"{}"))
+    assert not handles
+
+
+def test_shared_opt_in_keeps_redirect_refusal_and_supports_exact_shared_literal(native_wire):
+    handles, response = native_wire
+    response["status"] = 307
+    client = PinnedModelHttp(
+        shared_config(),
+        credential=SecretStr("fixture-credential"),
+        resolver=ResolvedPins(("100.64.0.2",)),
+    )
+    with pytest.raises(ModelWireFailure):
+        asyncio.run(client.post(b"{}"))
+    assert len(handles) == 1
+    origin = "https://100.64.0.2"
+    selected = configured(
+        approved_addresses=("100.64.0.2",),
+        endpoint=origin + "/v1/chat/completions",
+        gateway=dict(
+            schema="ghimera.self-hosted-gateway/1",
+            origin=origin,
+            address_scope="global_or_shared",
+        ),
+    )
+    assert selected.gateway.origin == origin
+    with pytest.raises(ValidationError):
+        type(selected).model_validate(
+            dict(
+                selected.model_dump(),
+                gateway=dict(schema="ghimera.self-hosted-gateway/1", origin=origin),
+            )
+        )
