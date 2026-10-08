@@ -178,13 +178,15 @@ remain required. The exact 1,239-test gate, independent installed four-window
 crash/readback and original public artifact bytes passed; see `RELEASE_049.md`.
 Those checks do not establish model-quality or whole-session recovery acceptance.
 
-The next owned I03 source candidate retains bounded original model-return
+The I03 replay increment published in 0.4.10 retains bounded original model-return
 bytes in the same native journal and provides exact-sequence local replay
 through the existing research model owner. It also fixes saved model-call count
 validation and reconstructs semantic quotas from original invocation intents.
 No new storage engine, automatic unknown-call retry or replacement evidence
-source is added. Full gate/publication and whole interrupted-session control
-adoption remain open; see the candidate section of `MODEL_WORK.md`.
+source is added. Its source gate and publication are recorded in
+`RELEASE_0410.md`; whole interrupted-session control adoption is a separate
+requirement. The unpublished follow-up below adds research phase and command
+adoption without claiming arbitrary-interruption reconciliation.
 
 Redirect work is now an integrated development candidate: the full Collector
 accepts explicit human_browser.navigation on its caller-bound Page, reuses the
