@@ -228,6 +228,32 @@ readings, rather than appending a second unqualified parent. OCR labels do not
 establish diagram arrows or affiliations; reviewed visual claims remain model
 assertions with exact region anchors, not independent corroboration.
 
+## Next I03 recovery increment (unpublished source candidate)
+
+The optional versioned `research_recovery` policy saves exact native control
+before planning, assessment, answer and review, including the first plan with
+zero completed rounds. `ResearchLoop.recover` adopts only an intact saved
+boundary with either no started invocation or one retained acknowledged return;
+it continues the existing loop without repeating completed source work or model
+calls. Native restoration retains the writer lease, original reservations,
+provider-rotation history and wall-clock downtime. Legacy `continuation/1`
+keeps its original stricter round-boundary behavior. See
+[research recovery](RESEARCH_RECOVERY.md).
+
+The optional corpus `encoding_recovery` policy commits exact encoding intent
+before contact and original vectors/audit lineage atomically before returning.
+Reservations survive process death and reopening. Query acknowledgements are
+generation-bound; local reuse reports its original call identity rather than
+another observer call. Research retains this provenance beside its query
+allowance. See [encoding recovery](ENCODING_RECOVERY.md).
+
+This is not full I03 closure: arbitrary interruption during source/discovery,
+retained-reader control mutation or graph application still requires explicit
+reconciliation; unknown model/encoding outcomes are never automatically retried.
+CLI/service recovery deployment, the combined frozen gate and independently
+installed acceptance remain separate from these implementation claims. Real
+model and multilingual quality acceptance remains open.
+
 ## Delivery and release discipline
 
 Implement and commit bounded rows with tests for their owning contracts and

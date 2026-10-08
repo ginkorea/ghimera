@@ -25,7 +25,12 @@ from ghimera.graph_planning import build_context
 from ghimera.graph_planning_types import PlanningGraph
 from ghimera.loop import CollectionSession, GoalLoop
 from ghimera.model_types import ModelCallEvidence
-from ghimera.model_work import FatalModelWorkFailure, ModelInvocation, port_input, record_output
+from ghimera.model_work import (
+    FatalModelWorkFailure,
+    ModelInvocation,
+    port_input,
+    record_output,
+)
 from ghimera.model_work_types import ModelStoredOutput
 from ghimera.models import (
     Document,
@@ -39,6 +44,13 @@ from ghimera.models import (
 from ghimera.reference_types import ReferenceQuery, ReferenceSource, SearchReference
 from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
 from ghimera.research_config import ResearchConfig
+from ghimera.research_recovery_store import ResearchRecoveryStore
+from ghimera.research_recovery_types import (
+    ResearchControlSnapshot,
+    ResearchPendingModel,
+    ResearchRecoveryModels,
+    ResearchRecoveryRead,
+)
 from ghimera.research_reuse import RetainedResearchSession, RetainedSourceNotice
 from ghimera.research_types import (
     AnswerDraft,
@@ -167,7 +179,7 @@ class ResearchScopeCompiler:
     def hosts(self) -> tuple[str, ...]:
         return tuple(sorted(self._hosts))
 
-    def restore_hosts(self, checkpoint: ResearchCheckpoint) -> None:
+    def restore_hosts(self, checkpoint: ResearchCheckpoint | ResearchControlSnapshot) -> None:
         observed = {
             urlsplit(row.url).hostname
             for row in checkpoint.progress.harvest.ledger
@@ -194,8 +206,16 @@ class ResearchScopeCompiler:
 class ModelCalls:
     """One accounting owner for all research model phases, including failures."""
 
-    def __init__(self, session: CollectionSession, policy: ResearchConfig) -> None:
+    def __init__(
+        self,
+        session: CollectionSession,
+        policy: ResearchConfig,
+        *,
+        before_call: Callable[[ModelEvent, ModelIdentity, ResearchRecord], None] | None = None,
+        recovery: ResearchRecoveryRead | None = None,
+    ) -> None:
         self._session, self._policy = session, policy
+        self._before_call, self._recovery = before_call, recovery
 
     @overload
     def replay(
@@ -291,6 +311,8 @@ class ModelCalls:
         model: ModelIdentity,
         request: R,
         call: Callable[[R], Awaitable[T]],
+        *,
+        result_type: type[T] | None = None,
     ) -> T:
         # Documents are retained objects, not the model's serialized context.
         # Concrete model ports apply the same limit to their bounded prompt.
@@ -299,6 +321,51 @@ class ModelCalls:
         budget, ledger = self._session.budget, self._session.ledger
         if model.location == "external":
             raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
+        recovery = self._recovery
+        if recovery is not None:
+            saved = recovery.snapshot
+            if (
+                saved.phase != event
+                or saved.pending_model.model != model
+                or port_input(budget, request) != port_input(budget, saved.model_request)
+            ):
+                raise FatalModelWorkFailure("recovery must continue its exact original model phase")
+            self._recovery = None
+            if recovery.intent_sequence is not None:
+                if result_type is None:
+                    raise FatalModelWorkFailure("recovery requires its owning result schema")
+                replaying = ModelInvocation(
+                    budget,
+                    ledger,
+                    phase=event,
+                    model=model,
+                    request=port_input(budget, request),
+                    replay_intent_sequence=recovery.intent_sequence,
+                )
+
+                def decode(stored: ModelStoredOutput) -> T:
+                    return result_type.model_validate_json(stored.body())
+
+                retained_result = replaying.replay(decode)
+                # A crash may have happened before the ordinary phase event was
+                # appended. Reuse that event if present; never invent another
+                # remote invocation or quota reservation.
+                if len(recovery.journal.rows) == len(saved.progress.harvest.ledger) + 2:
+                    ledger.append(
+                        LedgerRow(
+                            sequence=ledger.next_sequence,
+                            event=event,
+                            model=model,
+                            model_call=retained_result.model_call,
+                            reason="model_response:" + retained_result.content_digest(),
+                            planning_graph=request.graph_context
+                            if isinstance(request, PlanningRequest)
+                            else None,
+                        )
+                    )
+                return retained_result
+        if self._before_call is not None:
+            self._before_call(event, model, request)
         invocation = ModelInvocation(
             budget,
             ledger,
@@ -590,7 +657,9 @@ class ResearchLoop:
         suspend_after_rounds: int | None = None,
     ) -> ResearchResult:
         self._validate_suspend(suspend_after_rounds)
-        if self._config.continuation is not None and run_id is None:
+        if (
+            self._config.continuation is not None or self._config.research_recovery is not None
+        ) and run_id is None:
             raise ValueError("durable continuation requires an explicit run identity")
         request = ResearchRequest.model_validate(request.model_dump())
         session = await self._collector.open(
@@ -650,6 +719,43 @@ class ResearchLoop:
         finally:
             session.close()
 
+    async def recover(self, run_id: str, *, snapshot_sha256: str) -> ResearchResult:
+        """Adopt one acknowledged model return at its saved native phase.
+
+        Unknown calls and later source/graph effects require reconciliation;
+        this is deliberately separate from legacy round-boundary resume.
+        """
+        policy = self._config.research_recovery
+        if policy is None:
+            raise ValueError("model-boundary recovery requires explicit configured policy")
+        recovery = ResearchRecoveryStore(self._config, run_id, policy).read(
+            snapshot_sha256,
+            expected_models=ResearchRecoveryModels(
+                planner=self._planner.model,
+                analyst=self._analyst.model,
+                reviewer=self._reviewer.model,
+                search_provider=self._search.identity[0],
+                search_revision=self._search.identity[1],
+            ),
+        )
+        saved = recovery.snapshot
+        downtime = time.time() - saved.saved_at
+        if downtime < 0:
+            raise ValueError("wall clock moved backwards since the control snapshot")
+        ResearchScopeCompiler(self._policy).restore_hosts(saved)
+        session = await self._collector.restore(
+            run_id,
+            saved.progress.harvest,
+            saved.session,
+            search_calls=saved.progress.search_calls,
+            downtime_seconds=downtime,
+            model_return=recovery,
+        )
+        try:
+            return await self._drive(saved.request, session, run_id=run_id, recovery=recovery)
+        finally:
+            session.close()
+
     @staticmethod
     def _documents(
         session: CollectionSession, reuse: RetainedResearchSession | None
@@ -691,6 +797,8 @@ class ResearchLoop:
         reuse: RetainedResearchSession | None,
         request: ResearchRequest,
         questions: tuple[Question, ...],
+        *,
+        calls: ModelCalls | None = None,
     ) -> Assessment:
         documents = self._documents(session, reuse)
         evidence = EvidenceRequest(
@@ -699,8 +807,12 @@ class ResearchLoop:
             documents=documents,
             retained_sources=self._notices(reuse),
         )
-        result = await ModelCalls(session, self._policy).invoke(
-            "assessment", self._analyst.model, evidence, self._analyst.assess
+        result = await (calls or ModelCalls(session, self._policy)).invoke(
+            "assessment",
+            self._analyst.model,
+            evidence,
+            self._analyst.assess,
+            result_type=Assessment,
         )
         self._validate_assessment(result, questions, documents)
         return result
@@ -712,8 +824,11 @@ class ResearchLoop:
         questions: tuple[Question, ...],
         assessment: Assessment,
         reuse: RetainedResearchSession | None = None,
+        *,
+        calls: ModelCalls | None = None,
+        recovered_candidate: AnswerDraft | None = None,
     ) -> tuple[AnswerDraft, AnswerReview]:
-        calls = ModelCalls(session, self._policy)
+        calls = calls or ModelCalls(session, self._policy)
         answering = AnswerRequest(
             intent=request.intent,
             questions=questions,
@@ -721,8 +836,12 @@ class ResearchLoop:
             retained_sources=self._notices(reuse),
             assessment=assessment,
         )
-        candidate = await calls.invoke(
-            "answer", self._analyst.model, answering, self._analyst.answer
+        candidate = recovered_candidate or await calls.invoke(
+            "answer",
+            self._analyst.model,
+            answering,
+            self._analyst.answer,
+            result_type=AnswerDraft,
         )
         self._validate_answer(candidate, questions, self._documents(session, reuse))
         reviewing = ReviewRequest(
@@ -733,7 +852,11 @@ class ResearchLoop:
             answer=candidate,
         )
         checked = await calls.invoke(
-            "review", self._reviewer.model, reviewing, self._reviewer.review
+            "review",
+            self._reviewer.model,
+            reviewing,
+            self._reviewer.review,
+            result_type=AnswerReview,
         )
         if (
             checked.answer_digest != candidate.content_digest()
@@ -811,15 +934,22 @@ class ResearchLoop:
         *,
         run_id: str | None,
         checkpoint: ResearchCheckpoint | None = None,
+        recovery: ResearchRecoveryRead | None = None,
         suspend_after_rounds: int | None = None,
     ) -> ResearchResult:
-        calls, compiler = ModelCalls(session, self._policy), ResearchScopeCompiler(self._policy)
+        if checkpoint is not None and recovery is not None:
+            raise ValueError("choose one native continuation boundary")
+        saved = recovery.snapshot if recovery is not None else None
+        progress = (
+            checkpoint.progress if checkpoint is not None else saved.progress if saved else None
+        )
+        compiler = ResearchScopeCompiler(self._policy)
         reuse = (
             RetainedResearchSession(
                 self._policy.retained_evidence,
                 self._retained_reader,
                 request.intent,
-                restored=checkpoint.progress.retrieval if checkpoint is not None else None,
+                restored=progress.retrieval if progress is not None else None,
             )
             if self._policy.retained_evidence is not None and self._retained_reader is not None
             else None
@@ -828,26 +958,112 @@ class ResearchLoop:
             self._search,
             session.budget,
             session.ledger,
-            restored=checkpoint.progress.search_observations if checkpoint is not None else (),
+            restored=progress.search_observations if progress is not None else (),
         )
-        questions = checkpoint.progress.questions if checkpoint is not None else ()
-        rounds = list(checkpoint.progress.rounds) if checkpoint is not None else []
+        questions = progress.questions if progress is not None else ()
+        rounds = list(progress.rounds) if progress is not None else []
+        history.set_rounds(tuple(rounds))
         initial_rounds = len(rounds)
-        assessment = checkpoint.assessment if checkpoint is not None else None
+        assessment = (
+            checkpoint.assessment if checkpoint is not None else saved.assessment if saved else None
+        )
         # A rejected retained-only answer must seek new evidence next, not use
         # the same apparently complete assessment to skip discovery again.
-        allow_retained_completion = True
+        allow_retained_completion = saved.allow_retained_completion if saved else True
+        plan = saved.current_plan if saved else None
+        number = saved.round_number if saved else max(1, len(rounds))
+        urls = saved.discovered_urls if saved else ()
+        collection_stop = saved.collection_stop if saved else "frontier_empty"
+        before_documents = set(saved.before_documents) if saved else set()
+        before_answers = set(saved.before_answers) if saved else set()
+        assessment_context: Literal["post_collection", "retained_first"] = (
+            saved.assessment_context if saved else "post_collection"
+        )
+
+        def before_model(event: ModelEvent, model: ModelIdentity, inputs: ResearchRecord) -> None:
+            policy = self._config.research_recovery
+            if policy is None:
+                return
+            if run_id is None or not isinstance(
+                inputs, (PlanningRequest, EvidenceRequest, AnswerRequest, ReviewRequest)
+            ):
+                raise ValueError("recovery needs an explicit run and exact native phase request")
+            wire = port_input(session.budget, inputs)
+            current = ResearchResult(
+                schema="chimera.research-result/3"
+                if reuse is not None
+                else "chimera.research-result/2",
+                status="partial",
+                stop_reason="rounds_exhausted",
+                harvest=self._collector.snapshot(session),
+                questions=questions,
+                rounds=tuple(rounds),
+                unresolved=tuple(q.id for q in questions),
+                answer=None,
+                review=None,
+                planner=self._planner.model,
+                analyst=self._analyst.model,
+                reviewer=self._reviewer.model,
+                search_provider=self._search.identity[0],
+                search_revision=self._search.identity[1],
+                search_calls=session.budget.search_calls,
+                search_observations=history.observations,
+                retrieval=reuse.report if reuse is not None else None,
+            )
+            snapshot = ResearchControlSnapshot(
+                schema="ghimera.research-control-snapshot/1",
+                run_id=run_id,
+                saved_at=time.time(),
+                max_snapshot_bytes=policy.max_snapshot_bytes,
+                request=request,
+                progress=current,
+                session=session.checkpoint_state(),
+                admitted_hosts=compiler.hosts,
+                phase=event,
+                round_number=number,
+                model_request=inputs,
+                pending_model=ResearchPendingModel(
+                    phase=event,
+                    model=model,
+                    input_sha256=hashlib.sha256(wire).hexdigest(),
+                    input_bytes=len(wire),
+                ),
+                current_plan=plan,
+                assessment=assessment,
+                current_answer=inputs.answer if isinstance(inputs, ReviewRequest) else None,
+                assessment_context=assessment_context,
+                discovered_urls=urls,
+                collection_stop=collection_stop,
+                before_documents=tuple(sorted(before_documents)),
+                before_answers=tuple(sorted(before_answers)),
+                allow_retained_completion=allow_retained_completion,
+            )
+            ResearchRecoveryStore(self._config, run_id, policy).write(snapshot)
+
+        calls = ModelCalls(session, self._policy, before_call=before_model, recovery=recovery)
         answer: AnswerDraft | None = None
         review: AnswerReview | None = None
         reason: Literal["answered", "rounds_exhausted", "budget_exhausted", "failed"] = (
             "rounds_exhausted"
         )
-        if checkpoint is not None:
-            compiler.restore_hosts(checkpoint)
-            if checkpoint.next_action == "answer" and assessment is not None:
+        restored_control = checkpoint if checkpoint is not None else saved
+        if restored_control is not None:
+            compiler.restore_hosts(restored_control)
+            answer_ready = (checkpoint is not None and checkpoint.next_action == "answer") or (
+                saved is not None and saved.phase in {"answer", "review"}
+            )
+            if answer_ready and assessment is not None:
                 try:
                     answer, review = await self._answer(
-                        session, request, questions, assessment, reuse
+                        session,
+                        request,
+                        questions,
+                        assessment,
+                        reuse,
+                        calls=calls,
+                        recovered_candidate=saved.current_answer
+                        if saved is not None and saved.phase == "review"
+                        else None,
                     )
                     reason = "answered"
                 except GhimeraRefused as exc:
@@ -876,44 +1092,87 @@ class ResearchLoop:
             if reason in {"failed", "budget_exhausted", "answered"}:
                 break
             try:
-                planning = PlanningRequest(
-                    intent=request.intent,
-                    questions=questions,
-                    documents=self._documents(session, reuse),
-                    retained_sources=self._notices(reuse),
-                    assessment=assessment,
-                    max_questions=self._policy.max_questions,
-                    max_queries=self._policy.max_queries_per_round,
-                    max_query_chars=self._policy.max_query_chars,
-                    graph_context=build_context(self._config, session.ledger.snapshot()),
+                resuming_assessment = (
+                    saved is not None
+                    and saved.phase == "assessment"
+                    and number == saved.round_number
                 )
-                plan = await calls.invoke("plan", self._planner.model, planning, self._planner.plan)
-                self._validate_plan(plan, questions, planning.graph_context)
-                questions = plan.questions
-                trace = await self._trace_plan(session, plan)
-                compiler.include_reference_hosts(session.reference_hosts)
-                history.set_rounds(tuple(rounds))
-                before_documents = {doc.sha256 for doc in session.evidence_documents}
-                prior_assessment = rounds[-1].assessment if rounds else assessment
-                before_answers = (
-                    {
-                        item.question_id
-                        for item in prior_assessment.coverage
-                        if item.status == "answered"
-                    }
-                    if prior_assessment
-                    else set()
-                )
-                for query in plan.queries:
-                    await self._retrieve(session, reuse, query.text)
+                if not resuming_assessment:
+                    planning = (
+                        saved.model_request
+                        if (
+                            saved is not None
+                            and saved.phase == "plan"
+                            and number == saved.round_number
+                            and isinstance(saved.model_request, PlanningRequest)
+                        )
+                        else PlanningRequest(
+                            intent=request.intent,
+                            questions=questions,
+                            documents=self._documents(session, reuse),
+                            retained_sources=self._notices(reuse),
+                            assessment=assessment,
+                            max_questions=self._policy.max_questions,
+                            max_queries=self._policy.max_queries_per_round,
+                            max_query_chars=self._policy.max_query_chars,
+                            graph_context=build_context(self._config, session.ledger.snapshot()),
+                        )
+                    )
+                    plan = await calls.invoke(
+                        "plan",
+                        self._planner.model,
+                        planning,
+                        self._planner.plan,
+                        result_type=ResearchPlan,
+                    )
+                    self._validate_plan(plan, questions, planning.graph_context)
+                    questions = plan.questions
+                    trace = await self._trace_plan(session, plan)
+                    compiler.include_reference_hosts(session.reference_hosts)
+                    history.set_rounds(tuple(rounds))
+                    before_documents = {doc.sha256 for doc in session.evidence_documents}
+                    prior_assessment = rounds[-1].assessment if rounds else assessment
+                    before_answers = (
+                        {
+                            item.question_id
+                            for item in prior_assessment.coverage
+                            if item.status == "answered"
+                        }
+                        if prior_assessment
+                        else set()
+                    )
+                    for query in plan.queries:
+                        await self._retrieve(session, reuse, query.text)
+                else:
+                    if plan is None:
+                        raise ValueError("assessment recovery requires its original round plan")
+                    # Trace was committed before this boundary. Derive native
+                    # identities without appending graph nodes/edges again.
+                    trace = (
+                        {
+                            query.content_digest(): session.graph.node(
+                                "query",
+                                session.graph.intent_id + ":" + query.content_digest(),
+                                query.text,
+                                self._planner.model.revision,
+                            ).id
+                            for query in plan.queries
+                        }
+                        if session.graph is not None
+                        else {}
+                    )
+                if plan is None:
+                    raise ValueError("research round requires its validated plan")
                 if (
                     reuse is not None
                     and reuse.report.documents
                     and reuse.report.policy.assess_before_discovery
                     and allow_retained_completion
                     and not request.seeds
+                    and (not resuming_assessment or assessment_context == "retained_first")
                 ):
-                    assessment = await self._assess(session, reuse, request, questions)
+                    assessment_context = "retained_first"
+                    assessment = await self._assess(session, reuse, request, questions, calls=calls)
                     if questions and all(item.status == "answered" for item in assessment.coverage):
                         rounds.append(
                             ResearchRound(
@@ -939,12 +1198,13 @@ class ResearchLoop:
                         )
                         allow_retained_completion = False
                         answer, review = await self._answer(
-                            session, request, questions, assessment, reuse
+                            session, request, questions, assessment, reuse, calls=calls
                         )
                         reason = "answered"
                         break
-                urls = await self._discover(session, plan.queries, compiler, trace, history)
-                if number == 1:
+                if not resuming_assessment or assessment_context == "retained_first":
+                    urls = await self._discover(session, plan.queries, compiler, trace, history)
+                if number == 1 and not resuming_assessment:
                     allowed_seeds: list[str] = []
                     for seed in request.seeds:
                         if compiler.accept(seed):
@@ -954,9 +1214,12 @@ class ResearchLoop:
                     seeds = tuple(allowed_seeds)
                     urls = tuple(dict.fromkeys(seeds + urls))
                 scope = compiler.scope()
-                collection_stop = "frontier_empty"
+                if not resuming_assessment or assessment_context == "retained_first":
+                    collection_stop = "frontier_empty"
                 quantum_start = session.budget.fetches
-                if scope is not None:
+                if scope is not None and (
+                    not resuming_assessment or assessment_context == "retained_first"
+                ):
                     collection_stop = await self._collector.collect(
                         session,
                         scope,
@@ -990,7 +1253,8 @@ class ResearchLoop:
                     )
                     reason = "failed" if collection_stop == "failed" else "budget_exhausted"
                     break
-                assessment = await self._assess(session, reuse, request, questions)
+                assessment_context = "post_collection"
+                assessment = await self._assess(session, reuse, request, questions, calls=calls)
                 rounds.append(
                     ResearchRound(
                         number=number,
@@ -1031,7 +1295,9 @@ class ResearchLoop:
                 )
                 if not questions or any(item.status != "answered" for item in assessment.coverage):
                     continue
-                answer, review = await self._answer(session, request, questions, assessment, reuse)
+                answer, review = await self._answer(
+                    session, request, questions, assessment, reuse, calls=calls
+                )
                 reason = "answered"
                 break
             except GhimeraRefused as exc:

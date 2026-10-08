@@ -8,7 +8,7 @@ from pydantic import Field, model_validator
 
 from ghimera.corpus_evidence import CorpusEvidenceBundle, CorpusEvidenceReader
 from ghimera.corpus_types import BoundCorpusDocument, CorpusRecord
-from ghimera.embedding_types import EncodingCall
+from ghimera.embedding_types import EncodingCall, EncodingRecoveryEvidence
 from ghimera.graph_types import GraphRetainedOrigin
 from ghimera.models import Document, RetainedOriginal
 from ghimera.refusals import GhimeraRefused, RefusalCode
@@ -27,6 +27,9 @@ class RetrievalObservation(CorpusRecord):
     encoding_call: EncodingCall | None
     bundle_sha256: Digest | None
     reason: Literal["snapshot_admitted", "query_refused", "query_cancelled"]
+    encoding_recovery: EncodingRecoveryEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def terminal(self) -> "RetrievalObservation":
@@ -171,6 +174,7 @@ class ResearchRetrievalReport(CorpusRecord):
                     bundle.policy != reader
                     or bundle.query_text != text
                     or bundle.query.encoding_call != call
+                    or bundle.query.encoding_recovery != observation.encoding_recovery
                 ):
                     raise ValueError("retained snapshot must bind its actual current query")
         return self
@@ -234,6 +238,7 @@ class RetainedResearchSession:
         ):
             raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         call: EncodingCall | None = None
+        recovered: EncodingRecoveryEvidence | None = None
         bundle: CorpusEvidenceBundle | None = None
         outcome: Literal["success", "refused", "cancelled"] = "refused"
         self._active = True
@@ -247,6 +252,14 @@ class RetainedResearchSession:
         try:
             async with asyncio.timeout(min(remaining_seconds, reader.timeout_seconds)):
                 candidate = await self._reader.read(text, encoding_observer=observe)
+            recovered = candidate.query.encoding_recovery
+            if call is None:
+                if recovered is None or not recovered.reused:
+                    raise ValueError("query without a new call requires its acknowledged recovery")
+                # The original audited call is evidence, not a new observer
+                # callback or another provider charge. Query allowance still
+                # records this read; corpus lifetime reservations never reset.
+                call = EncodingCall.model_validate(candidate.query.encoding_call.model_dump())
             probe = ResearchRetrievalReport(
                 schema="ghimera.research-retrieval/1",
                 policy=policy,
@@ -259,6 +272,7 @@ class RetainedResearchSession:
                         encoding_call=call,
                         bundle_sha256=bundle_digest(candidate),
                         reason="snapshot_admitted",
+                        encoding_recovery=recovered,
                     ),
                 ),
                 snapshots=tuple(self._snapshots) + (candidate,),
@@ -281,6 +295,7 @@ class RetainedResearchSession:
                     else "query_cancelled"
                     if outcome == "cancelled"
                     else "query_refused",
+                    encoding_recovery=recovered,
                 )
             )
             if bundle is not None:

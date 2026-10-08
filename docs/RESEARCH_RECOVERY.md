@@ -14,6 +14,26 @@ cannot enlarge the saved storage allowance by supplying another policy.
 
 ## Native API
 
+With the optional policy configured, `ResearchLoop.run` records the control
+boundary before each research model call. After a process interruption, read
+and preserve the SHA-256 of the owner-private `research-control.json`, then use
+the same recipe and pinned collaborators:
+
+```python
+result = await research_loop.recover(run_id, snapshot_sha256=original_snapshot_sha256)
+```
+
+This continues the existing `_drive` loop at its saved phase. A recovered
+assessment skips completed planning, retrieval, discovery and collection;
+review recovery also preserves the validated candidate answer. Provider
+rotation retains completed round history. Native session restoration acquires
+the original journal writer lease and restores model reservations from the
+verified tail even when a crash preceded the phase event. Local replay does not
+reserve another call. All existing citation, coverage and independent-review
+checks still run. Restart downtime counts against the original wall budget.
+
+The lower-level storage API is:
+
 ```python
 store = ResearchRecoveryStore(config, run_id, recovery_policy)
 receipt = store.write(snapshot)
@@ -67,7 +87,8 @@ must have the native `model_response:<content_digest>` reason, the exact model
 call evidence and planning context, and no other effects.
 
 The returned original `intent_sequence` lets the owning research loop use
-`ModelCalls.replay` under the native writer's committed-prefix binding. The loop
+native `ModelInvocation.replay` through the phase's owning result schema under
+the writer's committed-prefix binding. The loop
 restores reservation accounting from the verified journal before replay,
 applies its normal plan, source-citation, coverage, answer and independent-review
 checks, then continues at the saved control phase. A retained model response
@@ -90,6 +111,18 @@ authenticate a malicious owner's rewrite and is not a multi-process database.
 This substrate deliberately refuses interruptions with later collection,
 retrieval, discovery or graph mutations. Such work needs its own acknowledged
 control boundary before it can resume safely. There is no transparent retry of
-arbitrary mid-collection work. CLI/loop recovery wiring and service/model
+arbitrary mid-collection work. CLI/service recovery wiring and service/model
 acceptance belong to their native owners; storage tests alone do not establish
-live recovery or model quality.
+live recovery or model quality. CLI/service automatic restart wiring remains
+separate; the native loop API does not imply that a deployed service invokes it.
+
+```mermaid
+classDiagram
+    ResearchLoop --> ResearchRecoveryStore : saves and admits phase control
+    ResearchRecoveryStore --> ResearchControlSnapshot : exact typed state
+    ResearchRecoveryStore --> DirectoryLedgerSink : shared journal helpers
+    ResearchLoop --> GoalLoop : restores original session
+    GoalLoop --> CollectionSession : owns writer and budget
+    ModelCalls --> ModelInvocation : original invocation or local replay
+    ModelInvocation --> CollectionSession : preserves journal reservations
+```

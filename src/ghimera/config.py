@@ -29,6 +29,7 @@ from ghimera.model_work_types import ModelWorkConfig
 from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.reference_config import ReferenceConfig
 from ghimera.research_config import ResearchConfig
+from ghimera.research_recovery_config import ResearchRecoveryConfig
 from ghimera.scoring_config import ScoringConfig
 from ghimera.search_config import SearxConfig
 from ghimera.semantic_types import SemanticConfig
@@ -172,11 +173,21 @@ class GhimeraConfig(BaseModel):
     )
     semantics: SemanticConfig | None = Field(default=None, exclude_if=lambda v: v is None)
     continuation: ContinuationConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    research_recovery: ResearchRecoveryConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     source_work: SourceWorkConfig | None = Field(default=None, exclude_if=lambda v: v is None)
     model_work: ModelWorkConfig | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
+        if self.research_recovery is not None and (
+            self.journal is None
+            or self.research is None
+            or self.model_work is None
+            or self.model_work.results is None
+        ):
+            raise ValueError("research recovery requires journal, research and retained model work")
         if self.model_work is not None and (
             self.journal is None or self.model_work.max_unanswered_calls > self.judge_budget
         ):

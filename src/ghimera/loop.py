@@ -27,7 +27,7 @@ from ghimera.local_inputs import (
     LocalInputLoader,
     LocalInputSnapshot,
 )
-from ghimera.model_work import ModelInvocation, port_input, record_output
+from ghimera.model_work import ModelInvocation, port_input, record_output, validate_model_rows
 from ghimera.models import (
     Document,
     DuplicateOccurrence,
@@ -61,6 +61,7 @@ from ghimera.visual_types import ImageEvidence
 CollectionStop = StopReason | Literal["round_limit"]
 
 if TYPE_CHECKING:
+    from ghimera.research_recovery_types import ResearchRecoveryRead
     from ghimera.source_work import SourceWorkStore
 
 
@@ -336,6 +337,7 @@ class GoalLoop:
         *,
         search_calls: int,
         downtime_seconds: float,
+        model_return: "ResearchRecoveryRead | None" = None,
     ) -> CollectionSession:
         """Resume the exact durable run; no new identity, calls or budget reset."""
         from ghimera.journal import DirectoryLedgerSink
@@ -345,18 +347,42 @@ class GoalLoop:
             or harvest.receipt.judge != self._judge.model
         ):
             raise ValueError("continuation requires the original collection recipe and judge")
+        rows, receipt = harvest.ledger, harvest.receipt
+        if model_return is not None:
+            from ghimera.journal_types import canonical
+            from ghimera.research_recovery_store import ResearchRecoveryStore
+
+            policy = self._config.research_recovery
+            if policy is None or model_return.snapshot.progress.harvest != harvest:
+                raise ValueError("model return must preserve its exact collection snapshot")
+            # Revalidate the original private snapshot and its admitted tail,
+            # then let the native writer lease fence changes since this read.
+            verified = ResearchRecoveryStore(self._config, run_id, policy).read(
+                hashlib.sha256(canonical(model_return.snapshot)).hexdigest(),
+                expected_models=model_return.snapshot.models,
+            )
+            if verified != model_return:
+                raise ValueError("model return changed before native session restoration")
+            rows = verified.journal.rows
+            receipt = receipt.model_copy(
+                update={
+                    "judge_calls": validate_model_rows(
+                        self._config.model_work, self._config.judge_budget, rows
+                    )
+                }
+            )
         sink = DirectoryLedgerSink(
-            self._config, run_id, harvest.goal, self._judge.model, resume_rows=harvest.ledger
+            self._config, run_id, harvest.goal, self._judge.model, resume_rows=rows
         )
-        ledger = Ledger(sink=sink, restored_rows=harvest.ledger)
+        ledger = Ledger(sink=sink, restored_rows=rows)
         source_work = None
         try:
             if self._config.source_work is not None:
                 from ghimera.source_work import SourceWorkStore
 
-                source_work = SourceWorkStore.resume(self._config, run_id, len(harvest.ledger))
+                source_work = SourceWorkStore.resume(self._config, run_id, len(rows))
             budget = RunBudget(self._config, self._clock)
-            budget.restore(harvest.receipt, harvest.ledger, search_calls, downtime_seconds)
+            budget.restore(receipt, rows, search_calls, downtime_seconds)
             graph = None
             if self._config.graph is not None and self._config.graph.enabled:
                 graph_sink = self._graph_sink or DirectoryGraphSink(self._config.graph, run_id)
