@@ -21,9 +21,11 @@ class JudgmentRecord(BaseModel):
 
 
 class DocumentJudgmentConfig(JudgmentRecord):
-    schema_version: Literal["ghimera.document-judgment/1", "ghimera.document-judgment/2"] = Field(
-        alias="schema"
-    )
+    schema_version: Literal[
+        "ghimera.document-judgment/1",
+        "ghimera.document-judgment/2",
+        "ghimera.document-judgment/3",
+    ] = Field(alias="schema")
     selection: Literal["scored_native_windows"]
     max_windows: Positive
     first_look_max_chars: Positive
@@ -31,6 +33,9 @@ class DocumentJudgmentConfig(JudgmentRecord):
     padding_chars: Count
     incomplete_rejection: Literal["hold"]
     prompt_profile: Literal["contribution_relevance"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    input_layout: Literal["source_first"] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
 
@@ -42,16 +47,17 @@ class DocumentJudgmentConfig(JudgmentRecord):
             if "prompt_profile" in self.model_fields_set:
                 raise ValueError("legacy scored judgment does not select a prompt profile")
         elif self.prompt_profile != "contribution_relevance":
-            raise ValueError("scored judgment /2 requires explicit contribution_relevance")
+            raise ValueError("scored judgment /2 or /3 requires explicit contribution_relevance")
+        if self.schema_version == "ghimera.document-judgment/3":
+            if self.input_layout != "source_first":
+                raise ValueError("scored judgment /3 requires explicit source_first input layout")
+        elif "input_layout" in self.model_fields_set:
+            raise ValueError("scored judgment /1 and /2 do not select an input layout")
         return self
 
     @property
     def effective_prompt_revision(self) -> str:
-        return (
-            "ghimera-scored-document-judgment/2"
-            if self.schema_version == "ghimera.document-judgment/2"
-            else "ghimera-scored-document-judgment/1"
-        )
+        return "ghimera-scored-document-judgment/" + self.schema_version.rsplit("/", 1)[1]
 
 
 class ScoringNativeReading(JudgmentRecord):

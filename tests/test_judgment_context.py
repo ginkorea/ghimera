@@ -384,7 +384,16 @@ def test_native_ack_remains_reject_but_partial_reading_client_holds(tmp_path):
     )
 
 
-@pytest.mark.parametrize("judgment_policy", [POLICY, CONTRIBUTION_POLICY])
+@pytest.mark.parametrize(
+    "judgment_policy",
+    [
+        POLICY,
+        CONTRIBUTION_POLICY,
+        dict(
+            CONTRIBUTION_POLICY, schema="ghimera.document-judgment/3", input_layout="source_first"
+        ),
+    ],
+)
 def test_native_unknown_is_charged_and_survives_journal_reopen(tmp_path, judgment_policy):
     cfg, goal, extracted, ledger, judge = prepared(tmp_path, judgment_policy=judgment_policy)
     transport = Reply(cfg.models.judge, unknown=True)

@@ -35,6 +35,7 @@ from ghimera.identity_automation_types import (
     IdentityReview,
     IdentityReviewRequest,
 )
+from ghimera.judgment_layout import source_first_packet
 from ghimera.judgment_types import ScoredNativeContext
 from ghimera.model_citations import ModelCitationResolver, citation_id, referenced_output
 from ghimera.model_config import ModelServiceConfig
@@ -509,7 +510,11 @@ class SelfHostedModel:
     async def _invoke(self, prompt: PromptInput, output: type[T]) -> T:
         service = self._service
         started = asyncio.get_running_loop().time()
+        judgment = self._config.document_judgment
         packet = prompt.packet()
+        if prompt.scored_document is not None and judgment is not None:
+            if judgment.input_layout == "source_first":
+                packet = source_first_packet(packet, prompt.scored_document)
         input_chars = len(packet)
         body = b""
         response = ModelHttpResponse(None, b"", "")
@@ -524,7 +529,6 @@ class SelfHostedModel:
         if prompt.task == "semantic_extract" and semantic is None:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         review_revision = SEMANTIC_REVIEW_REVISION
-        judgment = self._config.document_judgment
         if prompt.task == "semantic_review":
             if semantic is None or semantic.verification is None:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)

@@ -1,0 +1,16 @@
+# Inert fragment: add only to a complete native recipe with source-bound intent
+# scoring, bound judge, private journal and model_work.results. No work starts
+# from this example. Allowances must fit the existing judge/scorer bounds.
+[document_judgment]
+schema = "ghimera.document-judgment/3"
+prompt_profile = "contribution_relevance"
+input_layout = "source_first"
+selection = "scored_native_windows"
+max_windows = 3
+first_look_max_chars = 1500
+expanded_look_max_chars = 4000
+padding_chars = 450
+incomplete_rejection = "hold"
+
+# /2 retains nested JSON: use ghimera.document-judgment/2 and OMIT input_layout.
+# /1 additionally omits prompt_profile. Explicit null is not a legacy default.
