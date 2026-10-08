@@ -78,7 +78,9 @@ def test_native_local_result_and_original_are_retained_without_web_frontier(tmp_
 
     harvest = asyncio.run(run())
     report = read_source_work(cfg, "local")
-    assert not route.requests and not report.frontier and not report.unresolved
+    assert not route.requests and not report.queued and not report.queued_local
+    assert len(report.frontier) == 1 and not report.unresolved
+    assert isinstance(report.frontier[0].request, LocalSourceRequest)
     assert harvest.receipt.fetches == 0 and harvest.receipt.bytes_read == len(raw)
     (operation,) = report.operations
     assert isinstance(operation.request, LocalSourceRequest)

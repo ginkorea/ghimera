@@ -1,9 +1,14 @@
 # Owned local document seeds
 
-Status: unreleased source after 0.3.0. The configured intent API and command can
+The configured intent API and command, included in published 0.4.6, can
 admit explicitly pinned PDF/DOCX files before the first research plan. They use
 the same extraction, scoring, judging, deduplication, graph and archive path as
 collected documents; there is no second document-research implementation.
+
+The unreleased [source-work candidate](SOURCE_WORK.md) additionally captures
+originals before processing and, with its explicit frontier policy, records a
+complete pending batch before reading its first file. It does not silently
+replay uncertain reads or model calls.
 
 ## Configuration
 

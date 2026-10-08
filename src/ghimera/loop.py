@@ -78,6 +78,7 @@ class CollectionSession:
         self._documents: dict[str, Document] = {}
         self._retained_sources: dict[str, RetainedOriginal] = {}
         self._frontier: list[tuple[float, str, int]] = []
+        self._local_frontier: list[LocalSourceRequest] = []
         self._visited: set[str] = set()
         self._reference_book = ReferenceBook(budget.config)
         self._reference_scopes: dict[str, Scope] = {}
@@ -173,6 +174,7 @@ class CollectionSession:
             last_grade=self._last_grade,
             semantic_sources=tuple(sorted(self._semantic_sources)),
             content_revisions=self._content.revisions if self._content is not None else (),
+            local_frontier=tuple(self._local_frontier),
         )
         if self.source_work is not None:
             self.source_work.verify_frontier(state)
@@ -190,6 +192,8 @@ class CollectionSession:
             self._operating = False
 
     def restore_state(self, state: SessionState, harvest: Harvest) -> None:
+        if state.local_frontier and self.source_work is None:
+            raise ValueError("local pending work requires its owning source store")
         if self.source_work is not None:
             self.source_work.verify_frontier(state)
         self._documents = {doc.sha256: doc for doc in harvest.documents}
@@ -197,6 +201,7 @@ class CollectionSession:
             item.origin.document_sha256: item for item in harvest.retained_sources
         }
         self._frontier = list(state.frontier)
+        self._local_frontier = list(state.local_frontier)
         heapq.heapify(self._frontier)
         self._visited = set(state.visited)
         self._reference_book.restore(harvest.ledger, state.reference_hosts)
@@ -395,21 +400,33 @@ class GoalLoop:
             return
         loader = LocalInputLoader(policy)
         budget, ledger = session.budget, session.ledger
-        for item in seeds:
-            seed = LocalDocumentSeed.model_validate(item.model_dump())
+        requests = tuple(
+            LocalSourceRequest(
+                schema="ghimera.local-source-request/1",
+                seed=LocalDocumentSeed.model_validate(item.model_dump()),
+                policy_digest=policy.content_digest(),
+            )
+            for item in seeds
+        )
+        queued = session.source_work is not None and (
+            self._config.source_work is not None and self._config.source_work.frontier is not None
+        )
+        if queued and session.source_work is not None:
+            session.source_work.enqueue_local_batch(requests, ledger.next_sequence)
+            for request in requests:
+                if request not in session._local_frontier:
+                    session._local_frontier.append(request)
+            requests = tuple(session._local_frontier)
+        for request in requests:
+            seed = request.seed
             work, token = session.source_work, None
             try:
                 if work is not None:
                     if not policy.permits(seed.path):
                         raise GhimeraRefused(RefusalCode.LOCAL_INPUT_FAILED)
-                    token = work.begin_local(
-                        LocalSourceRequest(
-                            schema="ghimera.local-source-request/1",
-                            seed=seed,
-                            policy_digest=policy.content_digest(),
-                        ),
-                        ledger.next_sequence,
-                    )
+                    token = work.begin_local(request, ledger.next_sequence)
+                    if queued:
+                        session._local_frontier.remove(request)
                 snapshot, code, cancelled = await self._read_local(session, loader, seed)
                 page = None
                 if snapshot is not None:

@@ -6,6 +6,7 @@ from pydantic import Field
 
 from ghimera.dedup_types import ContentFingerprint
 from ghimera.models import Record, Scope
+from ghimera.source_work_types import LocalSourceRequest
 
 Count = Annotated[int, Field(strict=True, ge=0)]
 
@@ -24,3 +25,4 @@ class SessionState(Record):
     last_grade: Count
     semantic_sources: tuple[str, ...]
     content_revisions: tuple[ContentFingerprint, ...]
+    local_frontier: tuple[LocalSourceRequest, ...] = Field(default=(), exclude_if=lambda v: not v)

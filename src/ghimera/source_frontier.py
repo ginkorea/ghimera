@@ -2,19 +2,35 @@
 
 import hashlib
 import time
+from typing import Literal, TypeAlias
 
+from ghimera.local_input_types import LocalInputConfig
 from ghimera.private_database import PrivateDatabase
 from ghimera.source_work_config import SourceFrontierConfig
-from ghimera.source_work_types import SourceCoordinates, SourceFrontierEntry
+from ghimera.source_work_types import LocalSourceRequest, SourceCoordinates, SourceFrontierEntry
+
+Coordinates: TypeAlias = tuple[Literal["web", "local"], str, int]
+
+
+def _coordinates(request: SourceCoordinates | LocalSourceRequest) -> Coordinates:
+    if isinstance(request, LocalSourceRequest):
+        return ("local", str(request.seed.path), 0)
+    return ("web", request.url, request.depth)
 
 
 class SourceFrontier:
     """The source-work owner supplies the private database and total free payload budget."""
 
     def __init__(
-        self, private: PrivateDatabase, policy: SourceFrontierConfig, *, create: bool
+        self,
+        private: PrivateDatabase,
+        policy: SourceFrontierConfig,
+        *,
+        create: bool,
+        input_policy: LocalInputConfig | None = None,
     ) -> None:
         self._private, self._policy = private, policy
+        self._input_policy = input_policy
         if create:
             private.db.executescript(
                 "CREATE TABLE frontier_binding(id INTEGER PRIMARY KEY CHECK(id=1),"
@@ -26,9 +42,7 @@ class SourceFrontier:
             private.db.commit()
         entries = self.read()
         self._entries = {item.entry_id: item for item in entries}
-        self._coordinates = {
-            (item.request.url, item.request.depth): item.entry_id for item in entries
-        }
+        self._coordinates = {_coordinates(item.request): item.entry_id for item in entries}
         self.payload_bytes = sum(len(item.model_dump_json().encode()) for item in entries)
 
     def read(self) -> tuple[SourceFrontierEntry, ...]:
@@ -49,7 +63,7 @@ class SourceFrontier:
         ):
             raise ValueError("frontier exceeds its declared entry capacity")
         entries: list[SourceFrontierEntry] = []
-        coordinates: set[tuple[str, int]] = set()
+        coordinates: set[Coordinates] = set()
         total = 0
         for entry_id, sequence, payload, pin in db.execute(
             "SELECT id,sequence,payload,sha256 FROM frontier ORDER BY sequence"
@@ -59,7 +73,9 @@ class SourceFrontier:
             item = SourceFrontierEntry.model_validate_json(payload)
             if item.entry_id != entry_id or item.sequence != sequence or sequence != len(entries):
                 raise ValueError("frontier identity or order changed")
-            key = (item.request.url, item.request.depth)
+            if isinstance(item.request, LocalSourceRequest):
+                item.request.validate_policy(self._input_policy)
+            key = _coordinates(item.request)
             if key in coordinates:
                 raise ValueError("one queued source cannot have ambiguous scope or ancestry")
             coordinates.add(key)
@@ -70,29 +86,50 @@ class SourceFrontier:
         return tuple(entries)
 
     def _write(self, item: SourceFrontierEntry, *, available_bytes: int) -> None:
-        payload = item.model_dump_json().encode()
-        previous = self._entries.get(item.entry_id)
-        delta = len(payload) - (len(previous.model_dump_json().encode()) if previous else 0)
-        if (
-            (previous is None and len(self._entries) >= self._policy.max_entries)
-            or len(payload) > self._policy.max_entry_bytes
-            or self.payload_bytes + delta > self._policy.max_frontier_bytes
-            or delta > available_bytes
-        ):
-            raise ValueError("frontier capacity exhausted before scheduling")
+        self._write_many((item,), available_bytes=available_bytes)
+
+    def _write_many(self, items: tuple[SourceFrontierEntry, ...], *, available_bytes: int) -> None:
+        """Preflight every entry; publish the entire intent batch in one transaction."""
+        prepared: list[tuple[SourceFrontierEntry, bytes, bool]] = []
+        entries = dict(self._entries)
+        coordinates = dict(self._coordinates)
+        total = self.payload_bytes
+        for item in items:
+            payload = item.model_dump_json().encode()
+            previous = entries.get(item.entry_id)
+            total += len(payload) - (len(previous.model_dump_json().encode()) if previous else 0)
+            if previous is None and item.sequence != len(entries):
+                raise ValueError("frontier batch must retain its acknowledged order")
+            if previous is not None and item.sequence != previous.sequence:
+                raise ValueError("frontier batch cannot move an acknowledged entry")
+            key = _coordinates(item.request)
+            if key in coordinates and coordinates[key] != item.entry_id:
+                raise ValueError("queued source coordinates changed before dispatch")
+            if (
+                (previous is None and len(entries) >= self._policy.max_entries)
+                or len(payload) > self._policy.max_entry_bytes
+                or total > self._policy.max_frontier_bytes
+                or total - self.payload_bytes > available_bytes
+            ):
+                raise ValueError("frontier capacity exhausted before scheduling")
+            entries[item.entry_id] = item
+            coordinates[key] = item.entry_id
+            prepared.append((item, payload, previous is None))
+        if not prepared:
+            return
         with self._private.transaction():
-            self._private.db.execute(
-                "INSERT INTO frontier VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
-                "payload=excluded.payload,sha256=excluded.sha256",
-                (item.entry_id, item.sequence, payload, hashlib.sha256(payload).hexdigest()),
-            )
-            if previous is None:
+            for item, payload, new in prepared:
                 self._private.db.execute(
-                    "UPDATE frontier_binding SET entry_count=entry_count+1 WHERE id=1"
+                    "INSERT INTO frontier VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                    "payload=excluded.payload,sha256=excluded.sha256",
+                    (item.entry_id, item.sequence, payload, hashlib.sha256(payload).hexdigest()),
                 )
-        self._entries[item.entry_id] = item
-        self._coordinates[(item.request.url, item.request.depth)] = item.entry_id
-        self.payload_bytes += delta
+                if new:
+                    self._private.db.execute(
+                        "UPDATE frontier_binding SET entry_count=entry_count+1 WHERE id=1"
+                    )
+        self._entries, self._coordinates = entries, coordinates
+        self.payload_bytes = total
 
     def enqueue(
         self,
@@ -103,7 +140,7 @@ class SourceFrontier:
         available_bytes: int,
     ) -> None:
         request = SourceCoordinates.model_validate(request.model_dump())
-        identity = self._coordinates.get((request.url, request.depth))
+        identity = self._coordinates.get(_coordinates(request))
         if identity is not None and identity != request.identity:
             raise ValueError("queued scope or reference ancestry changed before dispatch")
         previous = self._entries.get(request.identity)
@@ -126,7 +163,33 @@ class SourceFrontier:
         if item != previous:
             self._write(item, available_bytes=available_bytes)
 
-    def require_queued(self, request: SourceCoordinates) -> None:
+    def enqueue_local_batch(
+        self, requests: tuple[LocalSourceRequest, ...], ledger_start: int, *, available_bytes: int
+    ) -> None:
+        prepared: dict[str, SourceFrontierEntry] = {}
+        for request in requests:
+            request = LocalSourceRequest.model_validate(request.model_dump())
+            request.validate_policy(self._input_policy)
+            previous = self._entries.get(request.identity)
+            if previous is not None:
+                if previous.discard_reason is not None:
+                    raise ValueError("discarded local work cannot be silently requeued")
+                continue
+            if request.identity in prepared:
+                continue
+            prepared[request.identity] = SourceFrontierEntry(
+                schema="ghimera.source-frontier-entry/1",
+                entry_id=request.identity,
+                sequence=len(self._entries) + len(prepared),
+                request=request,
+                # Local batches run in caller order, never enter the web priority heap.
+                priority=0,
+                queued_at=time.time(),
+                ledger_start=ledger_start,
+            )
+        self._write_many(tuple(prepared.values()), available_bytes=available_bytes)
+
+    def require_queued(self, request: SourceCoordinates | LocalSourceRequest) -> None:
         item = self._entries.get(request.identity)
         if item is None or item.discard_reason is not None:
             raise ValueError("acquisition requires its acknowledged live frontier intent")

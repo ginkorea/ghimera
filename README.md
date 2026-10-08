@@ -384,6 +384,16 @@ The collector persists JSONL events before acknowledgment and seals a completion
 summary only after receipt reconciliation. Interrupted prefixes remain inspectable
 without silently refetching sources. See [run journals](docs/RUN_JOURNAL.md).
 
+The unreleased [source-work extension](docs/SOURCE_WORK.md) captures fresh web
+and owned-file originals before processing, accepted results, queued web intents,
+and complete pending local-file batches. It also records admission of an already
+read corpus original before current graph/model work, without inventing a new
+fetch. Use its explicit configuration beside the native journal; inspection does
+not contact sources, retry uncertain calls or print private input paths.
+Quiescent continuation preserves pending work and the original budgets.
+Arbitrary interrupted-call reconciliation and whole-session recovery remain
+open requirements, not claims made by these records.
+
 Still required for the complete planned spider: the remaining browser adapters,
 representative publisher/locator acceptance, full PDF/OCR and Marker validation,
 real reference/cited-by adequacy, real served-model quality/admission and

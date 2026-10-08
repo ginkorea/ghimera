@@ -19,11 +19,15 @@ from ghimera.models import Goal
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_reuse import RetainedResearchSession
 from ghimera.source_work import SourceWorkFailure, SourceWorkStore, read_source_work
-from ghimera.source_work_types import RetainedSourceOperation, SourceOperation
+from ghimera.source_work_types import LocalSourceRequest, RetainedSourceOperation, SourceOperation
 from tests.test_c0 import scope
 from tests.test_corpus_evidence import policy as reader_policy
+from tests.test_document_extraction import config as document_config
+from tests.test_document_extraction import docx
 from tests.test_evidence_corpus import config as corpus_config
 from tests.test_evidence_corpus import corpus, endpoint, harvest
+from tests.test_local_inputs import recipe as local_recipe
+from tests.test_local_inputs import seed as local_seed
 from tests.test_pdf_transcription_corpus import reviewed_harvest
 from tests.test_retained_graph import configured as graph_configured
 from tests.test_semantic_graph import SemanticWire
@@ -178,6 +182,8 @@ def test_historical_and_fresh_operations_share_one_ordered_inspection(tmp_path, 
         raw = cfg.model_dump()
         raw.pop("semantics", None)
         raw["research"].pop("graph_context", None)
+        raw["document_extraction"] = document_config(tmp_path).document_extraction.model_dump()
+        raw["local_inputs"] = local_recipe(tmp_path).model_dump()
         raw["source_work"]["frontier"] = dict(
             schema="ghimera.source-frontier/1",
             max_entries=30,
@@ -192,6 +198,16 @@ def test_historical_and_fresh_operations_share_one_ordered_inspection(tmp_path, 
             await loop.collect(
                 session, scope(), ("https://example.org/fresh",), fetch_limit=1, allow_grade=False
             )
+            pending_bytes = docx()
+            pending_path = tmp_path / "pending.docx"
+            pending_path.write_bytes(pending_bytes)
+            pending = LocalSourceRequest(
+                schema="ghimera.local-source-request/1",
+                seed=local_seed(pending_path, pending_bytes),
+                policy_digest=cfg.local_inputs.content_digest(),
+            )
+            session.source_work.enqueue_local_batch((pending,), session.ledger.next_sequence)
+            session._local_frontier = [pending]
             snapshot = session.checkpoint_state()
             prefix = len(session.ledger.snapshot())
         finally:
@@ -210,6 +226,8 @@ def test_historical_and_fresh_operations_share_one_ordered_inspection(tmp_path, 
             reopened.verify_frontier(snapshot)
             assert reopened.report().operations == report.operations
             assert reopened.report().queued == report.queued
+            assert reopened.report().queued_local == report.queued_local == (pending,)
+            assert snapshot.local_frontier == (pending,)
             assert report.queued
         finally:
             reopened.close()
