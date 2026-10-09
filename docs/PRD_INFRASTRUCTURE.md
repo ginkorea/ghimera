@@ -307,6 +307,33 @@ outer-query continuation and real multilingual ranking quality remain open.
 
 ## Delivery and release discipline
 
+### Current unpublished convergence candidate
+
+- I03 / I12: exact original source-processing recovery now reaches the native
+  command and authenticated service owners. The cursor retains parser, scoring,
+  verdict, graph and original budget acknowledgements; existing profiles are
+  unchanged. See [source-processing recovery](SOURCE_PROCESSING_RECOVERY.md).
+  Its 53 owning and 104 importer checks passed without skips under Python
+  3.11.16 against the isolated source. Cuts during semantic/visual/identity
+  consumption and concurrent or arbitrary frontier mutation remain open.
+- I06 / I14: a fresh Chinese organization-PDF trial used separately bound
+  extraction and review models but failed independent review and later native
+  validation. It supplied no accepted organizational answer. Closed decoding
+  and review-failure diagnostics now expose the actual client boundary without
+  retaining raw refused responses or changing judgments. The previous failed
+  response body is absent; its exact validation branch cannot be inferred.
+- I06: explicit `compact_native_quote_checks` binds a new `/9` prompt, reducing
+  unused quote metadata while retaining the original source and complete native
+  replay table. Its 169 contract/importer checks passed without skips under
+  Python 3.11.16 against its isolated source; see
+  [grounded review](SEMANTIC_GROUNDING.md). Historical `/8` wire compatibility
+  is checked independently. Reduced request size is not model-quality evidence.
+
+These increments reuse the existing collector/model, source writer, journal,
+graph and service owners. Their combined package gate, fresh installed-artifact
+acceptance and useful independent original-source quality remain required.
+No implemented slice closes the broader C0 or I01–I14 acceptance requirements.
+
 Implement and commit bounded rows with tests for their owning contracts and
 actual source acceptance where required. Gate the combined source before a tag;
 build and independently install the exact wheel, then verify published artifact
