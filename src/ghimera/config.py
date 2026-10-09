@@ -447,6 +447,7 @@ class GhimeraConfig(BaseModel):
                         "proposal_date_checks",
                         "independent_dimension_checks",
                         "native_quote_checks",
+                        "compact_native_quote_checks",
                     }
                     and reviewer.response_format != "json_schema"
                 ):

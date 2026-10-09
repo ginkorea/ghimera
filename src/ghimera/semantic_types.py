@@ -38,6 +38,7 @@ ASSIGNED_ROLE_REVIEW_REVISION = "ghimera-semantic-verification/5"
 PROPOSAL_DATE_REVIEW_REVISION = "ghimera-semantic-verification/6"
 INDEPENDENT_REVIEW_REVISION = "ghimera-semantic-verification/7"
 NATIVE_QUOTE_REVIEW_REVISION = "ghimera-semantic-verification/8"
+COMPACT_QUOTE_REVIEW_REVISION = "ghimera-semantic-verification/9"
 SEMANTIC_PROFILES = MappingProxyType(
     {
         "ghimera.semantics/1": (None, SEMANTIC_PROMPT_REVISION),
@@ -82,6 +83,7 @@ class SemanticVerificationConfig(GraphRecord):
             "proposal_date_checks",
             "independent_dimension_checks",
             "native_quote_checks",
+            "compact_native_quote_checks",
         ]
         | None
     ) = Field(default=None, exclude_if=lambda v: v is None)
@@ -105,6 +107,8 @@ class SemanticVerificationConfig(GraphRecord):
     @property
     def effective_prompt_revision(self) -> str:
         if self.schema_version == "ghimera.semantic-verification/4":
+            if self.prompt_profile == "compact_native_quote_checks":
+                return COMPACT_QUOTE_REVIEW_REVISION
             if self.prompt_profile == "native_quote_checks":
                 return NATIVE_QUOTE_REVIEW_REVISION
             if self.prompt_profile == "independent_dimension_checks":
@@ -530,6 +534,13 @@ class NativeQuoteReference(GraphRecord):
     quote_id: Digest
 
 
+class NativeQuoteChoice(GraphRecord):
+    """Model-facing projection; original coordinates remain client-owned."""
+
+    quote_id: Digest
+    quote: Text
+
+
 class QuotedOmittedRelation(GraphRecord):
     kind: Literal["relation"]
     rule: Name
@@ -715,7 +726,7 @@ def review_profile_matches(
         return verification.schema_version == "ghimera.semantic-verification/4"
     if isinstance(review, GroundedSemanticReview):
         return (
-            (verification.prompt_profile == "native_quote_checks")
+            (verification.prompt_profile in {"native_quote_checks", "compact_native_quote_checks"})
             == (review.quote_response is not None)
             and (verification.prompt_profile == "independent_dimension_checks")
             == (review.dimension_response is not None)

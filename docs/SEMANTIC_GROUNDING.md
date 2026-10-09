@@ -69,6 +69,44 @@ there is no second hidden review or automatic retry.
 
 ## Compatibility and evidence
 
+### Compact quote requests (unpublished candidate)
+
+Explicit batched verification `/4` may select
+`prompt_profile="compact_native_quote_checks"`; see
+[the inert fragment](../examples/review-compact-native-quotes.toml). It binds
+`ghimera-semantic-verification/9`, not an in-place change to the existing
+`native_quote_checks` `/8` prompt. A provider supporting `json_schema` is
+required. Model/runtime choices and all original call, output and deadline
+bounds remain the caller's configured inputs.
+
+Every review partition still receives the complete unchanged native window,
+original proposal, full configured definitions and exact selection. Mention
+and relation partitions forbid omission findings, so they receive no unused
+quote-choice table. Coverage receives every original quote alternative as
+`native_quote_choices`, each containing only its original `quote_id` and exact
+`quote`. The client retains the complete native template table, including
+source citation, offsets and occurrence, and restores/revalidates it in the
+existing `quote_response` receipt. No quote is shortened, normalized, filtered
+or removed from coverage choices. The full-window choice remains available.
+
+The model response stays `ghimera.semantic-review/6`; proposal/selection/date,
+source span, duplicate/already-proposed witness and independent dimension
+checks are unchanged. Quote IDs do not establish entailment. Source metadata
+belongs to the client rather than generated observations. Old profiles retain
+their whole request bytes; old observations cannot be relabelled under `/9`.
+Reduced request overhead is not proof of tokenizer capacity, speed, model
+accuracy or adequate coverage. Fresh real-model quality remains required.
+
+The compact profile's owning/importer selection passed 169 cases without
+failures or skips using `/tmp/chimera-c0-20261006/.venv/bin/python` 3.11.16
+against this isolated source, with the platform SDK absent and credentials
+unset. Its original-profile compatibility fixture uses a fixed synthetic
+extraction clock and full request hashes independently measured on untouched
+pre-compaction source. The fixture does not rewrite real retained proposals.
+Native source/service/input bindings and the old-profile replay refusal remain
+required. The combined full package gate and original-source model-quality
+acceptance are separate, still-required checks.
+
 Verification/1 and /2 remain separate policies, prompts and response types.
 Readers preserve /3 rather than downgrading it into a legacy response; profile
 mismatches refuse. Original proposal observations remain immutable. The same

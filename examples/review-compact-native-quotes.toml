@@ -1,0 +1,9 @@
+# Inert verification fragment: merge into an explicitly configured semantic recipe.
+# No endpoint, model selection, credential or compute allocation is supplied.
+schema = "ghimera.semantic-verification/4"
+prompt_profile = "compact_native_quote_checks"
+model_role = "reviewer"
+max_calls_per_run = 12
+max_coverage_findings = 8
+max_mentions_per_call = 8
+max_relations_per_call = 8

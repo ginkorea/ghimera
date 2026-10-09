@@ -11,6 +11,7 @@ from ghimera.semantic_types import (
     CoverageFinding,
     GroundedSemanticReview,
     IndependentSemanticReview,
+    NativeQuoteChoice,
     NativeQuotedSemanticReview,
     NativeQuoteReviewEvidence,
     NativeQuoteTemplate,
@@ -120,7 +121,7 @@ def derive_quote_review(
 
 
 def bind_quote_schema(
-    schema: dict[str, JsonValue], templates: tuple[NativeQuoteTemplate, ...]
+    schema: dict[str, JsonValue], templates: tuple[NativeQuoteTemplate | NativeQuoteChoice, ...]
 ) -> None:
     definitions = schema.get("$defs")
     record = definitions.get("NativeQuoteReference") if isinstance(definitions, dict) else None

@@ -40,7 +40,7 @@ class QuoteWire(DimensionWire):
         packet = self.requests[-1][1]
         payload["schema"] = "ghimera.semantic-review/6"
         if packet["semantic_review_selection"]["coverage"]:
-            templates = packet["native_quote_templates"]
+            templates = packet.get("native_quote_templates", packet.get("native_quote_choices"))
             citation = packet["evidence"]["windows"][0]["citation_id"]
 
             def witness(surface, occurrence=0):
