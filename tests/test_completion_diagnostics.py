@@ -161,6 +161,32 @@ def test_unparsed_or_error_envelopes_do_not_fabricate_completion_shape(updates):
     assert call.completion is None and "completion" not in call.model_dump()
 
 
+@pytest.mark.parametrize("content", [PRIVATE, json.dumps({"reason": PRIVATE})])
+def test_invalid_final_payload_keeps_shape_and_bounded_client_reason(content):
+    wire = Wire(content=content)
+    with pytest.raises(ModelFailure) as refused:
+        invoke(wire)
+    call = refused.value.model_call
+    assert call.output_contract_failure.reason == "invalid_final_payload"
+    assert call.completion.finish_reason == "stop" and call.status == 200
+    assert call.total_tokens == 20 and wire.calls == 1
+    assert PRIVATE not in call.model_dump_json()
+    assert ModelCallEvidence.model_validate_json(call.model_dump_json()) == call
+
+
+def test_invalid_envelope_is_distinct_from_final_payload_and_http_error():
+    wire = Wire(invalid=True)
+    with pytest.raises(ModelFailure) as refused:
+        invoke(wire)
+    call = refused.value.model_call
+    assert call.output_contract_failure.reason == "invalid_completion_envelope"
+    assert call.completion is None and call.usage is None
+    assert call.status == 200 and call.response_bytes == len(wire.body) and wire.calls == 1
+    with pytest.raises(ModelFailure) as http_error:
+        invoke(Wire(status=500))
+    assert http_error.value.model_call.output_contract_failure is None
+
+
 def test_legacy_call_serialization_is_unchanged_when_diagnostics_are_absent():
     original = invoke(Wire()).model_call.model_dump(mode="json", by_alias=True)
     original.pop("completion")

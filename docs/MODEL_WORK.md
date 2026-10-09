@@ -7,7 +7,9 @@ Published in 0.4.9; full I03 closure remains open.
 The development client records an optional `output_contract_failure` alongside
 its existing request/response hash, byte count and completion observations.
 `ghimera.model-output-contract/1` has a closed reason vocabulary:
-`response_too_large`, `model_claimed_telemetry`, and `unbound_graph_reference`.
+`response_too_large`, `model_claimed_telemetry`, `unbound_graph_reference`,
+`invalid_completion_envelope`, `invalid_final_payload`,
+`semantic_review_normalization_failed`, and `semantic_review_source_binding_failed`.
 Each reason is set only at the client branch that actually refused the result;
 it is not inferred from a generic failure or copied from provider prose.
 The diagnostic may belong only to a refused call. It contains no answer,
@@ -26,6 +28,17 @@ model request schemas or acceptance checks. A completed generation can still
 be refused; `finish_reason=stop` is not proof of a valid research plan. The
 real earlier organization trial lacks this branch diagnostic, so its precise
 rejection remains unresolved rather than being retroactively labelled.
+
+The envelope/payload reasons identify the two actual typed decoding boundaries.
+An invalid envelope has no invented completion shape. Invalid final JSON retains
+the already-observed completion and usage, but not its invalid text or validation
+exception. Partitioned semantic review distinguishes normalization of an actual
+independent response (including native quote selection and coverage shape) from
+the subsequent original proposal/source/selection checks. These are branch
+diagnostics, not finer claims about which witness was wrong. Existing refusal
+codes, quotas, source guards and independent verdicts are unchanged; neither
+diagnostic repairs an answer or enables another contact. Old failures with only
+hash/metadata cannot be reconstructed or retrospectively assigned these reasons.
 
 ## Retained-answer development candidate
 

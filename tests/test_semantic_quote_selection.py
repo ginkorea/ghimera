@@ -1,5 +1,6 @@
 """Source-owned quote choices, never answer repair or model accuracy evidence."""
 
+import asyncio
 import json
 import tomllib
 from copy import deepcopy
@@ -10,7 +11,9 @@ from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from ghimera.config import GhimeraConfig
-from ghimera.refusals import GhimeraRefused
+from ghimera.model_client import SelfHostedModel
+from ghimera.refusals import GhimeraRefused, ModelFailure
+from ghimera.semantic_batching import review_selections
 from ghimera.semantic_graph import validate_rows
 from ghimera.semantic_quotes import native_quote_templates
 from ghimera.semantic_types import SemanticVerificationConfig
@@ -66,6 +69,8 @@ class QuoteWire(DimensionWire):
                 payload["coverage_findings"][0]["source"] = witness("甲委員會")
                 payload["coverage_findings"][0]["target"] = witness("乙委員會")
                 payload["coverage_findings"][0]["evidence"]["quote_id"] = templates[0]["quote_id"]
+            elif self.quote_defect == "coverage_shape":
+                payload["coverage"] = "adequate"
         wire["choices"][0]["message"]["content"] = json.dumps(payload)
         return type(response)(response.status, json.dumps(wire).encode(), response.content_type)
 
@@ -100,8 +105,16 @@ def test_selected_native_quote_preserves_coverage_and_review_replay(tmp_path):
         assert review.quote_response.response.model_call is None
 
 
-@pytest.mark.parametrize("defect", ["unknown", "wrong_clause", "duplicate_proposal"])
-def test_quote_selector_cannot_evade_original_grounding(tmp_path, defect):
+@pytest.mark.parametrize(
+    "defect,reason",
+    [
+        ("unknown", "semantic_review_normalization_failed"),
+        ("coverage_shape", "semantic_review_normalization_failed"),
+        ("wrong_clause", "semantic_review_source_binding_failed"),
+        ("duplicate_proposal", "semantic_review_source_binding_failed"),
+    ],
+)
+def test_quote_selector_cannot_evade_original_grounding(tmp_path, defect, reason):
     cfg = quote_config(tmp_path)
     with pytest.raises(GhimeraRefused):
         run_stage(
@@ -110,6 +123,34 @@ def test_quote_selector_cannot_evade_original_grounding(tmp_path, defect):
             QuoteWire(cfg.models.reviewer, defect=defect),
             (native_document(),),
         )
+
+    # The stage deliberately exposes its stable public refusal, while the
+    # native client and retained ledger own the detailed observed call.
+    async def client_review():
+        doc = native_document()
+        extractor = SelfHostedModel(cfg, cfg.models.analyst, http=SemanticWire(cfg.models.analyst))
+        original = await extractor.semantic_extract(
+            "map the organization", doc, 0, len(doc.extracted.text), cfg.semantics
+        )
+        reviewer = SelfHostedModel(
+            cfg, cfg.models.reviewer, http=QuoteWire(cfg.models.reviewer, defect=defect)
+        )
+        await reviewer.semantic_review_part(
+            "map the organization",
+            doc,
+            0,
+            len(doc.extracted.text),
+            cfg.semantics,
+            original,
+            review_selections(cfg.semantics.verification, original)[-1],
+        )
+
+    with pytest.raises(ModelFailure) as refused:
+        asyncio.run(client_review())
+    call = refused.value.model_call
+    assert call.output_contract_failure.reason == reason
+    assert call.outcome == "refused" and call.status == 200
+    assert "丙委員會" not in call.model_dump_json()
 
 
 def test_template_table_covers_native_window_and_preserves_repeated_occurrences():

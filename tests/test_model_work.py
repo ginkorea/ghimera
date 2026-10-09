@@ -418,7 +418,8 @@ def test_research_success_uses_existing_port_and_quota_boundary(tmp_path):
     session.close()
 
 
-def test_client_contract_failure_survives_native_refused_ack_readback(tmp_path):
+@pytest.mark.parametrize("defect", ["model_claimed_telemetry", "invalid_final_payload"])
+def test_client_contract_failure_survives_native_refused_ack_readback(tmp_path, defect):
     import json
 
     cfg = configured(tmp_path)
@@ -430,7 +431,7 @@ def test_client_contract_failure_survives_native_refused_ack_readback(tmp_path):
     original = asyncio.run(original_model.document(goal, extracted, second_look=False))
     output = json.loads(FINAL)
     output["model_call"] = original.model_call.model_dump(mode="json", by_alias=True)
-    wire = Wire(content=json.dumps(output))
+    wire = Wire(content=json.dumps(output) if defect == "model_claimed_telemetry" else PRIVATE)
     model = SelfHostedModel(cfg, wire.config, http=wire)
     attempt = ModelInvocation(
         budget,
@@ -439,7 +440,7 @@ def test_client_contract_failure_survives_native_refused_ack_readback(tmp_path):
         model=model.model,
         request=port_input(budget, goal, extracted, second_look=False),
     )
-    with pytest.raises(GhimeraRefused, match="adapter_contract"):
+    with pytest.raises(GhimeraRefused):
         asyncio.run(
             attempt.invoke(
                 lambda: model.document(goal, extracted, second_look=False),
@@ -452,7 +453,7 @@ def test_client_contract_failure_survives_native_refused_ack_readback(tmp_path):
     ack = report.rows[-1].model_ack
     assert ack.outcome == "refused" and ack.output_scope == "wire_response"
     assert ack.stored_output is None
-    assert ack.refused_call.output_contract_failure.reason == "model_claimed_telemetry"
+    assert ack.refused_call.output_contract_failure.reason == defect
     assert ack.refused_call.completion.finish_reason == "stop"
     assert ack.output_bytes == len(wire.body) and wire.calls == 1
     assert PRIVATE not in report.rows[-1].model_dump_json()

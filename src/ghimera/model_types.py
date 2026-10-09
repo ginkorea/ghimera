@@ -110,7 +110,15 @@ class ModelOutputContractFailure(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, serialize_by_alias=True)
     schema_version: Literal["ghimera.model-output-contract/1"] = Field(alias="schema")
-    reason: Literal["response_too_large", "model_claimed_telemetry", "unbound_graph_reference"]
+    reason: Literal[
+        "response_too_large",
+        "model_claimed_telemetry",
+        "unbound_graph_reference",
+        "invalid_completion_envelope",
+        "invalid_final_payload",
+        "semantic_review_normalization_failed",
+        "semantic_review_source_binding_failed",
+    ]
 
 
 class _ClientEvidenceServiceSchema:

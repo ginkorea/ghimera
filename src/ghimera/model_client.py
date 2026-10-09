@@ -985,7 +985,13 @@ class SelfHostedModel:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             if response.status != 200 or response.content_type != "application/json":
                 raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
-            wire = WireCompletion.model_validate_json(response.body)
+            try:
+                wire = WireCompletion.model_validate_json(response.body)
+            except ValidationError:
+                output_contract_failure = ModelOutputContractFailure(
+                    schema="ghimera.model-output-contract/1", reason="invalid_completion_envelope"
+                )
+                raise
             usage = wire.usage
             completion = wire.completion_shape(service.served_model)
             if (
@@ -1003,7 +1009,13 @@ class SelfHostedModel:
                 content = ModelCitationResolver(
                     tuple(window.citation for window in context.windows)
                 ).content(content, output)
-            result = output.model_validate_json(content)
+            try:
+                result = output.model_validate_json(content)
+            except ValidationError:
+                output_contract_failure = ModelOutputContractFailure(
+                    schema="ghimera.model-output-contract/1", reason="invalid_final_payload"
+                )
+                raise
             if result.model_call is not None:
                 output_contract_failure = ModelOutputContractFailure(
                     schema="ghimera.model-output-contract/1", reason="model_claimed_telemetry"
@@ -1200,6 +1212,9 @@ class SelfHostedModel:
             if policy.verification.prompt_profile == "independent_dimension_checks"
             else await self._invoke(prompt, GroundedSemanticReview)
         )
+        failure_reason: Literal[
+            "semantic_review_normalization_failed", "semantic_review_source_binding_failed"
+        ] = "semantic_review_normalization_failed"
         try:
             result = (
                 derive_quote_review(observed, templates)
@@ -1210,6 +1225,7 @@ class SelfHostedModel:
             )
             if not isinstance(result, GroundedSemanticReview):
                 raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+            failure_reason = "semantic_review_source_binding_failed"
             validate_review_part(
                 self._config, proposal, result, selection, document, start, end, intent
             )
@@ -1218,7 +1234,14 @@ class SelfHostedModel:
                 raise
             raise ModelFailure(
                 RefusalCode.SEMANTIC_EXTRACTION_FAILED,
-                observed.model_call.model_copy(update={"outcome": "refused"}),
+                observed.model_call.model_copy(
+                    update={
+                        "outcome": "refused",
+                        "output_contract_failure": ModelOutputContractFailure(
+                            schema="ghimera.model-output-contract/1", reason=failure_reason
+                        ),
+                    }
+                ),
             ) from None
         return result
 
