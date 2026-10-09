@@ -1,6 +1,7 @@
 # Ghimera 0.4.11 release acceptance
 
-Status: SOURCE GATE GREEN; PUBLICATION PENDING.
+Status: PUBLISHED; SOURCE AND INSTALLED PACKAGE ACCEPTANCE GREEN.
+Real-model and off-host quality acceptance remains open.
 
 This increment adds explicit recovery, retained evidence and reviewed extraction
 interfaces to the independent package. It does not claim that the complete
@@ -60,10 +61,36 @@ establish actual remote service readiness or model quality.
 
 ## Publication
 
-The prior official public version remains 0.4.10 at preparation time. Public
-readback must verify the new official repository commit/tag and both original
-PyPI files against the final validated artifacts. Do not replace an existing
-file or infer successful publication from an upload attempt.
+Release commit `9fa7591dd924dc6a36c433d5602347875cf7c527` was atomically
+fast-forwarded to official GitHub main with the new annotated `v0.4.11` tag,
+object `78e4e57f8b962aa655931edb5ca7cf5eab183dc8`, peeling to that same commit.
+Independent remote readback verified all three identities. Existing tags and
+public artifact files were not changed.
+
+Both validated artifacts were uploaded to official PyPI. Credential-free public
+metadata and original-file downloads, with verified TLS and redirects refused,
+matched the complete local bytes:
+
+- Wheel: 597,411 bytes; SHA-256
+  `a2aa4b39121b1a8e556cfd0ba271c548b371a216f05923923356a480cdfccfb0`.
+- Source archive: 1,652,182 bytes; SHA-256
+  `58fcf452b49bb97a7f75fdcd9dc93b60deacdd6ed28a461112b76162cddd2e90`.
+
+The exact Git export supplied the source archive; the wheel was built from that
+archive. Archive inspection matched 616 tracked files and all 225 wheel package
+members against Git, with production source and examples unchanged from the
+frozen gate. Strict package metadata checks passed for both files.
+
+Final-wheel preflight ran under Python 3.11.16 in a fresh, isolated core-only
+environment, without a source checkout, test runner or platform SDK import.
+All 225 installed package files matched the wheel and exported source; all 237
+installed record rows were valid. The compatibility facade, 54 public exports,
+three entry points, five command-help calls and 11 typed configuration examples
+passed. No network, model or GPU contact occurred in that preflight.
+
+This later evidence-only documentation update does not rebuild the published
+artifacts or move their immutable tag. Publication is not platform deployment
+or whole-capability quality acceptance.
 
 ## Remaining acceptance
 
