@@ -1,0 +1,13 @@
+# Inert fragment for an existing complete collection-service/2 declaration.
+# The ORIGINAL recipe must select research-recovery/7 before any work starts.
+# Service command template stays collector-command/2 for ordinary run/checkpoint.
+[recovery]
+schema = "ghimera.service-recovery/7"
+boundary = "source_processing"
+on_restart = "hold"
+max_adoption_attempts = 2
+
+# Authenticated POST /runs/<original-run-id>/recover uses an exact JSON body:
+# {"schema":"ghimera.service-recovery-request/2",
+#  "boundary":"source_processing", "snapshot_sha256":"<original cursor SHA256>"}
+# No request-selected file paths, runtime, recipe, model or replacement source.

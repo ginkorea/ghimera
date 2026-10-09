@@ -122,9 +122,9 @@ def validate_processing(
     if cursor.stage == "scoring":
         allowed = {
             "scoring_source",
-            "encoding_intent",
+            "run_encoding_intent",
             "encoding",
-            "encoding_replay",
+            "run_encoding_replay",
             "intent_reference",
         }
         if any(row.event not in allowed for row in tail):

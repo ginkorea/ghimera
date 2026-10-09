@@ -377,12 +377,14 @@ def test_processing_drift_and_owner_refusals_do_not_contact(
 
         asyncio.run(restore())
     else:
-        cursor = original.cursor.model_dump()
+        # Persist deliberately corrupted bytes, rather than rejecting the
+        # fixture through its write-time model validator before readback.
+        cursor = original.cursor.model_dump(mode="json")
         if defect == "source_text":
             cursor["extracted"]["text"] += "changed retained native source"
         else:
             cursor["prefix_sha256"][-1] = "0" * 64
-        altered = SourceProcessingCursor.model_validate(cursor).model_dump_json().encode()
+        altered = json.dumps(cursor, ensure_ascii=False, separators=(",", ":")).encode()
         with sqlite3.connect(
             _run_path(cfg.journal, "cut") / "source-work" / "operations.sqlite"
         ) as db:

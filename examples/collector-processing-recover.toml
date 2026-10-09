@@ -1,0 +1,14 @@
+# Inert operator example: replace with the ORIGINAL private recipe/run/output
+# and exact SourceWorkStore.processing_read(...).sha256. No request replacement.
+schema = "ghimera.collector-command/9"
+config_path = "/operator/ghimera/original-recipe.toml"
+output_directory = "/operator/ghimera/original-result"
+run_id = "original-run"
+max_input_bytes = 8000000
+max_result_bytes = 16000000
+
+[execution]
+schema = "ghimera.command-execution/7"
+operation = "recover"
+recovery_boundary = "source_processing"
+snapshot_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"

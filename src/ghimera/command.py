@@ -52,6 +52,7 @@ class CommandExecution(BaseModel):
         "ghimera.command-execution/4",
         "ghimera.command-execution/5",
         "ghimera.command-execution/6",
+        "ghimera.command-execution/7",
     ] = Field(alias="schema")
     operation: Literal["run", "resume", "recover", "observe_model_unknown", "reconcile_model"]
     checkpoint_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
@@ -63,9 +64,10 @@ class CommandExecution(BaseModel):
     snapshot_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
-    recovery_boundary: Literal["source_completion", "query_return", "source_acquisition"] | None = (
-        Field(default=None, exclude_if=lambda v: v is None)
-    )
+    recovery_boundary: (
+        Literal["source_completion", "query_return", "source_acquisition", "source_processing"]
+        | None
+    ) = Field(default=None, exclude_if=lambda v: v is None)
     model_decision: ModelReconciliationDecision | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
@@ -75,6 +77,18 @@ class CommandExecution(BaseModel):
 
     @model_validator(mode="after")
     def checkpoint_binding(self) -> "CommandExecution":
+        if self.schema_version == "ghimera.command-execution/7":
+            if (
+                self.operation != "recover"
+                or self.recovery_boundary != "source_processing"
+                or self.snapshot_sha256 is None
+                or self.model_fields_set
+                & {"checkpoint_sha256", "suspend_after_rounds", "model_decision", "model_attempt"}
+            ):
+                raise ValueError("processing requires execution /7 and its exact native cursor")
+            return self
+        if self.recovery_boundary == "source_processing":
+            raise ValueError("processing requires explicit execution /7")
         if (
             self.recovery_boundary == "source_acquisition"
             and self.schema_version != "ghimera.command-execution/6"
@@ -161,6 +175,7 @@ class CommandOptions(BaseModel):
         "ghimera.collector-command/5",
         "ghimera.collector-command/6",
         "ghimera.collector-command/8",
+        "ghimera.collector-command/9",
     ] = Field(alias="schema")
     config_path: Path
     request_path: Path | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -177,6 +192,10 @@ class CommandOptions(BaseModel):
 
     @model_validator(mode="after")
     def paths(self) -> "CommandOptions":
+        processing_route = (
+            self.execution is not None
+            and self.execution.schema_version == "ghimera.command-execution/7"
+        )
         acquisition_route = (
             self.execution is not None
             and self.execution.schema_version == "ghimera.command-execution/6"
@@ -194,7 +213,12 @@ class CommandOptions(BaseModel):
             "observe_model_unknown",
             "reconcile_model",
         }
-        if self.schema_version == "ghimera.collector-command/8":
+        if self.schema_version == "ghimera.collector-command/9":
+            if not processing_route:
+                raise ValueError("command /9 requires explicit processing recovery")
+        elif processing_route:
+            raise ValueError("processing recovery requires command /9")
+        elif self.schema_version == "ghimera.collector-command/8":
             if not acquisition_route:
                 raise ValueError("command /8 requires explicit acquisition recovery")
         elif acquisition_route:
@@ -403,7 +427,11 @@ async def execute(
     }:
         if config.research_recovery is None or execution.snapshot_sha256 is None:
             raise ValueError("recovery requires the recipe's explicit policy and snapshot digest")
-        if execution.recovery_boundary == "source_acquisition":
+        if execution.recovery_boundary == "source_processing":
+            request = SourceWorkStore.processing_read(
+                config, options.run_id, execution.snapshot_sha256
+            ).cursor.original.request
+        elif execution.recovery_boundary == "source_acquisition":
             request = SourceWorkStore.acquisition(
                 config, options.run_id, execution.snapshot_sha256
             ).snapshot.request

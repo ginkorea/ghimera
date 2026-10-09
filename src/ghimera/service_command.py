@@ -62,8 +62,22 @@ class ModelObservationRequest(Record):
 class RecoveryBoundaryRequest(Record):
     """Explicit manual selector; not a new permission or native acknowledgment."""
 
-    schema_version: Literal["ghimera.service-recovery-request/1"] = Field(alias="schema")
+    schema_version: Literal[
+        "ghimera.service-recovery-request/1", "ghimera.service-recovery-request/2"
+    ] = Field(alias="schema")
     boundary: ManualBoundary
+    snapshot_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def versioned(self) -> "RecoveryBoundaryRequest":
+        if self.schema_version == "ghimera.service-recovery-request/2":
+            if self.boundary != "source_processing" or self.snapshot_sha256 is None:
+                raise ValueError("processing selector requires its exact original cursor")
+        elif self.boundary == "source_processing" or "snapshot_sha256" in self.model_fields_set:
+            raise ValueError("original selector /1 forbids processing and cursor fields")
+        return self
 
     @classmethod
     def read(cls, body: bytes) -> "RecoveryBoundaryRequest":
@@ -243,12 +257,33 @@ class CollectionHttpServer:
                     if (
                         self.service.config.recovery is not None
                         and self.service.config.recovery.schema_version
-                        == "ghimera.service-recovery/6"
+                        in {"ghimera.service-recovery/6", "ghimera.service-recovery/7"}
                     ):
                         selector = RecoveryBoundaryRequest.read(body)
-                        job = await self.service.recover(run_id, boundary=selector.boundary)
+                        processing = (
+                            self.service.config.recovery.schema_version
+                            == "ghimera.service-recovery/7"
+                        )
+                        if selector.schema_version != (
+                            "ghimera.service-recovery-request/2"
+                            if processing
+                            else "ghimera.service-recovery-request/1"
+                        ):
+                            raise ValueError("selector differs from exact configured profile")
+                        job = (
+                            await self.service.recover(
+                                run_id,
+                                snapshot_sha256=selector.snapshot_sha256,
+                            )
+                            if processing
+                            else await self.service.recover(run_id, boundary=selector.boundary)
+                        )
                         return (
-                            202 if job.phase == "recovering" else 409
+                            202
+                            if job.phase == "recovering"
+                            or processing
+                            and job.phase == "handoff_pending"
+                            else 409
                         ), job.model_dump_json().encode()
                     job = await self.service.recover(
                         run_id, attempt=ModelAttemptAuthorization.model_validate_json(body)
@@ -263,7 +298,14 @@ class CollectionHttpServer:
                 if action == "resume":
                     return 202, self.service.resume(run_id).model_dump_json().encode()
                 if action == "recover":
-                    job = await self.service.recover(run_id)
+                    if (
+                        self.service.config.recovery is not None
+                        and self.service.config.recovery.schema_version
+                        == "ghimera.service-recovery/7"
+                    ):
+                        job = await self.service.recover(run_id, archive_only=True)
+                    else:
+                        job = await self.service.recover(run_id)
                     return (
                         202 if job.phase in {"recovering", "handoff_pending"} else 409
                     ), job.model_dump_json().encode()
