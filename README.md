@@ -9,16 +9,12 @@ the model services, search providers, authorized source sessions, networking and
 storage. It does not launch models, discover credentials, allocate compute or
 silently fall back to an external LLM.
 
-**Published release: 0.4.10.** Install this version for the supported release
-described below. Its source gate, independently installed-package checks and
-bounded public browser/Tor captures are recorded in
-[release acceptance](docs/RELEASE_0410.md). These checks do not establish live
-multilingual model quality or complete publisher coverage.
-
-**Unpublished source candidate: 0.4.11.** This checkout also contains opt-in
-recovery, identity, judgment and retrieval additions described
-[below](#unpublished-0411-candidate). They are not capabilities of the immutable
-0.4.10 wheel, and source checks are not release or real-model acceptance.
+**Release 0.4.11.** This increment adds opt-in recovery, identity, judgment and
+retrieval capabilities described [below](#0411-capabilities). Its frozen source
+gate and installed-package observations are recorded in
+[release acceptance](docs/RELEASE_0411.md); publication readback is a separate
+step. These checks do not establish live multilingual model quality, complete
+publisher coverage or recovery from every interruption.
 
 ## Installation
 
@@ -27,13 +23,13 @@ Python **3.11+** is required. Use a dedicated environment:
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'ghimera==0.4.10'
+python -m pip install 'ghimera==0.4.11'
 ```
 
 Install the adapters you intend to configure:
 
 ```bash
-python -m pip install 'ghimera[html,documents,browser]==0.4.10'
+python -m pip install 'ghimera[html,documents,browser]==0.4.11'
 ```
 
 The base package supplies typed collection/research contracts, HTTP/Tor
@@ -45,10 +41,10 @@ binary and Bubblewrap; other operating systems have not been accepted for it.
 
 ## Configure and run an intent
 
-Start with the [published 0.4.10 examples](https://github.com/ginkorea/ghimera/tree/v0.4.10/examples),
+Start with the [0.4.11 examples](https://github.com/ginkorea/ghimera/tree/v0.4.11/examples),
 especially `collector.toml`. Templates are non-active: replace invalid endpoints,
 private paths, model identifiers and contact details. Use examples matching your
-installed version; this checkout's candidate-only recipes are not wheel updates.
+installed version; a different source checkout does not update an installed wheel.
 
 Configure already-served private completion and embedding services, a search
 provider, source scope, extraction policies and explicit budgets. Endpoints,
@@ -226,9 +222,9 @@ destination is not off-host backup. See the [service guide](docs/OPERATIONS_CAND
 and [delivery lifecycle](docs/DELIVERY_OUTBOX.md). Destination durability, outage/
 scale behavior and deployed off-host acceptance remain operator requirements.
 
-## Unpublished 0.4.11 candidate
+## 0.4.11 capabilities
 
-These opt-in source capabilities are not in the published 0.4.10 package:
+These opt-in capabilities extend the immutable 0.4.10 package:
 
 - [Research recovery](docs/RESEARCH_RECOVERY.md) and [service restart admission](docs/SERVICE_RECOVERY.md)
   restore exact acknowledged research-model boundaries with original identities,
@@ -242,12 +238,19 @@ These opt-in source capabilities are not in the published 0.4.10 package:
   atomic serial source acknowledgement, preserving the original cursor, dedup,
   frontier, references, graph and spend. Selected unsupported overlap refuses;
   ordinary concurrent collection is unchanged.
+- [Source-processing recovery](docs/SOURCE_PROCESSING_RECOVERY.md) restores
+  supported parser, scoring and verdict acknowledgements through the native
+  command and authenticated service. Later semantic, visual, identity and
+  frontier interruptions remain explicit holds, not automatic retries.
 - [Run-bound learned retrieval](docs/RESEARCH_RERANKING.md),
   [identity proposal/review](docs/IDENTITY_AUTOMATION.md),
   [contribution-aware document judgment](docs/DOCUMENT_JUDGMENT.md) and
   [intent-ranked native windows](docs/SEMANTIC_WINDOW_SELECTION.md) have explicit
   recipes and audit boundaries. They do not establish real ranking, identity or
   organizational-research accuracy.
+- [Compact native quote review](docs/SEMANTIC_GROUNDING.md) reduces unused quote
+  metadata while preserving the original source and complete replay checks.
+  Smaller requests are not evidence that a model gives correct answers.
 
 Arbitrary mid-source, concurrent, discovery/retained-reader or graph interruptions
 are not transparently adopted. Unknown calls, torn tails, changed source/corpus/
@@ -270,9 +273,9 @@ captures establish different things; none substitutes for those requirements.
 
 Use the [core completion tracker](docs/PRD_INFRASTRUCTURE.md) for current gaps,
 [architecture](docs/C0.md) for the original contracts, and [CHANGELOG](CHANGELOG.md)
-for release history. Guides/examples in this source tree may include candidate
-features; the [v0.4.10 tree](https://github.com/ginkorea/ghimera/tree/v0.4.10)
-is the matching reference for the published wheel.
+for release history. The [v0.4.11 tree](https://github.com/ginkorea/ghimera/tree/v0.4.11)
+is the matching source reference for this package version; later development
+recipes may require a newer release.
 
 ## Migration
 

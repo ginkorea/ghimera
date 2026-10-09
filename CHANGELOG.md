@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.11 — candidate
+## 0.4.11 — 2026-10-09
 
 - Add bounded native recovery at retained research-model phase boundaries,
   with original request, writer, budget and output-reservation checks. Retained
@@ -14,9 +14,24 @@
   This mode is serial only; ordinary concurrent collection is unchanged.
 - Add explicit same-origin model-gateway configuration, including configured
   shared-address scope, without changing legacy model-facing schema identities.
-- Candidate source, installed-artifact and live quality acceptance remain
-  separate. These changes do not establish whole-session interruption recovery,
-  representative multilingual extraction or validated scanned-PDF OCR.
+- Add exact acquired-source and retained-query recovery, bounded native parser,
+  scoring and verdict recovery through command/service interfaces, and preserved
+  original encoding/model acknowledgements. Unsupported semantic/visual/frontier
+  cuts remain held; completed work is not recollected to finish a handoff.
+- Add artifact-pinned offline learned reranking with original run-bound score
+  reservations, identity proposal and independent review, contribution-aware
+  document judgment and intent-ranked semantic windows. Recipes select these
+  behaviors explicitly; models and operational choices are not bundled.
+- Add compact native quote review and closed semantic client diagnostics without
+  retaining raw refused responses or weakening evidence validation.
+- Frozen source gate: 2,071 passed without failures/skips under Python 3.11.16.
+  Real native Chinese PDF extraction and retained-corpus/reader checks preserve
+  original evidence. One learned reranker improved an English query but worsened
+  its Chinese counterpart; it is not a recommended multilingual default.
+- Source, installed-artifact, publication and real-model quality acceptance remain
+  separate; see [release acceptance](docs/RELEASE_0411.md). Whole-session
+  interruption recovery, representative multilingual organization/vision quality,
+  off-host deployment and validated scanned-PDF OCR remain open.
 
 ## 0.4.10 — 2026-10-08
 

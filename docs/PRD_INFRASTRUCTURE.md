@@ -307,7 +307,7 @@ outer-query continuation and real multilingual ranking quality remain open.
 
 ## Delivery and release discipline
 
-### Current unpublished convergence candidate
+### Current 0.4.11 source convergence
 
 - I03 / I12: exact original source-processing recovery now reaches the native
   command and authenticated service owners. The cursor retains parser, scoring,
@@ -330,8 +330,15 @@ outer-query continuation and real multilingual ranking quality remain open.
   is checked independently. Reduced request size is not model-quality evidence.
 
 These increments reuse the existing collector/model, source writer, journal,
-graph and service owners. Their combined package gate, fresh installed-artifact
-acceptance and useful independent original-source quality remain required.
+graph and service owners. The combined frozen package gate passed 2,071 tests
+with no failures or skips under Python 3.11.16. Bounded independently installed
+command/service recovery passed 26 cases without failures or skips, with the
+exact wheel import path inherited by fresh subprocesses. Original Chinese-PDF
+parsing, persistent corpus retrieval and native retained-reader acknowledgement
+reuse also passed. These observations cover their stated components, not
+independent research quality or every optional deployment. Exact provenance
+and publication state are in [0.4.11 release acceptance](RELEASE_0411.md).
+Useful independently reviewed original-source research quality remains required.
 No implemented slice closes the broader C0 or I01–I14 acceptance requirements.
 
 Implement and commit bounded rows with tests for their owning contracts and
