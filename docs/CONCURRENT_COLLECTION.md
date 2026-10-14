@@ -59,6 +59,10 @@ resource grant; an admitted source can itself require robots, redirects,
 browser resources or images. The authoritative page/byte/model/wall budgets
 remain enforced at their existing spend boundaries.
 
+Since 0.4.12 run limits are off unless configured, and one page's own refusal
+(a reader deadline, an encoder unavailable after retries) never ends collection;
+see [throughput and limits](THROUGHPUT_AND_LIMITS.md).
+
 ## Evidence and lifecycle
 
 - The append-only ledger remains owned by one asyncio loop. Reservation and

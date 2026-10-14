@@ -176,3 +176,17 @@ def test_extraction_refusals_name_the_reader_and_page_size(tmp_path):
         asyncio.run(reader.extract(page()))
     assert large.value.detail.startswith("html page of ")
     assert "exceeds max_input_bytes=100" in large.value.detail
+
+
+def test_fast_reading_example_is_a_valid_policy(tmp_path):
+    import tomllib
+    from pathlib import Path
+
+    from ghimera.model_retry import ModelRetryPolicy
+
+    with Path("examples/fast-reading.toml").open("rb") as stream:
+        fragment = tomllib.load(stream)
+    extraction = policy(tmp_path, **fragment["extraction"])
+    assert extraction.worker_mode == "persistent"
+    assert extraction.fast_reader is not None and extraction.fast_reader.min_text_chars == 400
+    assert ModelRetryPolicy.model_validate(fragment["model_retry"]) == ModelRetryPolicy()

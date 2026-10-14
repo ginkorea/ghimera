@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.12 — 2026-10-14
+
+- Run limits are off by default. `page_budget`, `byte_budget`, `judge_budget`,
+  `wall_seconds`, research `max_rounds`/`query_budget` and scoring encoding
+  call/char budgets may be omitted (or `"unbounded"`, `0`, `null`). Spend is
+  still accounted on every receipt; `BUDGET_EXHAUSTED` is raised only for a
+  configured limit and names it with used/limit. Research without `max_rounds`
+  stops on saturation (`saturation_rounds`, default 2 rounds without new
+  evidence). Integer recipes parse and serialize unchanged.
+- One page's refusal never ends a round: a reader deadline, an overlong link or
+  an encoder/model still unavailable after retries refuses that page only.
+  Overlong link texts are cut to the encoder bound (URL head kept, anchor
+  truncated, `omitted_chars` recorded); whitespace-only windows are skipped.
+- Transient model/encoder refusals (HTTP 408/409/425/429/5xx, dropped
+  connections) retry with bounded backoff (`model_retry`, default 180 s).
+  Every try is an accounted call; durable model-work calls are not retried.
+- Opt-in in-process first-pass HTML reader (`extraction.fast_reader`) reads a
+  1 MB page in under 100 ms; thin, script-only and profiled pages use the
+  unchanged rich tier. Opt-in `worker_mode = "persistent"` parser interpreters
+  import the vendor stack once. A page's encoder batches are sent concurrently.
+- Every refusal carries a bounded `detail` sentence, also on refusal ledger
+  rows. Run ids accept `.` (`ghimera.identifiers`).
+- `ResearchRequest.languages` asks for at least one query per question per
+  language; `SearchQuery.language` reaches SearXNG; rounds report
+  `language_queries` and `pages_by_language`. Bare-host cited-by leads score
+  on URL path words. See [throughput and limits](docs/THROUGHPUT_AND_LIMITS.md)
+  and [release acceptance](docs/RELEASE_0412.md).
+
 ## 0.4.11 — 2026-10-09
 
 - Add bounded native recovery at retained research-model phase boundaries,

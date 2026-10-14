@@ -1,0 +1,21 @@
+# Non-active fragment for a self-hosted deployment (0.4.12). Merge the
+# [extraction] keys into your extraction policy and the top-level keys into the
+# run recipe. Run limits are OFF by default: omit page_budget, byte_budget,
+# judge_budget and wall_seconds (or write "unbounded") and the mission's own
+# stopping rules end the run. Spend is still accounted on every receipt.
+
+[extraction]
+# Read titled pages with at least min_text_chars of body text in-process
+# (milliseconds); thinner, JavaScript-only or profiled pages use the rich tier.
+worker_mode = "persistent"
+
+[extraction.fast_reader]
+schema = "ghimera.fast-reader/1"
+min_text_chars = 400
+
+# Transient model/encoder refusals (reloading, overloaded) retry with backoff.
+[model_retry]
+schema = "ghimera.model-retry/1"
+max_wait_seconds = 180.0
+initial_backoff_seconds = 1.0
+max_backoff_seconds = 30.0

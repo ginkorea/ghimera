@@ -136,6 +136,12 @@ batch's call and prefixed character allowance before I/O. Encoding reservations
 are separate from judge and source-byte budgets but share the run deadline.
 No embeddings are billed as generated text or silently counted as judge calls.
 
+Since 0.4.12 the encoding budgets are optional (absent means no limit), a link
+text longer than the encoder's per-text bound is cut to its URL head and a
+truncated anchor (recorded as `omitted_chars`) instead of refusing the page,
+transient encoder refusals retry with bounded backoff, and a page's batches are
+sent concurrently. See [throughput and limits](THROUGHPUT_AND_LIMITS.md).
+
 `chimera.encoding-call/1` records effective service policy, request/response and
 ordered input hashes, prefixed input characters, bounded response bytes/status,
 latency, available usage and success/refusal/cancellation. If an injected adapter

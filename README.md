@@ -9,10 +9,10 @@ the model services, search providers, authorized source sessions, networking and
 storage. It does not launch models, discover credentials, allocate compute or
 silently fall back to an external LLM.
 
-**Release 0.4.11.** This increment adds opt-in recovery, identity, judgment and
-retrieval capabilities described [below](#0411-capabilities). Its frozen source
-gate and installed-package observations are recorded in
-[release acceptance](docs/RELEASE_0411.md); publication readback is a separate
+**Release 0.4.12.** Run limits are off by default, one page's refusal never
+ends a round, transient model refusals retry, and pages can be read in-process
+in milliseconds; see [0.4.12 changes](#0412-changes) and
+[release acceptance](docs/RELEASE_0412.md). Publication readback is a separate
 step. These checks do not establish live multilingual model quality, complete
 publisher coverage or recovery from every interruption.
 
@@ -23,13 +23,13 @@ Python **3.11+** is required. Use a dedicated environment:
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install 'ghimera==0.4.11'
+python -m pip install 'ghimera==0.4.12'
 ```
 
 Install the adapters you intend to configure:
 
 ```bash
-python -m pip install 'ghimera[html,documents,browser]==0.4.11'
+python -m pip install 'ghimera[html,documents,browser]==0.4.12'
 ```
 
 The base package supplies typed collection/research contracts, HTTP/Tor
@@ -41,13 +41,13 @@ binary and Bubblewrap; other operating systems have not been accepted for it.
 
 ## Configure and run an intent
 
-Start with the [0.4.11 examples](https://github.com/ginkorea/ghimera/tree/v0.4.11/examples),
+Start with the [0.4.12 examples](https://github.com/ginkorea/ghimera/tree/v0.4.12/examples),
 especially `collector.toml`. Templates are non-active: replace invalid endpoints,
 private paths, model identifiers and contact details. Use examples matching your
 installed version; a different source checkout does not update an installed wheel.
 
 Configure already-served private completion and embedding services, a search
-provider, source scope, extraction policies and explicit budgets. Endpoints,
+provider, source scope and extraction policies. Run limits are optional. Endpoints,
 model revisions, language artifacts, thresholds, direct/Tor routes and storage
 belong in typed, versioned configuration. Reference-vector fixtures are not
 production relevance data. See the [collector guide](docs/COLLECTOR.md).
@@ -222,6 +222,21 @@ destination is not off-host backup. See the [service guide](docs/OPERATIONS_CAND
 and [delivery lifecycle](docs/DELIVERY_OUTBOX.md). Destination durability, outage/
 scale behavior and deployed off-host acceptance remain operator requirements.
 
+## 0.4.12 changes
+
+- Run limits are optional and absent by default; spend is still accounted and
+  only a configured limit refuses, naming itself with used/limit. The mission's
+  stopping rules (coverage, saturation, empty frontier, cancellation) end a run.
+- A page's own refusal never ends a round. Overlong link texts are cut to the
+  encoder bound; transient model/encoder refusals retry with bounded backoff.
+- `extraction.fast_reader` reads pages in-process with lxml; persistent parser
+  workers import the rich tier once. Encoder batches for a page are concurrent.
+- Every refusal carries a `detail` sentence; run ids may contain `.`.
+- `ResearchRequest.languages` searches every question in every preferred language.
+
+See [throughput and limits](docs/THROUGHPUT_AND_LIMITS.md) and
+[`examples/fast-reading.toml`](examples/fast-reading.toml).
+
 ## 0.4.11 capabilities
 
 These opt-in capabilities extend the immutable 0.4.10 package:
@@ -273,7 +288,7 @@ captures establish different things; none substitutes for those requirements.
 
 Use the [core completion tracker](docs/PRD_INFRASTRUCTURE.md) for current gaps,
 [architecture](docs/C0.md) for the original contracts, and [CHANGELOG](CHANGELOG.md)
-for release history. The [v0.4.11 tree](https://github.com/ginkorea/ghimera/tree/v0.4.11)
+for release history. The [v0.4.12 tree](https://github.com/ginkorea/ghimera/tree/v0.4.12)
 is the matching source reference for this package version; later development
 recipes may require a newer release.
 
