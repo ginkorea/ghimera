@@ -96,6 +96,7 @@ from ghimera.research_types import (
     answer_order,
     balance_queries,
     language_queries,
+    plan_fitted_reason,
     planning_readings,
     round_readings,
     truncate_queries,
@@ -633,7 +634,22 @@ class ResearchLoop:
         self._journal_omitted(session, omitted)
         if not truncations and not omitted:
             return plan, (), ()
-        return plan.model_copy(update={"queries": queries}), omitted, truncations
+        fitted = plan.model_copy(update={"queries": queries})
+        # The plan row keeps the raw response digest as evidence; this row binds it to
+        # the fitted plan the round actually runs.
+        session.ledger.append(
+            LedgerRow(
+                sequence=session.ledger.next_sequence,
+                event="policy",
+                reason=plan_fitted_reason(
+                    plan.content_digest(),
+                    fitted.content_digest(),
+                    len(omitted),
+                    len(truncations),
+                ),
+            )
+        )
+        return fitted, omitted, truncations
 
     def _journal_omitted(
         self, session: CollectionSession, omitted: tuple[SearchQuery, ...]

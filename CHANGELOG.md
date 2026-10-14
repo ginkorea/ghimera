@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.15 — 2026-10-14
+
+- A fitted plan completes. When fitting cuts or truncates a plan, the `plan`
+  row keeps the model's raw response digest as evidence and a `policy` row
+  `plan_fitted: raw=<digest> fitted=<digest> omitted=N truncated=M` binds it to
+  the fitted plan the round runs. `ResearchResult.complete_status` accepts a
+  round's queries bound to either digest, so graph-aware rounds
+  (`[research.graph_context]`) whose plan was fitted no longer fail with
+  "research queries must bind the observed graph-aware planning response".
+
 ## 0.4.14 — 2026-10-14
 
 - A compliant research plan is never refused for its size. Queries over

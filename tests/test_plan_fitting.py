@@ -4,10 +4,13 @@ import asyncio
 from collections import Counter
 
 import pytest
+from pydantic import ValidationError
 
+from ghimera.config import GhimeraConfig
 from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
 from ghimera.fetch import FetchLadder
 from ghimera.loop import GoalLoop
+from ghimera.model_client import SelfHostedModel
 from ghimera.refusals import RefusalCode
 from ghimera.research import ResearchLoop
 from ghimera.research_types import (
@@ -16,11 +19,13 @@ from ghimera.research_types import (
     Question,
     ResearchPlan,
     ResearchRequest,
+    ResearchResult,
     SearchQuery,
     balance_queries,
     truncate_query_text,
 )
 from tests.test_c0 import config
+from tests.test_graph_planning import GraphPlannerFixture, NativeFixture, planning_config
 from tests.test_intent_research import (
     AnalystFixture,
     PlannerFixture,
@@ -28,6 +33,7 @@ from tests.test_intent_research import (
     SearchFixture,
     policy,
 )
+from tests.test_semantic_graph import SemanticWire
 
 LANGUAGES = ("en", "zh", "ja")
 QUESTIONS = tuple(Question(id=f"q{n}", text=f"Question {n}?") for n in range(1, 7))
@@ -136,3 +142,76 @@ def test_contract_checks_still_refuse(queries):
         row.refusal == RefusalCode.RESEARCH_CONTRACT and "_validate_plan" in (row.detail or "")
         for row in result.harvest.ledger
     )
+
+
+class FittedGraphPlanner(GraphPlannerFixture):
+    """Graph-aware planner whose plan exceeds the round bounds."""
+
+    def __init__(self, queries):
+        super().__init__()
+        self.queries = queries
+
+    async def plan(self, request):
+        self.requests.append(request)
+        return ResearchPlan(questions=request.questions or QUESTIONS, queries=self.queries)
+
+
+def graph_research(tmp_path, queries, **limits):
+    raw = planning_config(tmp_path).model_dump()
+    raw["research"].update(max_questions=6, max_queries_per_round=8, **limits)
+    cfg = GhimeraConfig.model_validate(raw)
+    planner, search = FittedGraphPlanner(queries), SearchFixture()
+    loop = ResearchLoop(
+        config=cfg,
+        collector=GoalLoop(
+            config=cfg,
+            fetcher=FetchLadder((FakeRoute(),)),
+            extractor=NativeFixture(),
+            scorer=KeywordScorer(),
+            judge=FakeJudge(),
+            semantic_extractor=SelfHostedModel(
+                cfg, cfg.models.analyst, http=SemanticWire(cfg.models.analyst)
+            ),
+        ),
+        search=search,
+        planner=planner,
+        analyst=OpenAnalyst(),
+        reviewer=ReviewerFixture(),
+    )
+    request = ResearchRequest(intent="map the organization", languages=LANGUAGES)
+    return asyncio.run(loop.run(request, run_id="fitted-graph")), search
+
+
+def assert_complete(result):
+    assert result.status != "failed", [row.detail for row in result.harvest.ledger if row.refusal]
+    assert ResearchResult.model_validate_json(result.model_dump_json()) == result
+    fitted = [r for r in result.harvest.ledger if (r.reason or "").startswith("plan_fitted:")]
+    assert len(fitted) == len(result.rounds)
+    plan_reasons = {r.reason for r in result.harvest.ledger if r.event == "plan"}
+    for row in fitted:
+        raw = row.reason.split()[1].removeprefix("raw=")
+        assert "model_response:" + raw in plan_reasons  # raw digest kept as evidence
+
+
+def test_graph_aware_round_with_a_cut_plan_is_complete(tmp_path):
+    result, search = graph_research(tmp_path, eighteen())
+    assert_complete(result)
+    first = result.rounds[0]
+    assert len(first.queries) == 8 and len(first.omitted_queries) == 10
+    assert search.requests
+
+
+def test_graph_aware_round_with_a_truncated_query_is_complete(tmp_path):
+    long = "organization structure " + "x" * 200
+    queries = (SearchQuery(text=long, question_ids=("q1",), language="en"),)
+    result, _ = graph_research(tmp_path, queries, max_query_chars=40)
+    assert_complete(result)
+    assert result.rounds[0].truncated_queries[0].text == "organization structure"
+
+
+def test_a_fitted_plan_cannot_be_rebound_to_other_queries(tmp_path):
+    result, _ = graph_research(tmp_path, eighteen())
+    raw = result.model_dump()
+    raw["rounds"][0]["queries"] = raw["rounds"][0]["queries"][:7]
+    with pytest.raises(ValidationError, match="graph-aware planning response"):
+        ResearchResult.model_validate(raw)

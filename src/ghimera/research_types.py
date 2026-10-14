@@ -17,7 +17,7 @@ from ghimera.graph_planning_types import PlanningGraph
 from ghimera.graph_types import GraphVisualAnchor
 from ghimera.local_input_types import LocalDocumentSeed
 from ghimera.model_types import ModelCallEvidence
-from ghimera.models import Document, Harvest, ModelIdentity, Record
+from ghimera.models import Document, Harvest, LedgerRow, ModelIdentity, Record
 from ghimera.reference_types import SearchReference
 from ghimera.research_reuse import ResearchRetrievalReport, RetainedSourceNotice, validate_notices
 from ghimera.transport_types import TransportEvidence
@@ -371,6 +371,30 @@ class AnswerRequest(EvidenceRequest):
 
 class ReviewRequest(EvidenceRequest):
     answer: AnswerDraft
+
+
+PLAN_FITTED = "plan_fitted: raw="
+
+
+def plan_fitted_reason(raw: str, fitted: str, omitted: int, truncated: int) -> str:
+    """The journaled binding of a model's raw plan digest to the fitted plan run."""
+    return f"{PLAN_FITTED}{raw} fitted={fitted} omitted={omitted} truncated={truncated}"
+
+
+def fitted_plans(rows: tuple["LedgerRow", ...]) -> dict[str, set[str]]:
+    """fitted plan digest -> raw plan digests it was fitted from."""
+    bound: dict[str, set[str]] = {}
+    for row in rows:
+        if row.event == "policy" and row.reason and row.reason.startswith(PLAN_FITTED):
+            fields = row.reason[len(PLAN_FITTED) :].split()
+            if len(fields) >= 2 and fields[1].startswith("fitted="):
+                bound.setdefault(fields[1][len("fitted=") :], set()).add(fields[0])
+    return bound
+
+
+def planned_digests(digest: str, fitted: dict[str, set[str]]) -> set[str]:
+    """The plan-row digests a round's queries may bind: its own, or the raw it came from."""
+    return {digest} | fitted.get(digest, set())
 
 
 class QueryTruncation(ResearchRecord):
@@ -770,6 +794,9 @@ class ResearchResult(ResearchRecord):
             raise ValueError("research result must bind a valid question pack and research policy")
         if policy.graph_context is not None:
             plans = tuple(row for row in self.harvest.ledger if row.event == "plan")
+            # A plan fitted to the round bounds keeps the raw response digest on its
+            # plan row; the journaled plan_fitted row binds raw -> fitted.
+            fitted = fitted_plans(self.harvest.ledger)
             for round_ in self.rounds:
                 if not any(
                     row.planning_graph is not None
@@ -777,13 +804,16 @@ class ResearchResult(ResearchRecord):
                         set(query.graph_refs) <= row.planning_graph.references
                         for query in round_.queries
                     )
-                    and row.reason
-                    == "model_response:"
-                    + ResearchPlan(
-                        questions=self.questions,
-                        queries=round_.queries,
-                        model_call=row.model_call,
-                    ).content_digest()
+                    and row.reason is not None
+                    and row.reason.removeprefix("model_response:")
+                    in planned_digests(
+                        ResearchPlan(
+                            questions=self.questions,
+                            queries=round_.queries,
+                            model_call=row.model_call,
+                        ).content_digest(),
+                        fitted,
+                    )
                     for row in plans
                 ):
                     raise ValueError(
