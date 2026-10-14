@@ -58,7 +58,12 @@ def test_versioned_config_fails_closed_and_is_immutable():
     with pytest.raises(ValidationError):
         config(schema="chimera.config/2")
     with pytest.raises(ValidationError):
-        config(page_budget=0)
+        config(page_budget=-1)
+    with pytest.raises(ValidationError):
+        config(page_budget="100")
+    # 0.4.12: zero, null or "unbounded" is an explicit absence of a run ceiling.
+    assert config(page_budget=0).page_budget is None
+    assert config(page_budget="unbounded").page_budget is None
     with pytest.raises(ValidationError):
         config(unknown_operator_value=1)
     with pytest.raises(ValidationError):

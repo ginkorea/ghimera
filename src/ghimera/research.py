@@ -7,6 +7,7 @@ Neither a grade nor the synthesizer's confidence is a completion decision.
 
 import asyncio
 import hashlib
+import itertools
 import time
 from collections.abc import Awaitable, Callable
 from typing import Literal, Protocol, TypeVar, overload
@@ -624,7 +625,12 @@ class ResearchLoop:
             validator.validate(claim.citations)
 
     def _refuse(
-        self, session: CollectionSession, code: RefusalCode, *, url: str | None = None
+        self,
+        session: CollectionSession,
+        code: RefusalCode,
+        *,
+        url: str | None = None,
+        detail: str | None = None,
     ) -> None:
         session.ledger.append(
             LedgerRow(
@@ -633,6 +639,7 @@ class ResearchLoop:
                 refusal=code,
                 url=url,
                 reason=code.value,
+                detail=detail,
             )
         )
 
@@ -660,7 +667,7 @@ class ResearchLoop:
                 except GhimeraRefused as exc:
                     if exc.code == RefusalCode.BUDGET_EXHAUSTED:
                         raise
-                    self._refuse(session, exc.code)
+                    self._refuse(session, exc.code, detail=exc.detail)
                     return ()
 
         if query_factory is None:
@@ -697,7 +704,7 @@ class ResearchLoop:
                     except GhimeraRefused as exc:
                         if exc.code == RefusalCode.BUDGET_EXHAUSTED:
                             raise
-                        self._refuse(session, exc.code)
+                        self._refuse(session, exc.code, detail=exc.detail)
                         observations = ()
                 completed.append(
                     tuple(hit.url for obs in observations for hit in obs.response.hits)
@@ -723,7 +730,12 @@ class ResearchLoop:
                     if session.graph is not None:
                         await session.graph.discovered(url, trace[query.content_digest()])
                 else:
-                    self._refuse(session, RefusalCode.OUT_OF_SCOPE, url=url)
+                    self._refuse(
+                        session,
+                        RefusalCode.OUT_OF_SCOPE,
+                        url=url,
+                        detail="research source policy did not admit this discovered URL",
+                    )
         return tuple(accepted)
 
     def _validate_suspend(self, suspend_after_rounds: int | None) -> None:
@@ -1132,7 +1144,7 @@ class ResearchLoop:
                 query_work=query_work,
             )
         except GhimeraRefused as exc:
-            self._refuse(session, exc.code)
+            self._refuse(session, exc.code, detail=exc.detail)
             if session.budget.remaining_seconds <= 0:
                 raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED) from exc
         if session.graph is not None:
@@ -1598,9 +1610,9 @@ class ResearchLoop:
         )
         answer: AnswerDraft | None = None
         review: AnswerReview | None = None
-        reason: Literal["answered", "rounds_exhausted", "budget_exhausted", "failed"] = (
-            "rounds_exhausted"
-        )
+        reason: Literal[
+            "answered", "rounds_exhausted", "budget_exhausted", "failed", "saturated"
+        ] = "rounds_exhausted"
         restored_control = checkpoint if checkpoint is not None else saved
         if source_acquisition is not None and source_acquisition.snapshot.phase == "collection":
             stopped = await self._collector.process_acquisition(session, source_acquisition)
@@ -1627,7 +1639,7 @@ class ResearchLoop:
                     )
                     reason = "answered"
                 except GhimeraRefused as exc:
-                    self._refuse(session, exc.code)
+                    self._refuse(session, exc.code, detail=exc.detail)
                     if isinstance(exc, UnsupportedReview):
                         review = exc.review
                     if exc.code == RefusalCode.UNSUPPORTED_ANSWER:
@@ -1672,12 +1684,18 @@ class ResearchLoop:
                     else None,
                 )
             except GhimeraRefused as exc:
-                self._refuse(session, exc.code)
+                self._refuse(session, exc.code, detail=exc.detail)
                 reason = (
                     "budget_exhausted" if exc.code == RefusalCode.BUDGET_EXHAUSTED else "failed"
                 )
-        for number in range(initial_rounds + 1, self._policy.max_rounds + 1):
-            if reason in {"failed", "budget_exhausted", "answered"}:
+        max_rounds = self._policy.max_rounds
+        empty_rounds = 0
+        for number in (
+            range(initial_rounds + 1, max_rounds + 1)
+            if max_rounds is not None
+            else itertools.count(initial_rounds + 1)
+        ):
+            if reason in {"failed", "budget_exhausted", "answered", "saturated"}:
                 break
             try:
                 resuming_assessment = (
@@ -1862,7 +1880,12 @@ class ResearchLoop:
                         if compiler.accept(seed):
                             allowed_seeds.append(seed)
                         else:
-                            self._refuse(session, RefusalCode.OUT_OF_SCOPE, url=seed)
+                            self._refuse(
+                                session,
+                                RefusalCode.OUT_OF_SCOPE,
+                                url=seed,
+                                detail="research source policy did not admit this seed URL",
+                            )
                     seeds = tuple(allowed_seeds)
                     urls = tuple(dict.fromkeys(seeds + urls))
                 scope = (
@@ -2006,6 +2029,16 @@ class ResearchLoop:
                     reuse=reuse,
                 )
                 if not questions or any(item.status != "answered" for item in assessment.coverage):
+                    # Saturation is the mission's own stop when rounds are unbounded:
+                    # configured consecutive rounds that retained no new evidence.
+                    new_documents = len(
+                        {doc.sha256 for doc in session.evidence_documents} - before_documents
+                    )
+                    empty_rounds = 0 if new_documents else empty_rounds + 1
+                    window = self._policy.saturation_rounds
+                    if window is not None and empty_rounds >= window:
+                        reason = "saturated"
+                        break
                     continue
                 answer, review = await self._answer(
                     session, request, questions, assessment, reuse, calls=calls
@@ -2013,7 +2046,7 @@ class ResearchLoop:
                 reason = "answered"
                 break
             except GhimeraRefused as exc:
-                self._refuse(session, exc.code)
+                self._refuse(session, exc.code, detail=exc.detail)
                 if isinstance(exc, UnsupportedReview):
                     review = exc.review
                 if exc.code == RefusalCode.UNSUPPORTED_ANSWER:
@@ -2032,6 +2065,8 @@ class ResearchLoop:
             if reason == "failed"
             else "budget_exhausted"
             if reason == "budget_exhausted"
+            else "saturated"
+            if reason == "saturated"
             else "frontier_empty"
         )
         harvest = self._collector.finish(session, stop)
@@ -2169,7 +2204,7 @@ class ResearchLoop:
                 except GhimeraRefused as exc:
                     if exc.code == RefusalCode.BUDGET_EXHAUSTED:
                         raise
-                    self._refuse(session, exc.code)
+                    self._refuse(session, exc.code, detail=exc.detail)
                     return ()
 
         if query_factory is None:
@@ -2265,7 +2300,7 @@ class ResearchLoop:
                     except GhimeraRefused as exc:
                         if exc.code == RefusalCode.BUDGET_EXHAUSTED:
                             raise
-                        self._refuse(session, exc.code)
+                        self._refuse(session, exc.code, detail=exc.detail)
                         query_observations = ()
                     batch = tuple((obs, reference_sequence(obs)) for obs in query_observations)
                 completed.append(batch)
@@ -2292,7 +2327,12 @@ class ResearchLoop:
                             query_sequence=sequence,
                         )
                     except ValidationError:
-                        self._refuse(session, RefusalCode.OUT_OF_SCOPE, url=hit.url)
+                        self._refuse(
+                            session,
+                            RefusalCode.OUT_OF_SCOPE,
+                            url=hit.url,
+                            detail="cited-by search hit failed the reference proof contract",
+                        )
                         continue
                     proofs.setdefault((proof.target_url, proof.anchor), proof)
             ranked = await self._collector.score_discovery(

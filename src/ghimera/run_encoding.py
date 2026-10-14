@@ -11,11 +11,18 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
+from ghimera.ceilings import exceeds, reached
 from ghimera.embedding_types import EncodingBatch, EncodingCall, encoding_request
 from ghimera.journal_types import JournalEntry, JournalHeader, canonical, digest
 from ghimera.judgment_validation import validate_native_reading, validate_scoring_readings
 from ghimera.models import Goal, LedgerRow
-from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused, RefusalCode
+from ghimera.refusals import (
+    BudgetExhausted,
+    EncodingCancelled,
+    EncodingFailure,
+    GhimeraRefused,
+    RefusalCode,
+)
 from ghimera.run_encoding_types import (
     RunEncodingAcknowledgement,
     RunEncodingDecision,
@@ -148,7 +155,9 @@ def validate_run_encoding_rows(
                 raise ValueError(
                     "run encoding reservation drifted from its exact run/recipe/purpose"
                 )
-            if calls > policy.encoding_call_budget or chars > policy.encoding_char_budget:
+            if exceeds(calls, policy.encoding_call_budget) or exceeds(
+                chars, policy.encoding_char_budget
+            ):
                 raise ValueError("run encoding reservations exceed original shared allowance")
             header_binding = binding
             intents[index] = intent
@@ -361,11 +370,12 @@ class RunEncodingWork:
         recovery = scoring.run_encoding_recovery
         budget.check_time()
         input_chars = sum(len(service.text_prefix) + len(text) for text in texts)
-        if (
-            usage[0] >= scoring.encoding_call_budget
-            or usage[1] + input_chars > scoring.encoding_char_budget
-        ):
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        if reached(usage[0], scoring.encoding_call_budget):
+            raise BudgetExhausted("encoding_call_budget", usage[0], scoring.encoding_call_budget)
+        if exceeds(usage[1] + input_chars, scoring.encoding_char_budget):
+            raise BudgetExhausted(
+                "encoding_char_budget", usage[1] + input_chars, scoring.encoding_char_budget
+            )
         intent = RunEncodingIntent(
             schema="ghimera.run-encoding-intent/1",
             run_id=self.header.run_id,

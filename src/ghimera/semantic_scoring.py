@@ -5,6 +5,7 @@ import hashlib
 import heapq
 import math
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 from weakref import WeakKeyDictionary
 
 from pydantic import ValidationError
@@ -37,8 +38,32 @@ def keyword_score(goal: Goal, link: LinkCandidate) -> float:
     return float(any(term in haystack for term in goal.text.casefold().split()))
 
 
+def link_input(link: LinkCandidate, policy: ScoringConfig) -> tuple[str, int]:
+    """Observed ``url\nanchor`` cut to the encoder's per-text bound, never refused.
+
+    The anchor is first limited to ``max_anchor_chars``. If the text still exceeds
+    the encoder's bound, the URL keeps its scheme, host and path head (query and
+    fragment dropped) and the anchor is truncated to the remaining room. Returns
+    the encoded text and the characters cut beyond the anchor limit.
+    """
+    service = policy.encoder
+    bound = min(service.max_text_chars, service.max_input_chars) - len(service.text_prefix)
+    anchor = link.anchor[: policy.max_anchor_chars]
+    full = len(link.url) + 1 + len(anchor)
+    if full <= bound:
+        return link.url + "\n" + anchor, 0
+    parts = urlsplit(link.url)
+    head = f"{parts.scheme}://{parts.netloc}{parts.path}"[: max(1, bound - 1)]
+    text = head + "\n" + anchor[: max(0, bound - 1 - len(head))]
+    return text, full - len(text)
+
+
 def selected_windows(text: str, goal: Goal, policy: ScoringConfig) -> tuple[tuple[int, int], ...]:
-    """Bounded selection: best lexical windows first, native offsets never rewritten."""
+    """Bounded selection: best lexical windows first, native offsets never rewritten.
+
+    A whitespace-only window carries nothing to encode; it is skipped, and its
+    characters are counted as omitted rather than refusing the page.
+    """
     terms = tuple(dict.fromkeys(goal.text.casefold().split()))
     step = policy.window_chars - policy.overlap_chars
 
@@ -46,8 +71,13 @@ def selected_windows(text: str, goal: Goal, policy: ScoringConfig) -> tuple[tupl
         window = text[start : start + policy.window_chars].casefold()
         return sum(term in window for term in terms), -start
 
+    candidates = (
+        start
+        for start in range(0, len(text), step)
+        if text[start : start + policy.window_chars].strip()
+    )
     # nlargest retains max_windows candidates, not an unbounded list of extracted chunks.
-    starts = heapq.nlargest(policy.max_windows, range(0, len(text), step), key=rank)
+    starts = heapq.nlargest(policy.max_windows, candidates, key=rank)
     return tuple((start, min(start + policy.window_chars, len(text))) for start in sorted(starts))
 
 
@@ -150,7 +180,7 @@ class EmbeddingScorer(Scorer):
             ]
         )
         texts = tuple(document.text[start:end] for start, end in spans) + tuple(
-            link.url + "\n" + link.anchor[: policy.max_anchor_chars] for link in links
+            link_input(link, policy)[0] for link in links
         )
         plan: list[BatchPlan] = []
         if self._references is None and not any(row.intent_reference is not None for row in rows):
@@ -508,9 +538,8 @@ class EmbeddingScorer(Scorer):
         )
         windows = tuple(document.text[start:end] for start, end in spans)
         # Link text is observed anchor+URL only, not invented content behind an unfetched URL.
-        link_texts = tuple(
-            link.url + "\n" + link.anchor[: policy.max_anchor_chars] for link in links
-        )
+        link_cuts = tuple(link_input(link, policy) for link in links)
+        link_texts = tuple(text for text, _ in link_cuts)
         work = None
         if policy.run_encoding_recovery is not None:
             if source_binding is None:
@@ -558,7 +587,9 @@ class EmbeddingScorer(Scorer):
                 )
             )
         link_observations, ranked = [], []
-        for link, text, vector in zip(links, link_texts, vectors[len(windows) :], strict=True):
+        for link, (text, cut), vector in zip(
+            links, link_cuts, vectors[len(windows) :], strict=True
+        ):
             cosine, _ = self._cosine(vector, reference_vectors)
             keyword = keyword_score(goal, link)
             # Negative similarity is zero frontier weight, not a 50% probability.
@@ -573,6 +604,7 @@ class EmbeddingScorer(Scorer):
                     keyword_score=keyword,
                     score=score,
                     omitted_anchor_chars=max(0, len(link.anchor) - policy.max_anchor_chars),
+                    omitted_chars=cut,
                 )
             )
             ranked.append(LinkCandidate(url=link.url, anchor=link.anchor, score=score))

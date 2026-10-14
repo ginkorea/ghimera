@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import ClassVar, final
 
 from ghimera.budget import RunBudget
+from ghimera.ceilings import headroom
 from ghimera.discovery_config import SearchCallLimits
 from ghimera.ledger import Ledger
 from ghimera.models import LedgerRow
@@ -67,7 +68,7 @@ class GroundedSearch(ABC):
         maximum = (
             budget.config.http.max_response_bytes
             if budget.config.http is not None
-            else budget.config.byte_budget
+            else headroom(budget.config.byte_budget, 0)
         )
         if limits is not None:
             maximum = min(maximum, limits.max_bytes)

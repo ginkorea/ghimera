@@ -9,6 +9,7 @@ from pydantic import SecretStr
 from ghimera.ahmia import AhmiaIndexSearch
 from ghimera.ahmia_config import AhmiaConfig
 from ghimera.browser import IsolatedBrowserRenderer
+from ghimera.ceilings import exceeds
 from ghimera.config import GhimeraConfig
 from ghimera.corpus import EvidenceCorpus
 from ghimera.corpus_evidence import CorpusEvidenceReader
@@ -378,12 +379,14 @@ class Collector:
         policy = self.config.scoring
         if policy is not None and policy.reference_source == "intent":
             chars = len(text) + len(policy.encoder.text_prefix)
-            if chars > min(
-                policy.encoder.max_text_chars,
-                policy.encoder.max_input_chars,
-                policy.encoding_char_budget,
+            if chars > min(policy.encoder.max_text_chars, policy.encoder.max_input_chars) or (
+                exceeds(chars, policy.encoding_char_budget)
             ):
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                raise GhimeraRefused(
+                    RefusalCode.BUDGET_EXHAUSTED,
+                    f"intent text of {chars} chars (with prefix) exceeds the intent encoder's "
+                    "text/input bound or encoding_char_budget; an intent is never truncated",
+                )
 
     async def run(
         self,

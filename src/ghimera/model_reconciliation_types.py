@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghimera.identifiers import RUN_ID_SCHEMA_PATTERN
 from ghimera.model_work_types import Count, Digest, ModelIntent
 
 
@@ -18,7 +19,7 @@ class ReconciliationRecord(BaseModel):
 
 class ModelUnknownObservation(ReconciliationRecord):
     schema_version: Literal["ghimera.model-unknown-observation/1"] = Field(alias="schema")
-    run_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+    run_id: Annotated[str, Field(pattern=RUN_ID_SCHEMA_PATTERN)]
     snapshot_sha256: Digest
     header_sha256: Digest
     last_entry_sha256: Digest
@@ -51,7 +52,7 @@ class ModelReconciliationDecision(ReconciliationRecord):
 
 class ModelAttemptAuthorization(ReconciliationRecord):
     schema_version: Literal["ghimera.model-attempt/1"] = Field(alias="schema")
-    run_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+    run_id: Annotated[str, Field(pattern=RUN_ID_SCHEMA_PATTERN)]
     decision_sha256: Digest
     snapshot_sha256: Digest
     original_intent_sequence: Count

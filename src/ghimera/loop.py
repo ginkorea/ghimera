@@ -9,6 +9,7 @@ from contextlib import contextmanager, nullcontext
 from typing import TYPE_CHECKING, Literal
 
 from ghimera.budget import RunBudget
+from ghimera.ceilings import reached
 from ghimera.config import GhimeraConfig
 from ghimera.content_dedup import ContentIndex
 from ghimera.execution import StageSlots
@@ -52,7 +53,13 @@ from ghimera.pdf_transcription import PdfTranscriptionStage
 from ghimera.ports import Extractor, Judge, ScoredDocumentJudge
 from ghimera.reference_types import DocumentReference, SearchReference
 from ghimera.references import ReferenceBook
-from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
+from ghimera.refusals import (
+    BudgetExhausted,
+    GhimeraRefused,
+    ModelCancelled,
+    ModelFailure,
+    RefusalCode,
+)
 from ghimera.scoring import Scorer
 from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, SemanticStage
 from ghimera.semantic_recovery import SemanticRecoveryStopped
@@ -1279,13 +1286,20 @@ class GoalLoop:
                     url=url,
                     refusal=code,
                     reason=code.value,
+                    detail=exc.detail
+                    if isinstance(exc, GhimeraRefused)
+                    else "a page-level deadline expired before this source completed",
                 )
             )
             if work is not None and token is not None:
                 work.refused(token, code.value, ledger.next_sequence)
             elif work is not None:
                 session.discard_source(scope, url, depth, code.value)
-            if code == RefusalCode.BUDGET_EXHAUSTED:
+            if code == RefusalCode.BUDGET_EXHAUSTED and (
+                isinstance(exc, BudgetExhausted) or budget.exhausted_ceiling() is not None
+            ):
+                # Only a declared RUN ceiling ends collection. A page's own bound
+                # (a reader deadline, one oversized response) refuses that page.
                 return "budget_exhausted"
             if isinstance(exc, SemanticRecoveryStopped) or code in {
                 RefusalCode.ADAPTER_CONTRACT,
@@ -1336,7 +1350,7 @@ class GoalLoop:
                 if halt is None:
                     if budget.remaining_seconds <= 0 or budget.remaining_bytes <= 0:
                         halt = "budget_exhausted"
-                    elif budget.fetches >= self._config.page_budget:
+                    elif reached(budget.fetches, self._config.page_budget):
                         halt = "budget_exhausted"
                     elif fetch_limit is not None and budget.fetches - start >= fetch_limit:
                         halt = "round_limit"

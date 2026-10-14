@@ -1,6 +1,7 @@
 """Closed refusal vocabulary shared by every package boundary."""
 
 import asyncio
+import sys
 from enum import StrEnum
 from types import MappingProxyType
 
@@ -97,26 +98,85 @@ REFUSALS = MappingProxyType(
 )
 
 
+MAX_DETAIL_CHARS = 400
+
+
+def refusal_detail(text: str) -> str:
+    """One bounded single-line sentence; callers never pass secrets or page bodies."""
+    single = " ".join(text.split())
+    return single if len(single) <= MAX_DETAIL_CHARS else single[: MAX_DETAIL_CHARS - 3] + "..."
+
+
+def _raise_site() -> str:
+    """Name the check that refused when the raising code supplied no sentence."""
+    frame = sys._getframe(2)
+    while frame is not None and (
+        frame.f_code.co_filename == __file__ or frame.f_code.co_name == "__init__"
+    ):
+        frame = frame.f_back  # type: ignore[assignment]
+    if frame is None:
+        return "refused without a recorded check"
+    module = frame.f_globals.get("__name__", "unknown")
+    return f"refused by {module}.{frame.f_code.co_name} line {frame.f_lineno}"
+
+
 class GhimeraRefused(Exception):
-    def __init__(self, code: RefusalCode) -> None:
+    """A closed refusal code plus one ``detail`` sentence: what was checked, what was found.
+
+    ``detail`` never carries credentials, secrets or page bodies. When the raising
+    code does not supply one, the refusing module, function and line are named so
+    the cause is never blank.
+    """
+
+    def __init__(self, code: RefusalCode, detail: str | None = None) -> None:
         self.code = code
+        self.detail = refusal_detail(detail) if detail else _raise_site()
         super().__init__(f"{code.value}: {REFUSALS[code]}")
+
+    def __str__(self) -> str:
+        return f"{self.code.value}: {REFUSALS[self.code]} ({self.detail})"
+
+
+class BudgetExhausted(GhimeraRefused):
+    """A declared RUN ceiling is met: names which ceiling, with used and limit.
+
+    Only this subclass (or an expired run deadline) ends collection. A page's
+    own bound, such as one reader's timeout, refuses that page and the round
+    continues.
+    """
+
+    def __init__(
+        self,
+        budget: str,
+        used: float,
+        limit: float | None,
+        detail: str | None = None,
+    ) -> None:
+        self.budget, self.used, self.limit = budget, used, limit
+        shown = "unbounded" if limit is None else f"{limit:g}"
+        super().__init__(
+            RefusalCode.BUDGET_EXHAUSTED,
+            f"run budget {budget} exhausted: used {used:g} of limit {shown}"
+            + (f"; {detail}" if detail else ""),
+        )
 
 
 class FetchFailure(GhimeraRefused):
     """Decoded bytes retained before an interrupted or oversized transfer."""
 
-    def __init__(self, code: RefusalCode, bytes_read: int) -> None:
+    def __init__(self, code: RefusalCode, bytes_read: int, detail: str | None = None) -> None:
         self.bytes_read = bytes_read
-        super().__init__(code)
+        super().__init__(code, detail)
 
 
 class ModelFailure(GhimeraRefused):
     """A failed model call still has bounded request/response spend evidence."""
 
-    def __init__(self, code: RefusalCode, model_call: ModelCallEvidence) -> None:
+    def __init__(
+        self, code: RefusalCode, model_call: ModelCallEvidence, detail: str | None = None
+    ) -> None:
         self.model_call = model_call
-        super().__init__(code)
+        super().__init__(code, detail)
 
 
 class ModelCancelled(asyncio.CancelledError):
@@ -126,9 +186,9 @@ class ModelCancelled(asyncio.CancelledError):
 
 
 class EncodingFailure(GhimeraRefused):
-    def __init__(self, code: RefusalCode, call: EncodingCall) -> None:
+    def __init__(self, code: RefusalCode, call: EncodingCall, detail: str | None = None) -> None:
         self.call = call
-        super().__init__(code)
+        super().__init__(code, detail)
 
 
 class EncodingCancelled(asyncio.CancelledError):
@@ -150,4 +210,4 @@ class HttpStatusRefused(GhimeraRefused):
 
     def __init__(self, status: int) -> None:
         self.status = status
-        super().__init__(RefusalCode.FETCH_FAILED)
+        super().__init__(RefusalCode.FETCH_FAILED, f"final HTTP status {status}")

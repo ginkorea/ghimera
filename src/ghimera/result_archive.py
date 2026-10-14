@@ -3,13 +3,13 @@
 import fcntl
 import hashlib
 import os
-import re
 import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ghimera.identifiers import RUN_ID_SCHEMA_PATTERN, valid_run_id
 from ghimera.research_types import ResearchResult
 
 if TYPE_CHECKING:
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 class ArchiveReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.research-archive/1"] = Field(alias="schema")
-    run_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+    run_id: Annotated[str, Field(pattern=RUN_ID_SCHEMA_PATTERN)]
     result_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     result_bytes: Annotated[int, Field(strict=True, gt=0)]
     status: Literal["answered", "partial", "failed"]
@@ -32,7 +32,7 @@ class ArchiveReservation(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["ghimera.command-output/1"] = Field(alias="schema")
-    run_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+    run_id: Annotated[str, Field(pattern=RUN_ID_SCHEMA_PATTERN)]
     config_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     request_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
@@ -67,7 +67,7 @@ class ResearchResultArchive:
     @classmethod
     def create(cls, path: Path, *, run_id: str) -> "ResearchResultArchive":
         cls._path_check(path)
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", run_id):
+        if not valid_run_id(run_id):
             raise ValueError("invalid run identity")
         # The parent is chosen and created by the caller, not an implicit root.
         path.mkdir(mode=0o700, exist_ok=False)

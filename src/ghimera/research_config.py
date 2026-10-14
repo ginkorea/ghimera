@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghimera.ceilings import Ceiling
 from ghimera.graph_planning_types import GraphPlanningConfig
 from ghimera.research_reranking_types import ResearchRerankingConfig
 from ghimera.research_reuse_config import ResearchReuseConfig
@@ -15,10 +16,10 @@ Positive = Annotated[int, Field(strict=True, gt=0)]
 class ResearchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.research/1"] = Field(alias="schema")
-    max_rounds: Positive
+    max_rounds: Ceiling
     max_questions: Positive
     max_queries_per_round: Positive
-    query_budget: Positive
+    query_budget: Ceiling
     results_per_query: Positive
     search_concurrency: Positive
     max_pages_per_round: Positive
@@ -41,11 +42,16 @@ class ResearchConfig(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     reranking: ResearchRerankingConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+    # Consecutive rounds retaining no new evidence that end research as saturated.
+    # Required when max_rounds is unbounded, so research always has its own stop.
+    saturation_rounds: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def coherent(self) -> "ResearchConfig":
         if self.source_policy == "configured_only" and not self.allowed_hosts:
             raise ValueError("configured-only discovery needs explicit hosts")
+        if self.max_rounds is None and self.saturation_rounds is None:
+            raise ValueError("unbounded research rounds require saturation_rounds as their stop")
         if self.search_concurrency > self.max_queries_per_round:
             raise ValueError("search concurrency exceeds per-round queries")
         if len(self.allowed_hosts) > self.max_source_hosts:

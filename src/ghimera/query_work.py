@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Literal
 
+from ghimera.ceilings import exceeds, headroom
 from ghimera.query_work_types import (
     QueryAcknowledgement,
     QueryCorpusBinding,
@@ -205,15 +206,15 @@ def validate_query_rows(config: "GhimeraConfig", rows: tuple["LedgerRow", ...]) 
                     raise ValueError("query reservation changed its original fetch/search debit")
                 if (
                     config.research is None
-                    or searches > config.research.query_budget
+                    or exceeds(searches, config.research.query_budget)
                     or len(request.query.text) > config.research.max_query_chars
                     or request.limit > config.research.results_per_query
                     or request.max_bytes
                     > min(
-                        config.byte_budget,
+                        headroom(config.byte_budget, 0),
                         config.http.max_response_bytes
                         if config.http is not None
-                        else config.byte_budget,
+                        else headroom(config.byte_budget, 0),
                     )
                     or request.timeout_seconds > config.request_timeout_seconds
                 ):

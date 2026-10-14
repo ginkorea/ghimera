@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
+from ghimera.ceilings import UNBOUNDED_WALL_SECONDS, exceeds, headroom
 from ghimera.journal_types import Digest, JournalReport, RunId
 from ghimera.model_reconciliation_types import (
     ModelAttemptAuthorization,
@@ -109,8 +110,8 @@ class ResearchControlSnapshot(Record):
             or progress.review is not None
             or harvest.goal.text != self.request.intent
             or harvest.goal.seeds != self.request.seeds
-            or self.round_number > policy.max_rounds
-            or len(progress.rounds) > policy.max_rounds
+            or exceeds(self.round_number, policy.max_rounds)
+            or exceeds(len(progress.rounds), policy.max_rounds)
             or self.round_number
             != len(progress.rounds) + (1 if self.phase in {"plan", "assessment"} else 0)
             or tuple(item.number for item in progress.rounds)
@@ -220,7 +221,7 @@ class ResearchQueryControlSnapshot(Record):
             or p.harvest.goal.text != self.request.intent
             or p.harvest.goal.seeds != self.request.seeds
             or self.round_number != len(p.rounds) + 1
-            or self.round_number > cfg.research.max_rounds
+            or exceeds(self.round_number, cfg.research.max_rounds)
             or self.pending_query.cursor.round_number != self.round_number
             or any(row.event == "stop" for row in p.harvest.ledger)
             or self.pending_query.cursor.stage != "initial_retained"
@@ -261,8 +262,10 @@ class ResearchQueryControlSnapshot(Record):
             if (
                 reservation.search_reservation != p.search_calls + 1
                 or reservation.fetch_reservation != p.harvest.receipt.fetches + 1
-                or request.max_bytes > cfg.byte_budget - p.harvest.receipt.bytes_read
-                or request.timeout_seconds > cfg.wall_seconds - p.harvest.receipt.elapsed_seconds
+                or request.max_bytes > headroom(cfg.byte_budget, p.harvest.receipt.bytes_read)
+                or request.timeout_seconds
+                > (UNBOUNDED_WALL_SECONDS if cfg.wall_seconds is None else cfg.wall_seconds)
+                - p.harvest.receipt.elapsed_seconds
             ):
                 raise ValueError("query control changed original remaining budget")
             if cursor.stage == "discovery":

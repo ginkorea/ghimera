@@ -33,6 +33,8 @@ class LinkSimilarity(BaseModel):
     keyword_score: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     score: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     omitted_anchor_chars: Count
+    # Characters cut so ``url\nanchor`` fits the encoder's per-text bound.
+    omitted_chars: Count = Field(default=0, exclude_if=lambda value: value == 0)
 
     @model_validator(mode="after")
     def binary_keyword(self) -> "LinkSimilarity":

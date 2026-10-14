@@ -20,6 +20,7 @@ from ghimera.corpus import EvidenceCorpus
 from ghimera.corpus_evidence import CorpusEvidenceReader
 from ghimera.embedding_types import EmbeddingReferences
 from ghimera.human_browser_types import HumanAssistant
+from ghimera.identifiers import RUN_ID_SCHEMA_PATTERN
 from ghimera.model_reconciliation_types import (
     ModelAttemptAuthorization,
     ModelReconciliationDecision,
@@ -180,7 +181,7 @@ class CommandOptions(BaseModel):
     config_path: Path
     request_path: Path | None = Field(default=None, exclude_if=lambda value: value is None)
     output_directory: Path
-    run_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+    run_id: Annotated[str, Field(pattern=RUN_ID_SCHEMA_PATTERN)]
     max_input_bytes: Positive
     max_result_bytes: Positive
     bindings_path: Path | None = None

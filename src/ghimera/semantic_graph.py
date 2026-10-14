@@ -14,6 +14,7 @@ from typing import Literal, Protocol, runtime_checkable
 from pydantic import ValidationError
 
 from ghimera.budget import RunBudget
+from ghimera.ceilings import headroom
 from ghimera.config import GhimeraConfig
 from ghimera.graph import MemoryGraphSink, ResearchGraph
 from ghimera.graph_types import GraphEdge, GraphEvidence, GraphNode
@@ -620,7 +621,7 @@ class SemanticStage:
             selections = review_selections(verification, proposal)
             if len(selections) > min(
                 verification.max_calls_per_run - budget.semantic_review_calls,
-                budget.config.judge_budget - budget.judge_calls,
+                headroom(budget.config.judge_budget, budget.judge_calls),
             ):
                 raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
             if isinstance(self._reviewer, SemanticReviewPreflight):

@@ -4,6 +4,13 @@ import asyncio
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
+from ghimera.ceilings import (
+    UNBOUNDED_WALL_SECONDS,
+    describe,
+    exceeds,
+    headroom,
+    reached,
+)
 from ghimera.config import GhimeraConfig
 from ghimera.model_reconciliation_types import (
     ModelAttemptAuthorization,
@@ -11,7 +18,7 @@ from ghimera.model_reconciliation_types import (
 )
 from ghimera.model_work import validate_model_rows
 from ghimera.models import LedgerRow, Receipt
-from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.refusals import BudgetExhausted, GhimeraRefused, RefusalCode
 
 
 class RunBudget:
@@ -47,11 +54,30 @@ class RunBudget:
 
     @property
     def remaining_seconds(self) -> float:
-        return max(0.0, self.config.wall_seconds - self.elapsed)
+        wall = self.config.wall_seconds
+        return max(0.0, (UNBOUNDED_WALL_SECONDS if wall is None else wall) - self.elapsed)
 
     @property
     def remaining_bytes(self) -> int:
-        return max(0, self.config.byte_budget - self.bytes_read)
+        return max(0, headroom(self.config.byte_budget, self.bytes_read))
+
+    def exhausted_ceiling(self) -> BudgetExhausted | None:
+        """The run-level ceiling that ends collection now, if any; never a page's own bound."""
+        wall = self.config.wall_seconds
+        if self.remaining_seconds <= 0:
+            return BudgetExhausted("wall_seconds", round(self.elapsed, 3), wall)
+        if reached(self.fetches, self.config.page_budget):
+            return BudgetExhausted("page_budget", self.fetches, self.config.page_budget)
+        if self.remaining_bytes <= 0:
+            return BudgetExhausted("byte_budget", self.bytes_read, self.config.byte_budget)
+        if reached(self.judge_calls, self.config.judge_budget):
+            return BudgetExhausted("judge_budget", self.judge_calls, self.config.judge_budget)
+        scoring = self.config.scoring
+        if scoring is not None and reached(self.encoding_calls, scoring.encoding_call_budget):
+            return BudgetExhausted(
+                "encoding_call_budget", self.encoding_calls, scoring.encoding_call_budget
+            )
+        return None
 
     @property
     def quiescent(self) -> bool:
@@ -117,9 +143,9 @@ class RunBudget:
         ):
             raise ValueError("restored receipt must preserve original model reservations")
         if (
-            receipt.fetches > self.config.page_budget
-            or receipt.bytes_read > self.config.byte_budget
-            or receipt.judge_calls > self.config.judge_budget
+            exceeds(receipt.fetches, self.config.page_budget)
+            or exceeds(receipt.bytes_read, self.config.byte_budget)
+            or exceeds(receipt.judge_calls, self.config.judge_budget)
         ):
             raise ValueError("restored spend exceeds the original run budget")
         self.started -= receipt.elapsed_seconds + downtime_seconds
@@ -154,24 +180,34 @@ class RunBudget:
 
     def check_time(self) -> None:
         if self.remaining_seconds <= 0:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BudgetExhausted("wall_seconds", round(self.elapsed, 3), self.config.wall_seconds)
 
     def reserve_fetch(self) -> None:
         self.check_time()
-        if self.fetches >= self.config.page_budget or self.remaining_bytes <= 0:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        if reached(self.fetches, self.config.page_budget):
+            raise BudgetExhausted("page_budget", self.fetches, self.config.page_budget)
+        if self.remaining_bytes <= 0:
+            raise BudgetExhausted("byte_budget", self.bytes_read, self.config.byte_budget)
         self.fetches += 1
 
     def record_bytes(self, count: int) -> None:
         self.bytes_read += count
-        if self.bytes_read > self.config.byte_budget:
-            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        if exceeds(self.bytes_read, self.config.byte_budget):
+            raise GhimeraRefused(
+                RefusalCode.ADAPTER_CONTRACT,
+                f"recorded bytes {self.bytes_read} exceed byte_budget "
+                f"{describe(self.config.byte_budget)} despite reservation",
+            )
 
     def reserve_bytes(self, maximum: int) -> int:
         """Atomic on the owning asyncio loop; in-flight requests cannot oversubscribe."""
         available = self.remaining_bytes - self._bytes_reserved
         if available <= 0:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BudgetExhausted(
+                "byte_budget",
+                self.bytes_read + self._bytes_reserved,
+                self.config.byte_budget,
+            )
         allowance = min(maximum, available)
         self._bytes_reserved += allowance
         return allowance
@@ -194,15 +230,15 @@ class RunBudget:
             if self.remaining_bytes - self._bytes_reserved > 0:
                 return self.reserve_bytes(maximum)
             if self._bytes_reserved == 0 or self.remaining_bytes == 0:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                raise BudgetExhausted("byte_budget", self.bytes_read, self.config.byte_budget)
             self._bytes_released.clear()
             async with asyncio.timeout(self.remaining_seconds):
                 await self._bytes_released.wait()
 
     def reserve_judge(self) -> None:
         self.check_time()
-        if self.judge_calls >= self.config.judge_budget:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        if reached(self.judge_calls, self.config.judge_budget):
+            raise BudgetExhausted("judge_budget", self.judge_calls, self.config.judge_budget)
         self.judge_calls += 1
 
     def check_rerank(self, pairs: int, chars: int) -> None:
@@ -213,9 +249,14 @@ class RunBudget:
             or self.rerank_calls >= policy.max_calls
             or self.rerank_pairs + pairs > policy.max_pairs
             or self.rerank_chars + chars > policy.max_input_chars
-            or self.judge_calls >= self.config.judge_budget
+            or reached(self.judge_calls, self.config.judge_budget)
         ):
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BudgetExhausted(
+                "rerank_budget",
+                self.rerank_calls,
+                policy.max_calls if policy is not None else None,
+                "reranking policy absent, or its call/pair/char ceiling or judge_budget is reached",
+            )
 
     def reserve_rerank(self, pairs: int, chars: int) -> None:
         self.check_rerank(pairs, chars)
@@ -251,8 +292,8 @@ class RunBudget:
         policy = self.config.research
         if policy is None:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-        if self.search_calls >= policy.query_budget:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        if reached(self.search_calls, policy.query_budget):
+            raise BudgetExhausted("query_budget", self.search_calls, policy.query_budget)
         self.search_calls += 1
 
     def reserve_local_input(self) -> int:
@@ -261,10 +302,14 @@ class RunBudget:
         if policy is None:
             raise GhimeraRefused(RefusalCode.LOCAL_INPUT_FAILED)
         if self.local_inputs >= policy.max_files_per_run:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BudgetExhausted(
+                "local_inputs.max_files_per_run", self.local_inputs, policy.max_files_per_run
+            )
         remaining = policy.max_total_bytes - self.local_input_bytes
         if remaining <= 0:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BudgetExhausted(
+                "local_inputs.max_total_bytes", self.local_input_bytes, policy.max_total_bytes
+            )
         allowance = self.reserve_bytes(min(policy.max_input_bytes, remaining))
         self.local_inputs += 1
         return allowance
@@ -272,21 +317,33 @@ class RunBudget:
     def reserve_semantic(self) -> None:
         policy = self.config.semantics
         if policy is None or self.semantic_calls >= policy.max_calls_per_run:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BudgetExhausted(
+                "semantics.max_calls_per_run",
+                self.semantic_calls,
+                policy.max_calls_per_run if policy is not None else None,
+            )
         self.reserve_judge()
         self.semantic_calls += 1
 
     def reserve_identity_proposal(self) -> None:
         policy = self.config.identity_automation
         if policy is None or self.identity_proposal_calls >= policy.max_proposal_calls:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BudgetExhausted(
+                "identity_automation.max_proposal_calls",
+                self.identity_proposal_calls,
+                policy.max_proposal_calls if policy is not None else None,
+            )
         self.reserve_judge()
         self.identity_proposal_calls += 1
 
     def reserve_identity_review(self) -> None:
         policy = self.config.identity_automation
         if policy is None or self.identity_review_calls >= policy.max_review_calls:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BudgetExhausted(
+                "identity_automation.max_review_calls",
+                self.identity_review_calls,
+                policy.max_review_calls if policy is not None else None,
+            )
         self.reserve_judge()
         self.identity_review_calls += 1
 
@@ -295,11 +352,16 @@ class RunBudget:
         policy = self.config.scoring
         if policy is None or input_chars <= 0:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-        if (
-            self.encoding_calls >= policy.encoding_call_budget
-            or self.encoding_chars + input_chars > policy.encoding_char_budget
-        ):
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        if reached(self.encoding_calls, policy.encoding_call_budget):
+            raise BudgetExhausted(
+                "encoding_call_budget", self.encoding_calls, policy.encoding_call_budget
+            )
+        if exceeds(self.encoding_chars + input_chars, policy.encoding_char_budget):
+            raise BudgetExhausted(
+                "encoding_char_budget",
+                self.encoding_chars + input_chars,
+                policy.encoding_char_budget,
+            )
         self.encoding_calls += 1
         self.encoding_chars += input_chars
 
@@ -310,6 +372,12 @@ class RunBudget:
             or policy.verification is None
             or self.semantic_review_calls >= policy.verification.max_calls_per_run
         ):
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BudgetExhausted(
+                "semantics.verification.max_calls_per_run",
+                self.semantic_review_calls,
+                policy.verification.max_calls_per_run
+                if policy is not None and policy.verification is not None
+                else None,
+            )
         self.reserve_judge()
         self.semantic_review_calls += 1

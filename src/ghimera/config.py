@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ghimera.ahmia_config import AhmiaConfig
 from ghimera.browser_config import BrowserConfig
 from ghimera.cadence_config import CadenceConfig
+from ghimera.ceilings import Ceiling, SecondsCeiling, exceeds
 from ghimera.challenge_config import ChallengeConfig
 from ghimera.continuation_config import ContinuationConfig
 from ghimera.corpus_search_config import CorpusSearchConfig
@@ -117,10 +118,11 @@ class GhimeraConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
 
     schema_version: Literal["chimera.config/1"] = Field(alias="schema")
-    page_budget: PositiveInt
-    byte_budget: PositiveInt
-    wall_seconds: PositiveFloat
-    judge_budget: PositiveInt
+    # Optional run ceilings: "unbounded" (or 0/null) means no limit; see ceilings.py.
+    page_budget: Ceiling
+    byte_budget: Ceiling
+    wall_seconds: SecondsCeiling
+    judge_budget: Ceiling
     grade_interval: PositiveInt
     grade_threshold: Probability
     saturation_window: PositiveInt
@@ -307,13 +309,13 @@ class GhimeraConfig(BaseModel):
             self.journal is None
             or self.model_work is None
             or self.model_work.results is None
-            or reranking.max_calls > self.judge_budget
+            or exceeds(reranking.max_calls, self.judge_budget)
         ):
             raise ValueError(
                 "research reranking requires retained durable model work and judge allowance"
             )
         if self.model_work is not None and (
-            self.journal is None or self.model_work.max_unanswered_calls > self.judge_budget
+            self.journal is None or exceeds(self.model_work.max_unanswered_calls, self.judge_budget)
         ):
             raise ValueError("model work needs a durable journal and a bound within judge budget")
         if self.model_work is not None and self.model_work.results is not None:

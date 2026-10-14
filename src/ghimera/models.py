@@ -10,6 +10,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from ghimera.browser_operation_types import BrowserSourceAction
 from ghimera.browser_types import RenderResult
+from ghimera.ceilings import exceeds
 from ghimera.challenge_types import ChallengeEvidence
 from ghimera.config import GhimeraConfig, Probability
 from ghimera.dedup_types import ContentDrift, DedupEvidence
@@ -51,7 +52,7 @@ from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.page_transcription_types import PageTranscriptionCall, ReviewedPageTranscription
 from ghimera.query_work_types import QueryAcknowledgement, QueryReservation
 from ghimera.reference_types import DocumentReference, ReferenceDecision, ReferenceQuery
-from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.refusals import MAX_DETAIL_CHARS, GhimeraRefused, RefusalCode
 from ghimera.research_reranking_types import RerankReservation
 from ghimera.run_encoding_types import (
     RunEncodingAcknowledgement,
@@ -773,6 +774,10 @@ class LedgerRow(Record):
     latency_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0
     refusal: RefusalCode | None = None
     reason: str
+    # One bounded sentence naming the check that refused and what it found.
+    detail: Annotated[str, Field(min_length=1, max_length=MAX_DETAIL_CHARS)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     transport: TransportEvidence | None = None
     model: ModelIdentity | None = None
     query: str | None = None
@@ -1502,8 +1507,8 @@ class Harvest(Record):
         ):
             raise ValueError("encoding ledger must bind the effective service configuration")
         if scoring_policy is not None and (
-            self.receipt.encoding_calls > scoring_policy.encoding_call_budget
-            or self.receipt.encoding_chars > scoring_policy.encoding_char_budget
+            exceeds(self.receipt.encoding_calls, scoring_policy.encoding_call_budget)
+            or exceeds(self.receipt.encoding_chars, scoring_policy.encoding_char_budget)
         ):
             raise ValueError("encoding spend exceeds the shared run budget")
         native_sources = {

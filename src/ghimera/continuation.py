@@ -8,12 +8,14 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
+from ghimera.ceilings import exceeds
 from ghimera.config import GhimeraConfig
+from ghimera.identifiers import RUN_ID_SCHEMA_PATTERN
 from ghimera.models import Record
 from ghimera.research_types import Assessment, ResearchRequest, ResearchResult
 from ghimera.session_state import SessionState
 
-RunId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+RunId = Annotated[str, Field(pattern=RUN_ID_SCHEMA_PATTERN)]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
@@ -41,7 +43,7 @@ class ResearchCheckpoint(Record):
             or harvest.goal.text != self.request.intent
             or harvest.goal.seeds != self.request.seeds
             or not progress.rounds
-            or len(progress.rounds) > policy.max_rounds
+            or exceeds(len(progress.rounds), policy.max_rounds)
             or tuple(round_.number for round_ in progress.rounds)
             != tuple(range(1, len(progress.rounds) + 1))
             or any(row.event == "stop" for row in harvest.ledger)

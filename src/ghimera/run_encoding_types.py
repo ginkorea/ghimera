@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.embedding_types import EncodingBatch, EncodingCall, encoding_request
+from ghimera.identifiers import RUN_ID_SCHEMA_PATTERN
 from ghimera.judgment_types import ScoringSourceBinding
 from ghimera.model_config import EmbeddingServiceConfig
 
@@ -60,7 +61,7 @@ class RunEncodingScope(RunEncodingRecord):
 
 class RunEncodingIntent(RunEncodingRecord):
     schema_version: Literal["ghimera.run-encoding-intent/1"] = Field(alias="schema")
-    run_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+    run_id: Annotated[str, Field(pattern=RUN_ID_SCHEMA_PATTERN)]
     header_sha256: Digest
     scoring_sha256: Digest
     purpose: Literal["intent", "source"]

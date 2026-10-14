@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Literal, TypeVar
 
 from pydantic import BaseModel
 
+from ghimera.ceilings import exceeds
 from ghimera.ledger import Ledger
 from ghimera.model_reconciliation_types import (
     ModelAttemptAuthorization,
@@ -146,7 +147,7 @@ def uncertain_model_sequences(rows: tuple[LedgerRow, ...]) -> tuple[int, ...]:
 
 
 def validate_model_rows(
-    policy: ModelWorkConfig | None, judge_budget: int, rows: tuple[LedgerRow, ...]
+    policy: ModelWorkConfig | None, judge_budget: int | None, rows: tuple[LedgerRow, ...]
 ) -> int:
     """Validate original accounting and retention before restore, replay or new contact."""
     uncertain = uncertain_model_sequences(rows)
@@ -157,7 +158,9 @@ def validate_model_rows(
         return 0
     if tuple(intent.judge_reservation for intent in intents) != tuple(range(1, len(intents) + 1)):
         raise ValueError("model reservations must retain every call in order")
-    if len(intents) > judge_budget or any(i.input_bytes > policy.max_input_bytes for i in intents):
+    if exceeds(len(intents), judge_budget) or any(
+        i.input_bytes > policy.max_input_bytes for i in intents
+    ):
         raise ValueError("model intents exceed their declared run/input budgets")
     used = 0
     for row in rows:

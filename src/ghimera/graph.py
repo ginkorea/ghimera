@@ -7,7 +7,6 @@ checkpoint becomes visible until the exact immutable batch is acknowledged.
 import asyncio
 import hashlib
 import os
-import re
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -42,6 +41,7 @@ from ghimera.identity_resolution import (
 if TYPE_CHECKING:
     from ghimera.config import GhimeraConfig
     from ghimera.ledger import Ledger
+from ghimera.identifiers import valid_run_id
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.owned_worker import off_loop
 from ghimera.refusals import GhimeraRefused, RefusalCode
@@ -84,7 +84,7 @@ class DirectoryGraphSink:
     """
 
     def __init__(self, config: GraphConfig, run_id: str) -> None:
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", run_id):
+        if not valid_run_id(run_id):
             raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
         self._config = config
         self._run_id = run_id
@@ -179,7 +179,7 @@ class ResearchGraph:
         identity_config: "GhimeraConfig | None" = None,
         identity_ledger: "Ledger | None" = None,
     ) -> None:
-        if not config.enabled or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", run_id):
+        if not config.enabled or not valid_run_id(run_id):
             raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
         self._config = config
         self._run_id = run_id

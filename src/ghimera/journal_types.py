@@ -8,10 +8,11 @@ from pydantic import BaseModel, Field, model_validator
 
 from ghimera.config import GhimeraConfig
 from ghimera.graph_types import GraphRetainedOrigin
+from ghimera.identifiers import RUN_ID_SCHEMA_PATTERN
 from ghimera.models import Goal, LedgerRow, ModelIdentity, Receipt, Record
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-RunId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+RunId = Annotated[str, Field(pattern=RUN_ID_SCHEMA_PATTERN)]
 
 
 def canonical(record: BaseModel) -> bytes:

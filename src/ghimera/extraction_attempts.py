@@ -113,7 +113,12 @@ def validate_chain(attempts: tuple[HtmlExtractionAttempt, ...]) -> None:
 
 
 class ExtractionFailure(GhimeraRefused):
-    def __init__(self, code: RefusalCode, attempts: tuple[HtmlExtractionAttempt, ...]) -> None:
+    def __init__(
+        self,
+        code: RefusalCode,
+        attempts: tuple[HtmlExtractionAttempt, ...],
+        detail: str | None = None,
+    ) -> None:
         validate_chain(attempts)
         if (
             attempts[-1].outcome not in {"refused", "invalid_response"}
@@ -121,7 +126,7 @@ class ExtractionFailure(GhimeraRefused):
         ):
             raise ValueError("terminal extraction failure must match the last parse observation")
         self.attempts = attempts
-        super().__init__(code)
+        super().__init__(code, detail)
 
 
 class ExtractionCancelled(asyncio.CancelledError):
@@ -136,5 +141,8 @@ class ExtractionCancelled(asyncio.CancelledError):
 class InvalidExtractionResponse(GhimeraRefused):
     """Only this adapter's result-validation fault, not a damaged state store."""
 
-    def __init__(self) -> None:
-        super().__init__(RefusalCode.ADAPTER_CONTRACT)
+    def __init__(self, detail: str | None = None) -> None:
+        super().__init__(
+            RefusalCode.ADAPTER_CONTRACT,
+            detail or "HTML extraction worker response failed result validation",
+        )

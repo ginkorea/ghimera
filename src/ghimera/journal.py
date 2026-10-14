@@ -6,10 +6,10 @@ repairs files. Existing run identities cannot be overwritten or reused.
 """
 
 import argparse
+import errno
 import fcntl
 import hashlib
 import os
-import re
 import stat
 import sys
 import tempfile
@@ -19,6 +19,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from ghimera.config import GhimeraConfig
+from ghimera.identifiers import valid_run_id
 from ghimera.journal_config import JournalConfig
 from ghimera.journal_types import (
     JournalDocument,
@@ -34,23 +35,48 @@ from ghimera.models import Goal, Harvest, LedgerRow, ModelIdentity, count_fetch_
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
 
-def _refuse() -> GhimeraRefused:
-    return GhimeraRefused(RefusalCode.LEDGER_SINK_FAILED)
+def _refuse(detail: str | None = None) -> GhimeraRefused:
+    if detail is None:
+        frame = sys._getframe(1)
+        detail = f"journal check {frame.f_code.co_name} line {frame.f_lineno} refused"
+    return GhimeraRefused(RefusalCode.LEDGER_SINK_FAILED, detail)
+
+
+def _carry(exc: OSError | GhimeraRefused, action: str) -> GhimeraRefused:
+    """Keep the inner check's sentence; name an OS failure by errno, never by content."""
+    if isinstance(exc, GhimeraRefused):
+        return _refuse(exc.detail)
+    name = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
+    where = f" at {Path(exc.filename).name}" if exc.filename else ""
+    return _refuse(f"{action} failed with {name}{where}")
 
 
 def _run_path(policy: JournalConfig, run_id: str) -> Path:
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", run_id):
-        raise _refuse()
+    if not valid_run_id(run_id):
+        raise _refuse(
+            "run id is outside the journal alphabet: it must start with an ASCII letter or "
+            f"digit and use only letters, digits, '.', '_' or '-' (got {len(run_id)} chars)"
+        )
     path = policy.directory / run_id
-    if any(p.is_symlink() for p in (path, *path.parents)):
-        raise _refuse()
+    linked = next((p for p in (path, *path.parents) if p.is_symlink()), None)
+    if linked is not None:
+        raise _refuse(f"journal path component {linked.name or linked} is a symlink")
     return path
 
 
 def _private_directory(path: Path) -> None:
-    info = path.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise _refuse()
+    info = path.lstat()  # a missing directory stays FileNotFoundError for callers
+    if not stat.S_ISDIR(info.st_mode):
+        raise _refuse(f"journal path {path.name} is not a directory")
+    if info.st_uid != os.getuid():
+        raise _refuse(
+            f"journal directory {path.name} is owned by uid {info.st_uid}, not this process"
+        )
+    if info.st_mode & 0o077:
+        raise _refuse(
+            f"journal directory {path.name} has mode {stat.S_IMODE(info.st_mode):o}; "
+            "group/other access must be 0"
+        )
 
 
 def _checked_file(path: Path, flags: int, limit: int) -> int:
@@ -124,7 +150,7 @@ class DirectoryLedgerSink:
         resume_rows: tuple[LedgerRow, ...] | None = None,
     ) -> None:
         if config.journal is None:
-            raise _refuse()
+            raise _refuse("the recipe configures no run journal")
         self._policy = config.journal
         self._path = _run_path(self._policy, run_id)
         self._header = JournalHeader(
@@ -186,9 +212,9 @@ class DirectoryLedgerSink:
             fcntl.flock(self._lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             os.fsync(self._lease_fd)
             _directory_sync(self._path)
-        except (OSError, GhimeraRefused):
+        except (OSError, GhimeraRefused) as exc:
             self._release()
-            raise _refuse() from None
+            raise _carry(exc, "opening the run journal") from None
 
     def _release(self) -> None:
         if self._lease_fd >= 0:
@@ -197,15 +223,15 @@ class DirectoryLedgerSink:
 
     def _active(self) -> None:
         if self._closed or self._failed:
-            raise _refuse()
+            raise _refuse("the run journal is already sealed or failed; it accepts no more rows")
         if _run_path(self._policy, self._header.run_id) != self._path:
-            raise _refuse()
+            raise _refuse("the run journal path changed after it was opened")
         _private_directory(self._policy.directory)
         _private_directory(self._path)
         held = os.fstat(self._lease_fd)
         named = (self._path / "ledger.jsonl").lstat()
         if (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino):
-            raise _refuse()
+            raise _refuse("ledger.jsonl was replaced after this writer opened it")
 
     @property
     def effective_config(self) -> GhimeraConfig:
@@ -264,9 +290,9 @@ class DirectoryLedgerSink:
                 self._size += len(data)
                 self._previous = digest(entry)
                 self._rows.append(row)
-            except (OSError, GhimeraRefused):
+            except (OSError, GhimeraRefused) as exc:
                 self._failed = True
-                raise _refuse() from None
+                raise _carry(exc, "appending a journal row") from None
 
     def finish(self, harvest: Harvest) -> None:
         with self._lock:
@@ -325,9 +351,9 @@ class DirectoryLedgerSink:
                 )
                 self._closed = True
                 self._release()
-            except (OSError, GhimeraRefused):
+            except (OSError, GhimeraRefused) as exc:
                 self._failed = True
-                raise _refuse() from None
+                raise _carry(exc, "sealing the run journal") from None
 
     def close(self) -> None:
         with self._lock:
@@ -458,8 +484,15 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
             incomplete_tail=incomplete,
             summary=summary,
         )
-    except (OSError, ValueError, ValidationError):
-        raise _refuse() from None
+    except OSError as exc:
+        raise _carry(exc, "reading the run journal") from None
+    except ValidationError as exc:
+        raise _refuse(
+            f"journal record failed validation ({exc.error_count()} errors, "
+            f"first at {'.'.join(map(str, exc.errors()[0]['loc'])) or 'root'})"
+        ) from None
+    except ValueError as exc:
+        raise _refuse(f"journal rows failed a binding check: {exc}") from None
 
 
 def main() -> int:

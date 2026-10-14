@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.human_browser_types import BrowserSourceEvidence
+from ghimera.identifiers import RUN_ID_SCHEMA_PATTERN
 from ghimera.local_input_types import LocalInputEvidence
 from ghimera.model_types import IdentityCallEvidence
 from ghimera.source_refresh_types import SourceRefreshUse
@@ -687,7 +688,7 @@ class GraphEdge(GraphRecord):
 
 class GraphBatch(GraphRecord):
     schema_version: Literal["chimera.graph-batch/1"] = Field(alias="schema")
-    run_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+    run_id: Annotated[str, Field(pattern=RUN_ID_SCHEMA_PATTERN)]
     config_digest: Digest
     sequence: Count
     previous_digest: Digest | None
