@@ -63,7 +63,8 @@ class SearxTransport:
     async def fetch(self, request: SearchRequest, *, html: bool) -> Page:
         values = {
             "q": request.query.text,
-            "language": self._provider.language,
+            # A query's own language (from the research request) overrides the default.
+            "language": request.query.language or self._provider.language,
             "safesearch": str(self._provider.safe_search),
             "time_range": self._provider.time_range,
         }

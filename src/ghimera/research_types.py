@@ -41,10 +41,22 @@ class ResearchRecord(Record):
         return hashlib.sha256(raw.encode()).hexdigest()
 
 
+LanguageCode = Annotated[str, Field(pattern=r"^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")]
+
+
 class ResearchRequest(ResearchRecord):
     intent: Text
     seeds: tuple[str, ...] = ()
     local_documents: tuple[LocalDocumentSeed, ...] = Field(default=(), exclude_if=lambda v: not v)
+    # Preferred source languages: every question gets at least one query per language.
+    languages: tuple[LanguageCode, ...] = Field(default=(), exclude_if=lambda v: not v)
+
+    @field_validator("languages")
+    @classmethod
+    def distinct_languages(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("preferred languages cannot repeat")
+        return value
 
     @field_validator("intent")
     @classmethod
@@ -67,6 +79,8 @@ class SearchQuery(ResearchRecord):
     text: Text
     question_ids: Annotated[tuple[QuestionId, ...], Field(min_length=1)]
     graph_refs: tuple[Text, ...] = Field(default=(), exclude_if=lambda v: not v)
+    # The query's language; a provider that can filter by language honours it.
+    language: LanguageCode | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def unique_graph_refs(self) -> "SearchQuery":
@@ -264,6 +278,7 @@ class PlanningRequest(ResearchRecord):
     retained_sources: tuple[RetainedSourceNotice, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
+    languages: tuple[LanguageCode, ...] = Field(default=(), exclude_if=lambda v: not v)
 
     @model_validator(mode="after")
     def source_notices(self) -> "PlanningRequest":
@@ -302,6 +317,43 @@ class ResearchRound(ResearchRecord):
     discovery_progress: DiscoveryProgress | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+    # Deterministic per-language queries added for (question, language) pairs the
+    # plan left uncovered, and the round's new evidence documents per language.
+    language_queries: tuple[SearchQuery, ...] = Field(default=(), exclude_if=lambda v: not v)
+    pages_by_language: dict[str, Annotated[int, Field(strict=True, ge=0)]] = Field(
+        default_factory=dict, exclude_if=lambda v: not v
+    )
+
+
+def language_queries(
+    questions: tuple[Question, ...],
+    queries: tuple[SearchQuery, ...],
+    languages: tuple[str, ...],
+    max_query_chars: int,
+) -> tuple[SearchQuery, ...]:
+    """One query per (question, preferred language) the plan did not cover.
+
+    The query reuses the plan's first query for that question (or the question
+    text) with the language set, so a language-filtering provider retrieves
+    sources in that language. Nothing is translated here; translation is the
+    planner's job and its own per-language queries always take precedence.
+    """
+    added: list[SearchQuery] = []
+    for question in questions:
+        own = [query for query in queries if question.id in query.question_ids]
+        for language in languages:
+            if any(query.language == language for query in own):
+                continue
+            base = own[0] if own else None
+            added.append(
+                SearchQuery(
+                    text=base.text if base is not None else question.text[:max_query_chars],
+                    question_ids=(question.id,),
+                    graph_refs=base.graph_refs if base is not None else (),
+                    language=language,
+                )
+            )
+    return tuple(dict.fromkeys(added))
 
 
 class ResearchResult(ResearchRecord):

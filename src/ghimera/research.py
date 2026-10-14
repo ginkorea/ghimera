@@ -8,10 +8,12 @@ Neither a grade nor the synthesizer's confidence is a completion decision.
 import asyncio
 import hashlib
 import itertools
+import re
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from typing import Literal, Protocol, TypeVar, overload
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from pydantic import ValidationError
 
@@ -31,6 +33,7 @@ from ghimera.model_reconciliation_types import (
     ModelReconciliationDecision,
     ModelUnknownObservation,
 )
+from ghimera.model_retry import retry_transient
 from ghimera.model_types import ModelCallEvidence
 from ghimera.model_work import (
     FatalModelWorkFailure,
@@ -83,6 +86,7 @@ from ghimera.research_types import (
     SearchQuery,
     SearchRequest,
     SearchResponse,
+    language_queries,
 )
 from ghimera.search import GroundedSearch
 from ghimera.search_history import SearchHistory
@@ -129,6 +133,25 @@ class AnswerReviewer(Protocol):
     def model(self) -> ModelIdentity: ...
 
     async def review(self, request: ReviewRequest) -> AnswerReview: ...
+
+
+def scoring_anchor(url: str, title: str, snippet: str) -> str:
+    """Text a search lead is scored on: its title, or path words when the title is bare.
+
+    A title that is empty or only names the host ("example.org") says nothing
+    about the page; the URL path words (and the snippet, when present) stand in
+    so such a lead is not ranked below a well-titled one by accident.
+    """
+    host = (urlsplit(url).hostname or "").removeprefix("www.")
+    bare = title.strip().lower().removeprefix("www.").rstrip("/")
+    if bare and bare not in {host, f"https://{host}", f"http://{host}"}:
+        return title
+    words = " ".join(
+        word
+        for word in re.split(r"[/_.+\-%=?&]+", unquote(urlsplit(url).path))
+        if word and not word.isdigit() and word.lower() not in {"html", "htm", "php", "aspx"}
+    )
+    return " ".join(part for part in (title.strip(), words, snippet.strip()) if part)
 
 
 def citation_for(document: Document, start: int, end: int) -> Citation:
@@ -398,56 +421,65 @@ class ModelCalls:
             attempt = recovery.attempt
         if self._before_call is not None and attempt is None:
             self._before_call(event, model, request)
-        invocation = ModelInvocation(
-            budget,
-            ledger,
-            phase=event,
-            model=model,
-            request=port_input(budget, request),
-            attempt=attempt,
-        )
-        started, code, result = budget.clock(), None, None
-        model_call: ModelCallEvidence | None = None
-        try:
-            async with asyncio.timeout(budget.remaining_seconds):
-                result = await invocation.invoke(lambda: call(request), record_output)
-            model_call = result.model_call
-            return result
-        except TimeoutError:
-            code = RefusalCode.BUDGET_EXHAUSTED
-            raise GhimeraRefused(code) from None
-        except GhimeraRefused as exc:
-            code = exc.code
-            if isinstance(exc, ModelFailure):
-                model_call = exc.model_call
-            raise
-        except ValidationError:
-            code = RefusalCode.MODEL_UNAVAILABLE
-            raise GhimeraRefused(code) from None
-        except asyncio.CancelledError as exc:
-            code = RefusalCode.MODEL_UNAVAILABLE
-            if isinstance(exc, ModelCancelled):
-                model_call = exc.model_call
-            raise
-        finally:
-            ledger.append(
-                LedgerRow(
-                    sequence=ledger.next_sequence,
-                    event=event,
-                    model=model,
-                    model_call=model_call,
-                    refusal=code,
-                    reason="model_failed"
-                    if code
-                    else "model_response:" + result.content_digest()
-                    if result is not None
-                    else "model_cancelled",
-                    latency_seconds=max(0.0, budget.clock() - started),
-                    planning_graph=request.graph_context
-                    if isinstance(request, PlanningRequest)
-                    else None,
-                )
+
+        async def once() -> T:
+            invocation = ModelInvocation(
+                budget,
+                ledger,
+                phase=event,
+                model=model,
+                request=port_input(budget, request),
+                attempt=attempt,
             )
+            started, code, result = budget.clock(), None, None
+            detail: str | None = None
+            model_call: ModelCallEvidence | None = None
+            try:
+                async with asyncio.timeout(budget.remaining_seconds):
+                    result = await invocation.invoke(lambda: call(request), record_output)
+                model_call = result.model_call
+                return result
+            except TimeoutError:
+                code = RefusalCode.BUDGET_EXHAUSTED
+                raise GhimeraRefused(code) from None
+            except GhimeraRefused as exc:
+                code, detail = exc.code, exc.detail
+                if isinstance(exc, ModelFailure):
+                    model_call = exc.model_call
+                raise
+            except ValidationError:
+                code = RefusalCode.MODEL_UNAVAILABLE
+                raise GhimeraRefused(code) from None
+            except asyncio.CancelledError as exc:
+                code = RefusalCode.MODEL_UNAVAILABLE
+                if isinstance(exc, ModelCancelled):
+                    model_call = exc.model_call
+                raise
+            finally:
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event=event,
+                        model=model,
+                        model_call=model_call,
+                        refusal=code,
+                        detail=detail,
+                        reason="model_failed"
+                        if code
+                        else "model_response:" + result.content_digest()
+                        if result is not None
+                        else "model_cancelled",
+                        latency_seconds=max(0.0, budget.clock() - started),
+                        planning_graph=request.graph_context
+                        if isinstance(request, PlanningRequest)
+                        else None,
+                    )
+                )
+
+        if attempt is None and budget.config.model_work is None:
+            # A transient planner/analyst refusal is retried; each try is accounted.
+            return await retry_transient(budget.config.model_retry, once)
+        return await once()
 
 
 class ResearchLoop:
@@ -1690,6 +1722,7 @@ class ResearchLoop:
                 )
         max_rounds = self._policy.max_rounds
         empty_rounds = 0
+        added: tuple[SearchQuery, ...] = ()
         for number in (
             range(initial_rounds + 1, max_rounds + 1)
             if max_rounds is not None
@@ -1737,6 +1770,7 @@ class ResearchLoop:
                             max_queries=self._policy.max_queries_per_round,
                             max_query_chars=self._policy.max_query_chars,
                             graph_context=build_context(self._config, session.ledger.snapshot()),
+                            languages=request.languages,
                         )
                     )
                     plan = await calls.invoke(
@@ -1856,9 +1890,29 @@ class ResearchLoop:
                     and query_stage != "cited_by"
                     and (not resuming_assessment or assessment_context == "retained_first")
                 ):
+                    added = language_queries(
+                        plan.questions,
+                        plan.queries,
+                        request.languages,
+                        self._policy.max_query_chars,
+                    )
+                    for query in added:
+                        base = next(
+                            (
+                                own
+                                for own in plan.queries
+                                if query.question_ids[0] in own.question_ids
+                            ),
+                            None,
+                        )
+                        if base is not None and base.content_digest() in trace:
+                            trace[query.content_digest()] = trace[base.content_digest()]
+                    if session.graph is not None:
+                        # Graph discovery binds each URL to a traced plan query.
+                        added = tuple(q for q in added if q.content_digest() in trace)
                     urls = await self._discover(
                         session,
-                        plan.queries,
+                        plan.queries + added,
                         compiler,
                         trace,
                         history,
@@ -1994,6 +2048,16 @@ class ResearchLoop:
                     ResearchRound(
                         number=number,
                         queries=plan.queries,
+                        language_queries=added,
+                        pages_by_language=dict(
+                            Counter(
+                                doc.extracted.language
+                                for doc in session.evidence_documents
+                                if doc.sha256 not in before_documents
+                            )
+                        )
+                        if request.languages
+                        else {},
                         discovered_urls=urls,
                         assessment=assessment,
                         collection_stop=collection_stop,
@@ -2335,16 +2399,24 @@ class ResearchLoop:
                         )
                         continue
                     proofs.setdefault((proof.target_url, proof.anchor), proof)
+            # A bare-host title with no snippet scores on the URL's path words too;
+            # the retained proof keeps the provider's original title unchanged.
+            scored = {
+                (url, scoring_anchor(url, anchor, proof.snippet)): proof
+                for (url, anchor), proof in proofs.items()
+            }
             ranked = await self._collector.score_discovery(
                 session,
                 source,
-                tuple(LinkCandidate(url=url, anchor=anchor) for url, anchor in proofs),
+                tuple(LinkCandidate(url=url, anchor=anchor) for url, anchor in scored),
             )
-            for link in ranked[: policy.max_candidates_per_parent]:
+            for scored_link in ranked[: policy.max_candidates_per_parent]:
+                proof = scored[(scored_link.url, scored_link.anchor)]
+                link = scored_link.model_copy(update={"anchor": proof.anchor})
                 queued = await self._collector.queue_reference(
                     session,
                     source,
-                    proofs[(link.url, link.anchor)],
+                    proof,
                     link,
                     scope,
                     session.reference_hops(source.url),

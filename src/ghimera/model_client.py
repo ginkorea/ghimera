@@ -194,6 +194,12 @@ INSTRUCTIONS = MappingProxyType(
     }
 )
 
+LANGUAGE_PLAN_INSTRUCTIONS = (
+    " The request names preferred source languages. For every question, write at "
+    "least one grounded-search query in EACH listed language, in that language's own "
+    "words and script (not a transliteration), and set the query's language field to "
+    "that code. Do not translate supplied question text; translate only the queries."
+)
 MENTION_KEY_INSTRUCTIONS = (
     " Every mention key must be unique within the mentions list, even when native "
     "surface names repeat. Build the bounded mentions list FIRST. Each relation's "
@@ -441,6 +447,7 @@ class PromptInput(Record):
     proposal_digest: str | None = None
     graph_context: PlanningGraph | None = None
     identity_request: IdentityProposalRequest | IdentityReviewRequest | None = None
+    languages: tuple[str, ...] = Field(default=(), exclude_if=lambda value: not value)
     retained_sources: tuple[RetainedSourceNotice, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
@@ -743,6 +750,7 @@ class SelfHostedModel:
                     if visual_context
                     else INSTRUCTIONS[prompt.task]
                 )
+                + (LANGUAGE_PLAN_INSTRUCTIONS if prompt.task == "plan" and prompt.languages else "")
                 + (
                     "Visual citation templates name retained derived readings, not native "
                     "document text. Copy their basis and visual_anchor unchanged. OCR "
@@ -1363,6 +1371,7 @@ class SelfHostedModel:
                 max_query_chars=request.max_query_chars,
                 graph_context=request.graph_context,
                 retained_sources=request.retained_sources,
+                languages=request.languages,
             ),
             ResearchPlan,
         )
