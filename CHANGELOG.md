@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.14 — 2026-10-14
+
+- A compliant research plan is never refused for its size. Queries over
+  `max_queries_per_round` are cut to the bound, balanced round-robin over
+  languages and then questions (plan order kept within each), and the
+  language-routed copies count against the same bound. A query over
+  `max_query_chars` is cut at a word boundary. Rounds record
+  `omitted_queries` and `truncated_queries`, and each is journaled as a
+  `policy` row (`query_omitted …`, `query_truncated …`). Contract checks
+  (question ids, blanks, duplicates, graph references, resume equality) still
+  refuse with `research_contract`.
+
 ## 0.4.13 — 2026-10-14
 
 The judge guides and never discards.

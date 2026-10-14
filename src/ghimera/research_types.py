@@ -373,6 +373,14 @@ class ReviewRequest(EvidenceRequest):
     answer: AnswerDraft
 
 
+class QueryTruncation(ResearchRecord):
+    """A planned query cut to ``max_query_chars`` at a word boundary, never refused."""
+
+    original_text: Text
+    text: Text
+    language: LanguageCode | None = Field(default=None, exclude_if=lambda v: v is None)
+
+
 class ResearchRound(ResearchRecord):
     number: Annotated[int, Field(strict=True, gt=0)]
     queries: tuple[SearchQuery, ...]
@@ -397,6 +405,68 @@ class ResearchRound(ResearchRecord):
         default_factory=dict, exclude_if=lambda v: not v
     )
     followed_leads: tuple[str, ...] = Field(default=(), exclude_if=lambda v: not v)
+    # A plan is never refused for its size: queries over max_queries_per_round
+    # (planner's plus language copies) are omitted, and overlong texts are cut.
+    omitted_queries: tuple[SearchQuery, ...] = Field(default=(), exclude_if=lambda v: not v)
+    truncated_queries: tuple[QueryTruncation, ...] = Field(default=(), exclude_if=lambda v: not v)
+
+
+def truncate_query_text(text: str, limit: int) -> str:
+    """Cut at the last word boundary within ``limit``; a single long word is hard-cut."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    if not text[limit].isspace():
+        boundary = max(cut.rfind(" "), cut.rfind("\t"), cut.rfind("\n"))
+        if boundary > 0 and cut[:boundary].strip():
+            cut = cut[:boundary]
+    return cut.rstrip() or text[:limit]
+
+
+def truncate_queries(
+    queries: tuple[SearchQuery, ...], limit: int
+) -> tuple[tuple[SearchQuery, ...], tuple[QueryTruncation, ...]]:
+    kept: list[SearchQuery] = []
+    cut: list[QueryTruncation] = []
+    for query in queries:
+        text = truncate_query_text(query.text, limit)
+        if text != query.text:
+            cut.append(
+                QueryTruncation(original_text=query.text, text=text, language=query.language)
+            )
+            query = query.model_copy(update={"text": text})
+        kept.append(query)
+    return tuple(kept), tuple(cut)
+
+
+def balance_queries(
+    queries: tuple[SearchQuery, ...], bound: int, languages: tuple[str, ...] = ()
+) -> tuple[tuple[SearchQuery, ...], tuple[SearchQuery, ...]]:
+    """Keep at most ``bound`` queries, balanced round-robin over languages, then over
+    questions within a language, in the plan's order within each. Returns the kept
+    queries and the omitted ones, both in the plan's original order."""
+    if len(queries) <= bound:
+        return queries, ()
+    by_language: dict[str | None, dict[str, list[int]]] = {}
+    for index, query in enumerate(queries):
+        groups = by_language.setdefault(query.language, {})
+        groups.setdefault(query.question_ids[0], []).append(index)
+    order = [code for code in languages if code in by_language] + [
+        code for code in by_language if code not in languages
+    ]
+
+    def interleave(lanes: list[list[int]]) -> list[int]:
+        merged: list[int] = []
+        for depth in range(max((len(lane) for lane in lanes), default=0)):
+            merged.extend(lane[depth] for lane in lanes if depth < len(lane))
+        return merged
+
+    per_language = [interleave(list(by_language[code].values())) for code in order]
+    chosen = set(interleave(per_language)[:bound])
+    return (
+        tuple(query for index, query in enumerate(queries) if index in chosen),
+        tuple(query for index, query in enumerate(queries) if index not in chosen),
+    )
 
 
 def language_queries(

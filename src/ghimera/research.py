@@ -54,7 +54,13 @@ from ghimera.models import (
 from ghimera.query_work import QueryWork
 from ghimera.query_work_types import QueryCursor, QueryReservation
 from ghimera.reference_types import ReferenceQuery, ReferenceSource, SearchReference
-from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
+from ghimera.refusals import (
+    GhimeraRefused,
+    ModelCancelled,
+    ModelFailure,
+    RefusalCode,
+    refusal_detail,
+)
 from ghimera.research_config import ResearchConfig
 from ghimera.research_recovery_store import ResearchRecoveryStore
 from ghimera.research_recovery_types import (
@@ -74,6 +80,7 @@ from ghimera.research_types import (
     Citation,
     EvidenceRequest,
     PlanningRequest,
+    QueryTruncation,
     Question,
     ResearchModelResult,
     ResearchPlan,
@@ -87,9 +94,11 @@ from ghimera.research_types import (
     SearchRequest,
     SearchResponse,
     answer_order,
+    balance_queries,
     language_queries,
     planning_readings,
     round_readings,
+    truncate_queries,
 )
 from ghimera.search import GroundedSearch
 from ghimera.search_history import SearchHistory
@@ -601,6 +610,46 @@ class ResearchLoop:
             )
             result[query.content_digest()] = node.id
         return result
+
+    def _fit_plan(
+        self, session: CollectionSession, plan: ResearchPlan, languages: tuple[str, ...]
+    ) -> tuple[ResearchPlan, tuple[SearchQuery, ...], tuple[QueryTruncation, ...]]:
+        """A compliant plan is never refused for its size: overlong query texts are cut
+        at a word boundary and queries over the per-round bound are omitted, balanced
+        across languages and questions. Both are journaled and kept on the round."""
+        queries, truncations = truncate_queries(plan.queries, self._policy.max_query_chars)
+        queries, omitted = balance_queries(queries, self._policy.max_queries_per_round, languages)
+        for item in truncations:
+            session.ledger.append(
+                LedgerRow(
+                    sequence=session.ledger.next_sequence,
+                    event="policy",
+                    reason=refusal_detail(
+                        f"query_truncated to {len(item.text)} chars "
+                        f"({item.language or 'any'}): {item.text}"
+                    ),
+                )
+            )
+        self._journal_omitted(session, omitted)
+        if not truncations and not omitted:
+            return plan, (), ()
+        return plan.model_copy(update={"queries": queries}), omitted, truncations
+
+    def _journal_omitted(
+        self, session: CollectionSession, omitted: tuple[SearchQuery, ...]
+    ) -> None:
+        for query in omitted:
+            session.ledger.append(
+                LedgerRow(
+                    sequence=session.ledger.next_sequence,
+                    event="policy",
+                    reason=refusal_detail(
+                        f"query_omitted over max_queries_per_round "
+                        f"{self._policy.max_queries_per_round} "
+                        f"({query.language or 'any'}): {query.text}"
+                    ),
+                )
+            )
 
     def _validate_plan(
         self,
@@ -1724,6 +1773,10 @@ class ResearchLoop:
                 reason = "failed"
         empty_rounds = 0
         added: tuple[SearchQuery, ...] = ()
+        # What fitting the plan to max_queries_per_round/max_query_chars left out.
+        plan_omitted: tuple[SearchQuery, ...] = ()
+        added_omitted: tuple[SearchQuery, ...] = ()
+        truncations: tuple[QueryTruncation, ...] = ()
         # No round ceiling: research ends on an answer, saturation or a failure.
         for number in itertools.count(initial_rounds + 1):
             if reason in {"failed", "answered", "saturated"}:
@@ -1779,6 +1832,10 @@ class ResearchLoop:
                         self._planner.plan,
                         result_type=ResearchPlan,
                     )
+                    plan, plan_omitted, truncations = self._fit_plan(
+                        session, plan, request.languages
+                    )
+                    added_omitted = ()
                     self._validate_plan(plan, questions, planning.graph_context)
                     questions = plan.questions
                     trace = await self._trace_plan(session, plan)
@@ -1890,12 +1947,22 @@ class ResearchLoop:
                     and query_stage != "cited_by"
                     and (not resuming_assessment or assessment_context == "retained_first")
                 ):
+                    # A (question, language) pair whose planned query was omitted is
+                    # already recorded on the round; no copy is added back for it.
                     added = language_queries(
                         plan.questions,
-                        plan.queries,
+                        plan.queries + plan_omitted,
                         request.languages,
                         self._policy.max_query_chars,
                     )
+                    # Language copies count against the same per-round bound.
+                    added, added_omitted = balance_queries(
+                        added,
+                        max(0, self._policy.max_queries_per_round - len(plan.queries)),
+                        request.languages,
+                    )
+                    if query_stage != "discovery":
+                        self._journal_omitted(session, added_omitted)
                     for query in added:
                         base = next(
                             (
@@ -2056,6 +2123,8 @@ class ResearchLoop:
                         number=number,
                         queries=plan.queries,
                         language_queries=added,
+                        omitted_queries=plan_omitted + added_omitted,
+                        truncated_queries=truncations,
                         pages_by_language=dict(
                             Counter(
                                 doc.extracted.language
