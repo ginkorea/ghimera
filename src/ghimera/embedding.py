@@ -21,6 +21,7 @@ from ghimera.model_http import (
     ModelWireFailure,
     PinnedModelHttp,
 )
+from ghimera.model_retry import transient_status
 from ghimera.models import ModelIdentity
 from ghimera.refusals import (
     EncodingCancelled,
@@ -80,7 +81,10 @@ class SelfHostedEncoder:
         service = self.config
         # Reject empty input before call evidence: there is no attempted call to account for.
         if not texts or any(not text.strip() for text in texts):
-            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+            raise GhimeraRefused(
+                RefusalCode.ADAPTER_CONTRACT,
+                f"encoder adapter received {len(texts)} texts including an empty one",
+            )
         started = asyncio.get_running_loop().time()
         inputs = tuple(service.text_prefix + text for text in texts)
         input_chars = sum(map(len, inputs))
@@ -109,7 +113,13 @@ class SelfHostedEncoder:
                 or input_chars > service.max_input_chars
                 or any(len(text) > service.max_text_chars for text in inputs)
             ):
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                raise GhimeraRefused(
+                    RefusalCode.BUDGET_EXHAUSTED,
+                    f"encoder batch of {len(inputs)} texts / {input_chars} chars exceeds "
+                    f"max_batch_texts={service.max_batch_texts}, "
+                    f"max_input_chars={service.max_input_chars} or "
+                    f"max_text_chars={service.max_text_chars}",
+                )
             body = encoding_request(service, texts)
             if len(body) > service.max_request_bytes:
                 raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
@@ -134,7 +144,12 @@ class SelfHostedEncoder:
             return EncodingBatch(vectors=vectors, call=evidence("success"))
         except ModelWireFailure as exc:
             response = exc.response
-            raise EncodingFailure(RefusalCode.MODEL_UNAVAILABLE, evidence("refused")) from None
+            raise EncodingFailure(
+                RefusalCode.MODEL_UNAVAILABLE,
+                evidence("refused"),
+                f"encoder transport failed (HTTP status {response.status})",
+                transient=True,
+            ) from None
         except ModelWireCancelled as exc:
             response = exc.response
             raise EncodingCancelled(evidence("cancelled")) from None
@@ -142,4 +157,18 @@ class SelfHostedEncoder:
             raise EncodingCancelled(evidence("cancelled")) from None
         except (GhimeraRefused, ValidationError, ValueError) as exc:
             code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.MODEL_UNAVAILABLE
-            raise EncodingFailure(code, evidence("refused")) from None
+            transient = code == RefusalCode.MODEL_UNAVAILABLE and transient_status(response.status)
+            raise EncodingFailure(
+                code,
+                evidence("refused"),
+                (
+                    f"encoder answered HTTP {response.status} with a refused envelope"
+                    if response.status == 200
+                    else f"encoder answered HTTP {response.status}"
+                )
+                if code == RefusalCode.MODEL_UNAVAILABLE
+                else exc.detail
+                if isinstance(exc, GhimeraRefused)
+                else None,
+                transient=transient,
+            ) from None

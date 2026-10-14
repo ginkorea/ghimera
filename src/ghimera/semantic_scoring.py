@@ -23,6 +23,7 @@ from ghimera.embedding_types import (
 from ghimera.judgment_context import native_scoring_reading, scoring_source_binding
 from ghimera.judgment_validation import validate_scoring_readings
 from ghimera.ledger import Ledger
+from ghimera.model_retry import retry_transient
 from ghimera.models import Extracted, Goal, LedgerRow, LinkCandidate
 from ghimera.ports import EvidenceEncoder
 from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused, RefusalCode
@@ -368,7 +369,9 @@ class EmbeddingScorer(Scorer):
         pending: list[str] = []
         size = 0
 
-        async def flush() -> None:
+        batches: list[tuple[tuple[str, ...], tuple[str, ...], int]] = []
+
+        def flush() -> None:
             nonlocal size
             if not pending:
                 return
@@ -377,10 +380,25 @@ class EmbeddingScorer(Scorer):
                 hashlib.sha256((service.text_prefix + text).encode()).hexdigest()
                 for text in batch_texts
             )
+            batches.append((batch_texts, expected_hashes, size))
+            pending.clear()
+            size = 0
+
+        async def send(
+            batch_texts: tuple[str, ...], expected_hashes: tuple[str, ...], chars: int
+        ) -> tuple[tuple[float, ...], ...]:
+            # A transient refusal (service reloading) is retried; each try is charged.
+            return await retry_transient(
+                budget.config.model_retry, lambda: attempt(batch_texts, expected_hashes, chars)
+            )
+
+        async def attempt(
+            batch_texts: tuple[str, ...], expected_hashes: tuple[str, ...], size: int
+        ) -> tuple[tuple[float, ...], ...]:
             budget.reserve_encoding(size)
             started = asyncio.get_running_loop().time()
             call: EncodingCall | None = None
-            refusal = None
+            refusal, detail = None, None
             try:
                 batch = await encoder.encode_batch(batch_texts)
                 call = batch.call
@@ -392,9 +410,9 @@ class EmbeddingScorer(Scorer):
                     or call.input_chars != size
                 ):
                     raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-                output.extend(batch.vectors)
+                vectors = batch.vectors
             except EncodingFailure as exc:
-                call, refusal = exc.call, exc.code
+                call, refusal, detail = exc.call, exc.code, exc.detail
                 raise
             except EncodingCancelled as exc:
                 call, refusal = exc.call, RefusalCode.BUDGET_EXHAUSTED
@@ -439,21 +457,39 @@ class EmbeddingScorer(Scorer):
                         url=url,
                         reason=call.outcome,
                         refusal=refusal,
+                        detail=detail if refusal is not None else None,
                         encoding_call=call,
                     )
                 )
-            pending.clear()
-            size = 0
+            return vectors
 
         for text in texts:
             chars = len(text) + len(service.text_prefix)
             if chars > service.max_text_chars or chars > service.max_input_chars:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                raise GhimeraRefused(
+                    RefusalCode.BUDGET_EXHAUSTED,
+                    f"one encoder text of {chars} chars exceeds max_text_chars="
+                    f"{service.max_text_chars}",
+                )
             if len(pending) >= service.max_batch_texts or size + chars > service.max_input_chars:
-                await flush()
+                flush()
             pending.append(text)
             size += chars
-        await flush()
+        flush()
+        # A page's batches are sent concurrently, each at the service's batch size;
+        # every call completes and is recorded before the first failure is raised.
+        tasks = [asyncio.ensure_future(send(*batch)) for batch in batches]
+        try:
+            if tasks:
+                await asyncio.wait(tasks)
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        for task in tasks:
+            # Awaiting a finished task re-raises its own failure or cancellation.
+            output.extend(await task)
         return tuple(output)
 
     async def rank(

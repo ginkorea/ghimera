@@ -46,6 +46,7 @@ from ghimera.model_http import (
     ModelWireFailure,
     PinnedModelHttp,
 )
+from ghimera.model_retry import transient_status
 from ghimera.model_types import (
     CompletionShape,
     FinishReason,
@@ -1055,7 +1056,12 @@ class SelfHostedModel:
             return result.model_copy(update={"model_call": evidence("success")})
         except ModelWireFailure as exc:
             response = exc.response
-            raise ModelFailure(RefusalCode.MODEL_UNAVAILABLE, evidence("refused")) from None
+            raise ModelFailure(
+                RefusalCode.MODEL_UNAVAILABLE,
+                evidence("refused"),
+                f"model transport failed (HTTP status {response.status})",
+                transient=True,
+            ) from None
         except ModelWireCancelled as exc:
             response = exc.response
             raise ModelCancelled(evidence("cancelled")) from None
@@ -1063,7 +1069,15 @@ class SelfHostedModel:
             raise ModelCancelled(evidence("cancelled")) from None
         except (GhimeraRefused, ValidationError) as exc:
             code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.MODEL_UNAVAILABLE
-            raise ModelFailure(code, evidence("refused")) from None
+            raise ModelFailure(
+                code,
+                evidence("refused"),
+                f"model answered HTTP {response.status}"
+                if code == RefusalCode.MODEL_UNAVAILABLE
+                else None,
+                transient=code == RefusalCode.MODEL_UNAVAILABLE
+                and transient_status(response.status),
+            ) from None
 
     def _evidence(
         self, intent: str, documents: tuple[Document, ...], required: tuple[Citation, ...] = ()

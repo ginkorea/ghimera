@@ -31,6 +31,7 @@ from ghimera.local_inputs import (
     LocalInputLoader,
     LocalInputSnapshot,
 )
+from ghimera.model_retry import retry_transient
 from ghimera.model_work import ModelInvocation, port_input, record_output, validate_model_rows
 from ghimera.models import (
     Document,
@@ -1210,8 +1211,15 @@ class GoalLoop:
             budget.check_time()
             active_scope = session._reference_scopes.get(url, scope)
             parent_hops = session._reference_hops.get(url, 0)
-            if depth > active_scope.max_depth or not active_scope.permits(url):
-                raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
+            if depth > active_scope.max_depth:
+                raise GhimeraRefused(
+                    RefusalCode.OUT_OF_SCOPE,
+                    f"link depth {depth} exceeds max_depth={active_scope.max_depth}",
+                )
+            if not active_scope.permits(url):
+                raise GhimeraRefused(
+                    RefusalCode.OUT_OF_SCOPE, "host, port or content scope does not permit this URL"
+                )
             if acquired is not None:
                 if work is None:
                     raise ValueError("acquired source lost original store")
@@ -1301,10 +1309,9 @@ class GoalLoop:
                 # Only a declared RUN ceiling ends collection. A page's own bound
                 # (a reader deadline, one oversized response) refuses that page.
                 return "budget_exhausted"
-            if isinstance(exc, SemanticRecoveryStopped) or code in {
-                RefusalCode.ADAPTER_CONTRACT,
-                RefusalCode.MODEL_UNAVAILABLE,
-            }:
+            # A model or encoder that stays unavailable after its bounded retries
+            # refuses this page only; the round continues with the other sources.
+            if isinstance(exc, SemanticRecoveryStopped) or code == RefusalCode.ADAPTER_CONTRACT:
                 return "failed"
         return None
 
@@ -1996,61 +2003,88 @@ class GoalLoop:
                     model_sequence=intent_sequence,
                     request=request,
                 )
-            invocation = ModelInvocation(
-                budget,
-                ledger,
-                phase="verdict",
-                model=self._judge.model,
-                url=url,
-                request=request,
-                replay_intent_sequence=replay_sequence,
-            )
-            try:
-                async with asyncio.timeout(budget.remaining_seconds):
-                    verdict = (
-                        invocation.replay(lambda stored: Verdict.model_validate_json(stored.body()))
-                        if replay_sequence is not None
-                        else await invocation.invoke(
-                            lambda: (
-                                self._judge.scored_document(
-                                    session.goal, extracted, context, second_look=second_look
-                                )
-                                if isinstance(self._judge, ScoredDocumentJudge)
-                                and context is not None
-                                else self._judge.document(
-                                    session.goal, extracted, second_look=second_look
-                                )
-                            ),
-                            record_output,
+
+            async def judge_once() -> Verdict:
+                invocation = ModelInvocation(
+                    budget,
+                    ledger,
+                    phase="verdict",
+                    model=self._judge.model,
+                    url=url,
+                    request=request,
+                    replay_intent_sequence=replay_sequence,
+                )
+                try:
+                    async with asyncio.timeout(budget.remaining_seconds):
+                        verdict = (
+                            invocation.replay(
+                                lambda stored: Verdict.model_validate_json(stored.body())
+                            )
+                            if replay_sequence is not None
+                            else await invocation.invoke(
+                                lambda: (
+                                    self._judge.scored_document(
+                                        session.goal, extracted, context, second_look=second_look
+                                    )
+                                    if isinstance(self._judge, ScoredDocumentJudge)
+                                    and context is not None
+                                    else self._judge.document(
+                                        session.goal, extracted, second_look=second_look
+                                    )
+                                ),
+                                record_output,
+                            )
+                        )
+                except asyncio.CancelledError as exc:
+                    ledger.append(
+                        LedgerRow(
+                            sequence=ledger.next_sequence,
+                            event="verdict",
+                            url=url,
+                            refusal=RefusalCode.MODEL_UNAVAILABLE,
+                            model=self._judge.model,
+                            model_call=exc.model_call if isinstance(exc, ModelCancelled) else None,
+                            reason="served_judge_cancelled",
                         )
                     )
-            except asyncio.CancelledError as exc:
-                ledger.append(
-                    LedgerRow(
-                        sequence=ledger.next_sequence,
-                        event="verdict",
-                        url=url,
-                        refusal=RefusalCode.MODEL_UNAVAILABLE,
-                        model=self._judge.model,
-                        model_call=exc.model_call if isinstance(exc, ModelCancelled) else None,
-                        reason="served_judge_cancelled",
+                    raise asyncio.CancelledError from None
+                except (GhimeraRefused, TimeoutError) as exc:
+                    code = (
+                        exc.code
+                        if isinstance(exc, GhimeraRefused)
+                        else RefusalCode.BUDGET_EXHAUSTED
                     )
-                )
-                raise asyncio.CancelledError from None
-            except (GhimeraRefused, TimeoutError) as exc:
-                code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
-                ledger.append(
-                    LedgerRow(
-                        sequence=ledger.next_sequence,
-                        event="verdict",
-                        url=url,
-                        refusal=code,
-                        model=self._judge.model,
-                        model_call=exc.model_call if isinstance(exc, ModelFailure) else None,
-                        reason="served_judge_failed",
+                    ledger.append(
+                        LedgerRow(
+                            sequence=ledger.next_sequence,
+                            event="verdict",
+                            url=url,
+                            refusal=code,
+                            model=self._judge.model,
+                            model_call=exc.model_call if isinstance(exc, ModelFailure) else None,
+                            reason="served_judge_failed",
+                            detail=exc.detail if isinstance(exc, GhimeraRefused) else None,
+                        )
                     )
-                )
-                raise GhimeraRefused(code) from None
+                    refused = GhimeraRefused(
+                        code, exc.detail if isinstance(exc, GhimeraRefused) else None
+                    )
+                    # Preserve a transient service refusal so a legacy verdict can retry.
+                    refused.transient = isinstance(exc, GhimeraRefused) and exc.transient
+                    raise refused from None
+                return verdict
+
+            if (
+                context is None
+                and processing is None
+                and replay_sequence is None
+                and self._config.model_work is None
+            ):
+                # Each try is its own accounted verdict call; durable model-work
+                # recipes keep their exact single intent and are never retried here.
+                verdict = await retry_transient(self._config.model_retry, judge_once)
+            else:
+                verdict = await judge_once()
             judgment = None
             disposition = verdict.decision
             if context is not None and policy is not None and context_sequence is not None:

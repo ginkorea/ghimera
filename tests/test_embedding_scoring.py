@@ -21,7 +21,7 @@ from ghimera.loop import GoalLoop
 from ghimera.model_config import EmbeddingServiceConfig
 from ghimera.model_http import ModelHttpResponse
 from ghimera.models import Extracted, Goal, Harvest, LinkCandidate, Scope
-from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused
+from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused, RefusalCode
 from ghimera.scoring_config import ScoringConfig
 from ghimera.semantic_scoring import EmbeddingScorer
 
@@ -332,8 +332,14 @@ def test_semantic_failure_is_accounted_and_does_not_fall_back_to_keywords(endpoi
             Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",)),
         )
     )
-    assert result.receipt.stop_reason == "failed"
-    assert result.receipt.judge_calls == 0 and result.receipt.encoding_calls == 1
+    # 0.4.12: an unavailable encoder refuses the page; the round itself continues.
+    assert result.receipt.stop_reason == "frontier_empty"
+    page = next(row for row in result.ledger if row.event == "refusal")
+    assert page.refusal == RefusalCode.MODEL_UNAVAILABLE
+    assert page.detail == "encoder answered HTTP 200 with a refused envelope"
+    # A page's batches are sent concurrently; every call made is accounted.
+    assert result.receipt.judge_calls == 0
+    assert result.receipt.encoding_calls == len(endpoint[1]) >= 1
     assert not result.documents
     assert next(row for row in result.ledger if row.encoding_call).refusal is not None
     assert Harvest.model_validate_json(result.model_dump_json()) == result
@@ -784,7 +790,7 @@ def test_intent_reference_failure_keeps_spend_and_never_invents_vectors(endpoint
             Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",)),
         )
     )
-    assert result.receipt.stop_reason == "failed" and result.receipt.encoding_calls == 1
+    assert result.receipt.stop_reason == "frontier_empty" and result.receipt.encoding_calls == 1
     assert not result.documents and not any(row.intent_reference for row in result.ledger)
     assert result.receipt.judge_calls == 0 and len(endpoint[1]) == 1
     assert Harvest.model_validate_json(result.model_dump_json()) == result

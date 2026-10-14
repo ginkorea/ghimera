@@ -28,6 +28,7 @@ from ghimera.judgment_types import DocumentJudgmentConfig
 from ghimera.local_input_types import LocalInputConfig
 from ghimera.mcp_lead_config import McpLeadConfig
 from ghimera.model_config import ModelBindingsConfig
+from ghimera.model_retry import DEFAULT_MODEL_RETRY, ModelRetryPolicy
 from ghimera.model_work_types import ModelWorkConfig
 from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.reference_config import ReferenceConfig
@@ -140,6 +141,10 @@ class GhimeraConfig(BaseModel):
     user_agent: Annotated[str, Field(min_length=1)]
     egress_feature: Literal["crawl_egress"]
     model_policy: Literal["self_hosted_only"]
+    # Transient model/encoder refusals are retried with bounded backoff by default.
+    model_retry: ModelRetryPolicy = Field(
+        default=DEFAULT_MODEL_RETRY, exclude_if=lambda value: value == DEFAULT_MODEL_RETRY
+    )
     http: HttpPolicy | None = None
     cadence: CadenceConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     execution: ExecutionConfig | None = Field(default=None, exclude_if=lambda value: value is None)

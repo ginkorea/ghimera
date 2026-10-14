@@ -131,6 +131,8 @@ class GhimeraRefused(Exception):
     def __init__(self, code: RefusalCode, detail: str | None = None) -> None:
         self.code = code
         self.detail = refusal_detail(detail) if detail else _raise_site()
+        # Set by model/encoder clients for a service refusal worth retrying.
+        self.transient = False
         super().__init__(f"{code.value}: {REFUSALS[code]}")
 
     def __str__(self) -> str:
@@ -173,10 +175,17 @@ class ModelFailure(GhimeraRefused):
     """A failed model call still has bounded request/response spend evidence."""
 
     def __init__(
-        self, code: RefusalCode, model_call: ModelCallEvidence, detail: str | None = None
+        self,
+        code: RefusalCode,
+        model_call: ModelCallEvidence,
+        detail: str | None = None,
+        *,
+        transient: bool = False,
     ) -> None:
         self.model_call = model_call
         super().__init__(code, detail)
+        # A service-side refusal worth retrying (reloading, overloaded, dropped).
+        self.transient = transient
 
 
 class ModelCancelled(asyncio.CancelledError):
@@ -186,9 +195,17 @@ class ModelCancelled(asyncio.CancelledError):
 
 
 class EncodingFailure(GhimeraRefused):
-    def __init__(self, code: RefusalCode, call: EncodingCall, detail: str | None = None) -> None:
+    def __init__(
+        self,
+        code: RefusalCode,
+        call: EncodingCall,
+        detail: str | None = None,
+        *,
+        transient: bool = False,
+    ) -> None:
         self.call = call
         super().__init__(code, detail)
+        self.transient = transient
 
 
 class EncodingCancelled(asyncio.CancelledError):
