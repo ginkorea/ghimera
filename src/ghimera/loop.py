@@ -786,11 +786,11 @@ class GoalLoop:
                 )
         if (
             result is None
-            and session.spend.fetches - session._window_start >= self._config.saturation_window
+            and session.spend.page_fetches - session._window_start >= self._config.saturation_window
         ):
             if session._window_new < self._config.saturation_min_new:
                 return "saturated"
-            session._window_start, session._window_new = session.spend.fetches, 0
+            session._window_start, session._window_new = session.spend.page_fetches, 0
         return result
 
     async def process_processing(
@@ -848,10 +848,10 @@ class GoalLoop:
             )
             work.refused(token, code.value, session.ledger.next_sequence)
             raise
-        if session.spend.fetches - session._window_start >= self._config.saturation_window:
+        if session.spend.page_fetches - session._window_start >= self._config.saturation_window:
             if session._window_new < self._config.saturation_min_new:
                 return "saturated"
-            session._window_start, session._window_new = session.spend.fetches, 0
+            session._window_start, session._window_new = session.spend.page_fetches, 0
         return None
 
     async def _import_local(
@@ -1176,12 +1176,12 @@ class GoalLoop:
             stop: CollectionStop | None = result
             if (
                 stop is None
-                and spend.fetches - session._window_start >= self._config.saturation_window
+                and spend.page_fetches - session._window_start >= self._config.saturation_window
             ):
                 if session._window_new < self._config.saturation_min_new:
                     stop = "saturated"
                 else:
-                    session._window_start, session._window_new = spend.fetches, 0
+                    session._window_start, session._window_new = spend.page_fetches, 0
             if completed:
                 token, document = completed[0]
 
@@ -1233,11 +1233,11 @@ class GoalLoop:
             if result is not None:
                 stop = result
                 break
-            if spend.fetches - session._window_start >= self._config.saturation_window:
+            if spend.page_fetches - session._window_start >= self._config.saturation_window:
                 if session._window_new < self._config.saturation_min_new:
                     stop = "saturated"
                     break
-                session._window_start, session._window_new = spend.fetches, 0
+                session._window_start, session._window_new = spend.page_fetches, 0
             if allow_grade and spend.fetches - session._last_grade >= self._config.grade_interval:
                 result = await self._grade_prefix(session, session.documents, spend.fetches)
                 if result is not None:
@@ -1392,14 +1392,14 @@ class GoalLoop:
         try:
             while True:
                 # Never infer saturation from pages still being processed.
-                window_due = spend.fetches - session._window_start >= (
+                window_due = spend.page_fetches - session._window_start >= (
                     self._config.saturation_window
                 )
                 draining_window = window_due and session._window_new < (
                     self._config.saturation_min_new
                 )
                 if window_due and not draining_window:
-                    session._window_start, session._window_new = spend.fetches, 0
+                    session._window_start, session._window_new = spend.page_fetches, 0
                 if draining_window and not sources:
                     return "saturated"
                 if (

@@ -1469,6 +1469,7 @@ class ResearchLoop:
         collection_stop = saved.collection_stop if saved else "frontier_empty"
         before_documents = set(saved.before_documents) if saved else set()
         before_leads = 0
+        before_searches = session.spend.search_calls
         before_answers = set(saved.before_answers) if saved else set()
         assessment_context: Literal["post_collection", "retained_first"] = (
             saved.assessment_context if saved else "post_collection"
@@ -1859,6 +1860,7 @@ class ResearchLoop:
                     history.set_rounds(tuple(rounds))
                     before_documents = {doc.sha256 for doc in session.evidence_documents}
                     before_leads = len(session.followed_leads)
+                    before_searches = session.spend.search_calls
                     prior_assessment = rounds[-1].assessment if rounds else assessment
                     before_answers = (
                         {
@@ -2153,6 +2155,7 @@ class ResearchLoop:
                         pages_by_grade=graded,
                         informed_questions=informed,
                         followed_leads=followed,
+                        searches_made=session.spend.search_calls - before_searches,
                         discovered_urls=urls,
                         assessment=assessment,
                         collection_stop=collection_stop,

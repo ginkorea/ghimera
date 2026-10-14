@@ -149,6 +149,12 @@ class RunSpend:
     def reserve_fetch(self) -> None:
         self.fetches += 1
 
+    @property
+    def page_fetches(self) -> int:
+        """Fetches of pages only: a grounded search reserves a fetch too, but it is
+        not a page and never counts toward the saturation window."""
+        return max(0, self.fetches - self.search_calls)
+
     def record_bytes(self, count: int) -> None:
         self.bytes_read += count
 

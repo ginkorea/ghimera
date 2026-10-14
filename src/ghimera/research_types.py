@@ -429,6 +429,11 @@ class ResearchRound(ResearchRecord):
         default_factory=dict, exclude_if=lambda v: not v
     )
     followed_leads: tuple[str, ...] = Field(default=(), exclude_if=lambda v: not v)
+    # Grounded/provider searches this round ran. They are not page fetches and never
+    # count toward the saturation window.
+    searches_made: Annotated[int, Field(strict=True, ge=0)] = Field(
+        default=0, exclude_if=lambda v: v == 0
+    )
     # A plan is never refused for its size: queries over max_queries_per_round
     # (planner's plus language copies) are omitted, and overlong texts are cut.
     omitted_queries: tuple[SearchQuery, ...] = Field(default=(), exclude_if=lambda v: not v)

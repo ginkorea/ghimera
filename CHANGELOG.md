@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.16 — 2026-10-14
+
+- The saturation window (`saturation_window`/`saturation_min_new`) counts only
+  page fetches. A grounded or provider search still reserves a fetch on the
+  receipt but no longer advances the window, so a round that runs many
+  searches (a three-language plan with language copies) is not stopped
+  `saturated` before it fetches its first page. Rounds report
+  `searches_made`. The stopping rule is otherwise unchanged.
+
 ## 0.4.15 — 2026-10-14
 
 - A fitted plan completes. When fitting cuts or truncates a plan, the `plan`
