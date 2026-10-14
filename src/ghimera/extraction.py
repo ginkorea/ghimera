@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 
 from ghimera.config import GhimeraConfig
 from ghimera.extraction_attempts import (
@@ -21,11 +21,13 @@ from ghimera.extraction_attempts import (
 )
 from ghimera.extraction_config import ExtractionConfig
 from ghimera.extraction_types import ExtractionEvidence, LocatorEvent
+from ghimera.fast_reader import fast_reader_revision, read_fast
 from ghimera.locator_health import LocatorHealthStore
 from ghimera.models import Extracted, Page, Record
 from ghimera.passive_worker import PassiveWorker
 from ghimera.passive_worker import private_directory as private_directory
 from ghimera.passive_worker import read_bounded as read_bounded
+from ghimera.persistent_worker import PersistentWorkerPool
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
 
@@ -38,6 +40,7 @@ class ExtractionRequest(Record):
 class ExtractionResponse(Record):
     result: Extracted | None = None
     refusal: RefusalCode | None = None
+    detail: str | None = Field(default=None, exclude_if=lambda value: value is None)
     locator_events: tuple[LocatorEvent, ...] = ()
 
     @model_validator(mode="after")
@@ -74,28 +77,60 @@ class HtmlExtractor:
         ):
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         self._revision = f"scrapling@{actual[0]}+crawl4ai@{actual[1]}+lingua@{actual[2]}"
-        self._worker = PassiveWorker(
-            interpreter=Path(sys.executable),
-            module="ghimera.html_worker",
-            work_directory=self.config.work_directory,
-            max_workers=self.config.max_workers,
-            timeout_seconds=self.config.timeout_seconds,
-            max_output_bytes=self.config.max_output_bytes,
-            max_diagnostic_bytes=self.config.max_diagnostic_bytes,
-            cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
-            environment={
-                "PYTHONNOUSERSITE": "1",
-                "PYTHONDONTWRITEBYTECODE": "1",
-                "CRAWL4_AI_BASE_DIRECTORY": str(self.config.work_directory),
-                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
-                "DO_NOT_TRACK": "1",
-                "HF_HUB_OFFLINE": "1",
-            },
+        self._fast_revision: str | None = None
+        if self.config.fast_reader is not None:
+            try:
+                import cssselect  # noqa: F401
+                import lxml.cssselect  # noqa: F401
+            except ImportError:
+                raise GhimeraRefused(
+                    RefusalCode.ADAPTER_CONTRACT,
+                    "fast_reader requires lxml and cssselect from the html extra",
+                ) from None
+            self._fast_revision = fast_reader_revision()
+        environment = {
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "CRAWL4_AI_BASE_DIRECTORY": str(self.config.work_directory),
+            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            "DO_NOT_TRACK": "1",
+            "HF_HUB_OFFLINE": "1",
+        }
+        self._worker: PassiveWorker | PersistentWorkerPool = (
+            PersistentWorkerPool(
+                interpreter=Path(sys.executable),
+                module="ghimera.html_worker",
+                work_directory=self.config.work_directory,
+                max_workers=self.config.max_workers,
+                timeout_seconds=self.config.timeout_seconds,
+                max_output_bytes=self.config.max_output_bytes,
+                environment=environment,
+            )
+            if self.config.worker_mode == "persistent"
+            else PassiveWorker(
+                interpreter=Path(sys.executable),
+                module="ghimera.html_worker",
+                work_directory=self.config.work_directory,
+                max_workers=self.config.max_workers,
+                timeout_seconds=self.config.timeout_seconds,
+                max_output_bytes=self.config.max_output_bytes,
+                max_diagnostic_bytes=self.config.max_diagnostic_bytes,
+                cleanup_timeout_seconds=self.config.cleanup_timeout_seconds,
+                environment=environment,
+            )
         )
 
     @property
     def revision(self) -> str:
-        return self._revision
+        """The extractor's tiers; a page's own evidence names the tier that read it."""
+        if self._fast_revision is None:
+            return self._revision
+        return f"{self._fast_revision}|{self._revision}"
+
+    def close(self) -> None:
+        """Retire persistent reader workers; per-page workers own no idle state."""
+        if isinstance(self._worker, PersistentWorkerPool):
+            self._worker.close()
 
     def validate_config(self, config: GhimeraConfig) -> None:
         if config.extraction != self.config:
@@ -107,16 +142,23 @@ class HtmlExtractor:
             "application/xhtml+xml",
         }:
             raise GhimeraRefused(RefusalCode.CONTENT_TYPE_UNWANTED)
-        if (
-            not page.body
-            or len(page.body) > self.config.max_input_bytes
-            or (page.rendered is not None and len(page.rendered.html) > self.config.max_input_bytes)
-        ):
-            raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED)
-        private_directory(self.config.locator_directory)
+        if not page.body:
+            raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED, "html page body is empty")
+        size = max(len(page.body), len(page.rendered.html) if page.rendered is not None else 0)
+        if size > self.config.max_input_bytes:
+            raise GhimeraRefused(
+                RefusalCode.EXTRACTION_FAILED,
+                f"html page of {size} bytes exceeds max_input_bytes={self.config.max_input_bytes}",
+            )
         profile = next(
             (p for p in self.config.profiles if p.host == urlsplit(page.final_url).hostname), None
         )
+        if self.config.fast_reader is not None and profile is None:
+            # First pass in-process; a thin reading goes to the richer tier below.
+            fast = await asyncio.to_thread(read_fast, page, self.config)
+            if fast is not None:
+                return fast
+        private_directory(self.config.locator_directory)
         before = (
             await asyncio.to_thread(self._health.read, profile)
             if self._health is not None and profile is not None
@@ -198,13 +240,18 @@ class HtmlExtractor:
                     ):
                         generic = True
                         continue
-                    raise ExtractionFailure(failure.code, tuple(attempts)) from None
+                    raise ExtractionFailure(failure.code, tuple(attempts), failure.detail) from None
         except TimeoutError:
             if attempts and attempts[-1].outcome == "cancelled":
                 values = attempts[-1].model_dump(by_alias=True)
                 values.update(outcome="refused", refusal=RefusalCode.BUDGET_EXHAUSTED)
                 attempts[-1] = HtmlExtractionAttempt.model_validate(values)
-            raise ExtractionFailure(RefusalCode.BUDGET_EXHAUSTED, tuple(attempts)) from None
+            raise ExtractionFailure(
+                RefusalCode.BUDGET_EXHAUSTED,
+                tuple(attempts),
+                f"html reader exceeded its page deadline "
+                f"timeout_seconds={self.config.timeout_seconds:g} on a {size}-byte page",
+            ) from None
         except asyncio.CancelledError:
             raise ExtractionCancelled(tuple(attempts)) from None
         raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -280,7 +327,7 @@ class HtmlExtractor:
                     wire.locator_events,
                     completed=False,
                 )
-            raise GhimeraRefused(wire.refusal)
+            raise GhimeraRefused(wire.refusal, wire.detail)
         result = wire.result
         if result is None or result.extraction is None:
             raise InvalidExtractionResponse()

@@ -118,11 +118,12 @@ class GhimeraConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
 
     schema_version: Literal["chimera.config/1"] = Field(alias="schema")
-    # Optional run ceilings: "unbounded" (or 0/null) means no limit; see ceilings.py.
-    page_budget: Ceiling
-    byte_budget: Ceiling
-    wall_seconds: SecondsCeiling
-    judge_budget: Ceiling
+    # Run limits are OFF unless configured: absent, "unbounded", 0 or null means no
+    # limit. Spend is still accounted on the receipt; see ceilings.py.
+    page_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
+    byte_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
+    wall_seconds: SecondsCeiling = Field(default=None, exclude_if=lambda value: value is None)
+    judge_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
     grade_interval: PositiveInt
     grade_threshold: Probability
     saturation_window: PositiveInt

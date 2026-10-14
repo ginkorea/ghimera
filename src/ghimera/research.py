@@ -2035,7 +2035,7 @@ class ResearchLoop:
                         {doc.sha256 for doc in session.evidence_documents} - before_documents
                     )
                     empty_rounds = 0 if new_documents else empty_rounds + 1
-                    window = self._policy.saturation_rounds
+                    window = self._policy.effective_saturation_rounds
                     if window is not None and empty_rounds >= window:
                         reason = "saturated"
                         break

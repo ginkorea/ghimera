@@ -13,13 +13,16 @@ from ghimera.research_reuse_config import ResearchReuseConfig
 Positive = Annotated[int, Field(strict=True, gt=0)]
 
 
+DEFAULT_SATURATION_ROUNDS = 2
+
+
 class ResearchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.research/1"] = Field(alias="schema")
-    max_rounds: Ceiling
+    max_rounds: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
     max_questions: Positive
     max_queries_per_round: Positive
-    query_budget: Ceiling
+    query_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
     results_per_query: Positive
     search_concurrency: Positive
     max_pages_per_round: Positive
@@ -43,15 +46,20 @@ class ResearchConfig(BaseModel):
     )
     reranking: ResearchRerankingConfig | None = Field(default=None, exclude_if=lambda v: v is None)
     # Consecutive rounds retaining no new evidence that end research as saturated.
-    # Required when max_rounds is unbounded, so research always has its own stop.
+    # Without max_rounds, research saturates after DEFAULT_SATURATION_ROUNDS.
     saturation_rounds: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @property
+    def effective_saturation_rounds(self) -> int | None:
+        """The mission's own stop: no new evidence for this many consecutive rounds."""
+        if self.saturation_rounds is not None:
+            return self.saturation_rounds
+        return DEFAULT_SATURATION_ROUNDS if self.max_rounds is None else None
 
     @model_validator(mode="after")
     def coherent(self) -> "ResearchConfig":
         if self.source_policy == "configured_only" and not self.allowed_hosts:
             raise ValueError("configured-only discovery needs explicit hosts")
-        if self.max_rounds is None and self.saturation_rounds is None:
-            raise ValueError("unbounded research rounds require saturation_rounds as their stop")
         if self.search_concurrency > self.max_queries_per_round:
             raise ValueError("search concurrency exceeds per-round queries")
         if len(self.allowed_hosts) > self.max_source_hosts:

@@ -40,6 +40,10 @@ class ExtractionEvidence(BaseModel):
     rendered_sha256: Digest | None = None
     locator_health: LocatorHealth | None = Field(default=None, exclude_if=lambda v: v is None)
     attempts: tuple[HtmlExtractionAttempt, ...] = Field(default=(), exclude_if=lambda v: not v)
+    # Characters beyond max_text_chars that the first-pass reader cut, not refused.
+    omitted_text_chars: Annotated[int, Field(strict=True, ge=0)] = Field(
+        default=0, exclude_if=lambda value: value == 0
+    )
 
     @model_validator(mode="after")
     def attempt_binding(self) -> "ExtractionEvidence":

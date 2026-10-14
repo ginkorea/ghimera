@@ -131,19 +131,44 @@ def test_one_pages_own_bound_never_ends_the_round(parallel):
     assert slow[-1].detail == "html reader exceeded timeout_seconds=1"
 
 
-def test_unbounded_research_rounds_require_their_own_saturation_stop():
-    from ghimera.research_config import ResearchConfig
+def test_research_rounds_are_off_by_default_and_saturation_is_the_stop():
+    from ghimera.research_config import DEFAULT_SATURATION_ROUNDS, ResearchConfig
     from tests.test_intent_research import policy
 
-    with pytest.raises(ValidationError, match="saturation_rounds"):
-        ResearchConfig.model_validate(policy(max_rounds="unbounded"))
-    unbounded = ResearchConfig.model_validate(
-        policy(max_rounds="unbounded", query_budget=0, saturation_rounds=2)
+    raw = policy()
+    del raw["max_rounds"], raw["query_budget"]
+    unbounded = ResearchConfig.model_validate(raw)
+    assert (unbounded.max_rounds, unbounded.query_budget) == (None, None)
+    assert unbounded.effective_saturation_rounds == DEFAULT_SATURATION_ROUNDS
+    assert "max_rounds" not in unbounded.model_dump(by_alias=True)
+    explicit = ResearchConfig.model_validate(policy(max_rounds="unbounded", saturation_rounds=4))
+    assert explicit.effective_saturation_rounds == 4
+    # An explicit round limit keeps the original behaviour and identity.
+    limited = ResearchConfig.model_validate(policy())
+    assert limited.max_rounds == 3 and limited.effective_saturation_rounds is None
+    assert "saturation_rounds" not in limited.model_dump()
+
+
+def test_run_limits_are_off_by_default_and_spend_is_still_accounted():
+    from ghimera.config import GhimeraConfig
+
+    raw = config().model_dump(by_alias=True)
+    for key in ("page_budget", "byte_budget", "wall_seconds", "judge_budget"):
+        del raw[key]
+    cfg = GhimeraConfig.model_validate(raw)
+    assert (cfg.page_budget, cfg.byte_budget, cfg.wall_seconds, cfg.judge_budget) == (None,) * 4
+    assert not {"page_budget", "byte_budget", "wall_seconds", "judge_budget"} & set(
+        cfg.model_dump(by_alias=True)
     )
-    assert (unbounded.max_rounds, unbounded.query_budget, unbounded.saturation_rounds) == (
-        None,
-        None,
-        2,
+    loop = GoalLoop(
+        config=cfg.model_copy(update={"saturation_window": 50}),
+        fetcher=FetchLadder((FakeRoute(),)),
+        extractor=FakeExtractor(),
+        scorer=KeywordScorer(),
+        judge=FakeJudge(),
     )
-    # Absent saturation_rounds is omitted, preserving existing recipe identities.
-    assert "saturation_rounds" not in ResearchConfig.model_validate(policy()).model_dump()
+    result = asyncio.run(loop.run(Goal(text="ports", seeds=("https://example.org/a",)), scope()))
+    assert result.receipt.stop_reason == "frontier_empty"
+    assert result.receipt.fetches == 3 and result.receipt.judge_calls == 3
+    assert result.receipt.bytes_read > 0
+    assert not any(row.refusal == RefusalCode.BUDGET_EXHAUSTED for row in result.ledger)

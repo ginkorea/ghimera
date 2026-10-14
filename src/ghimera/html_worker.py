@@ -5,19 +5,20 @@ API stack eagerly. No crawler, browser, LLM filter or model client is constructe
 The audit guard is defense in depth, not an OS-level anonymity/sandbox claim.
 """
 
-import codecs
 import contextlib
 import hashlib
 import html
 import sys
 from html.parser import HTMLParser
 from typing import Literal
-from urllib.parse import urldefrag, urljoin, urlsplit
+from urllib.parse import urlsplit
 
 from ghimera.extraction import ExtractionRequest, ExtractionResponse
-from ghimera.extraction_config import ExtractionConfig, LocatorProfile
+from ghimera.extraction_config import LocatorProfile
 from ghimera.extraction_types import ExtractionEvidence, LocatorEvent
-from ghimera.models import Extracted, LinkCandidate, Page
+from ghimera.fast_reader import encoding as encoding
+from ghimera.fast_reader import public_link as public_link
+from ghimera.models import Extracted, LinkCandidate
 from ghimera.refusals import GhimeraRefused, RefusalCode
 
 
@@ -71,32 +72,6 @@ class CleanHtml(HTMLParser):
         self.feed(source)
         self.close()
         return "".join(self._chunks)
-
-
-def encoding(page: Page, config: ExtractionConfig) -> str:
-    for part in page.content_type.split(";")[1:]:
-        if part.strip().lower().startswith("charset="):
-            name = part.strip().split("=", 1)[1].strip().strip("\"'")
-            return codecs.lookup(name).name
-    return codecs.lookup(config.default_encoding).name
-
-
-def public_link(base: str, value: str) -> str | None:
-    try:
-        joined = urldefrag(urljoin(base, value)).url
-        parts = urlsplit(joined)
-        if (
-            parts.scheme not in {"http", "https"}
-            or not parts.hostname
-            or parts.username is not None
-            or parts.password is not None
-            or any(ord(c) < 33 for c in joined)
-        ):
-            return None
-        _ = parts.port
-        return joined
-    except ValueError:
-        return None
 
 
 def parse(request: ExtractionRequest, events: list[LocatorEvent]) -> Extracted:
@@ -193,7 +168,10 @@ def parse(request: ExtractionRequest, events: list[LocatorEvent]) -> Extracted:
     elif any(row.field == "body" and row.status == "relocated" for row in events):
         selection = "relocated"
     if body is None:
-        raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED)
+        raise GhimeraRefused(
+            RefusalCode.EXTRACTION_FAILED,
+            f"rich reader: no body under generic selectors on a {len(source)}-char page",
+        )
     title = (
         field_value("title", profile.title if profile else None)
         or metadata('meta[property="og:title"]', "content")
@@ -221,13 +199,21 @@ def parse(request: ExtractionRequest, events: list[LocatorEvent]) -> Extracted:
         options={"ignore_images": True, "body_width": 0, "escape_html": False},
     ).generate_markdown(selected_html, base_url=page.final_url, citations=False)
     text, raw_markdown = markdown.fit_markdown.strip(), markdown.raw_markdown
-    if (
-        not title
-        or not text
-        or text.startswith(("Error generating", "Error in markdown", "Error converting"))
-        or len(text) > config.max_text_chars
-    ):
-        raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED)
+    why = (
+        "no title"
+        if not title
+        else "no text after the content filter"
+        if not text
+        else "the markdown generator reported an error"
+        if text.startswith(("Error generating", "Error in markdown", "Error converting"))
+        else f"text of {len(text)} chars exceeds max_text_chars={config.max_text_chars}"
+        if len(text) > config.max_text_chars
+        else None
+    )
+    if why is not None or not title:
+        raise GhimeraRefused(
+            RefusalCode.EXTRACTION_FAILED, f"rich reader: {why} on a {len(source)}-char page"
+        )
     sample = str(body.get_all_text(separator=" ", strip=True, ignore_tags=config.excluded_tags))[
         : config.language_max_chars
     ]
@@ -240,7 +226,10 @@ def parse(request: ExtractionRequest, events: list[LocatorEvent]) -> Extracted:
     detector = LanguageDetectorBuilder.from_iso_codes_639_1(*codes).with_low_accuracy_mode().build()
     confidence = detector.compute_language_confidence_values(sample)
     if not confidence:
-        raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED)
+        raise GhimeraRefused(
+            RefusalCode.EXTRACTION_FAILED,
+            f"rich reader: no language confidence for a {len(sample)}-char sample",
+        )
     highest = confidence[0]
     margin = highest.value - confidence[1].value if len(confidence) > 1 else highest.value
     language = (
@@ -302,25 +291,60 @@ def parse(request: ExtractionRequest, events: list[LocatorEvent]) -> Extracted:
     )
 
 
-def _cmd_extract() -> int:
-    sys.addaudithook(no_network)
+def answer(raw: bytes) -> bytes:
     events: list[LocatorEvent] = []
     try:
         with contextlib.redirect_stdout(sys.stderr):
-            request = ExtractionRequest.model_validate_json(sys.stdin.buffer.read())
+            request = ExtractionRequest.model_validate_json(raw)
             result = parse(request, events)
         wire = ExtractionResponse(result=result, locator_events=tuple(events))
     except GhimeraRefused as exc:
-        wire = ExtractionResponse(refusal=exc.code, locator_events=tuple(events))
-    except Exception:
+        wire = ExtractionResponse(refusal=exc.code, detail=exc.detail, locator_events=tuple(events))
+    except Exception as exc:
         # Third-party parsing is an untrusted boundary. Never leak vendor errors
         # or return their "Error ..." prose as a document or retry using a fetcher.
         wire = ExtractionResponse(
-            refusal=RefusalCode.EXTRACTION_FAILED, locator_events=tuple(events)
+            refusal=RefusalCode.EXTRACTION_FAILED,
+            detail=f"vendor parser raised {type(exc).__name__}",
+            locator_events=tuple(events),
         )
-    sys.stdout.write(wire.model_dump_json())
+    return wire.model_dump_json().encode()
+
+
+def _cmd_extract() -> int:
+    sys.addaudithook(no_network)
+    sys.stdout.buffer.write(answer(sys.stdin.buffer.read()))
+    return 0
+
+
+def _cmd_serve() -> int:
+    """Length-prefixed requests on stdin until EOF; vendor imports happen once."""
+    import os
+    import struct
+
+    sys.addaudithook(no_network)
+    frame = struct.Struct(">Q")
+    # Frames own the original stdout descriptor; stray vendor writes go to stderr.
+    output = os.fdopen(os.dup(1), "wb")
+    os.dup2(2, 1)
+    with contextlib.redirect_stdout(sys.stderr):
+        from crawl4ai.content_filter_strategy_lxml import PruningContentFilterLXML  # noqa: F401
+        from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator  # noqa: F401
+        from lingua import LanguageDetectorBuilder  # noqa: F401
+        from scrapling.parser import Selector  # noqa: F401
+    source = sys.stdin.buffer
+    while header := source.read(frame.size):
+        if len(header) != frame.size:
+            return 2
+        (size,) = frame.unpack(header)
+        raw = source.read(size)
+        if len(raw) != size:
+            return 2
+        response = answer(raw)
+        output.write(frame.pack(len(response)) + response)
+        output.flush()
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(_cmd_extract())
+    raise SystemExit(_cmd_serve() if sys.argv[1:] == ["--serve"] else _cmd_extract())

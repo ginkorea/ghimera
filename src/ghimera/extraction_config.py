@@ -30,6 +30,15 @@ class LocatorProfile(BaseModel):
         return value
 
 
+class FastReaderPolicy(BaseModel):
+    """First-pass in-process lxml reading; thinner pages go to the richer tier."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+    schema_version: Literal["ghimera.fast-reader/1"] = Field(alias="schema")
+    # A titled page with at least this much body text is read in-process.
+    min_text_chars: Positive
+
+
 class ExtractionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.extraction/1"] = Field(alias="schema")
@@ -62,6 +71,12 @@ class ExtractionConfig(BaseModel):
     profiles: tuple[LocatorProfile, ...] = ()
     locator_drift: LocatorDriftPolicy | None = Field(default=None, exclude_if=lambda v: v is None)
     recovery: ExtractionRecoveryPolicy | None = Field(default=None, exclude_if=lambda v: v is None)
+    fast_reader: FastReaderPolicy | None = Field(default=None, exclude_if=lambda v: v is None)
+    # per_page spawns one bounded interpreter per page (the original contract);
+    # persistent keeps max_workers interpreters that import the parsers once.
+    worker_mode: Literal["per_page", "persistent"] = Field(
+        default="per_page", exclude_if=lambda value: value == "per_page"
+    )
 
     @model_validator(mode="after")
     def coherent(self) -> "ExtractionConfig":

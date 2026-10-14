@@ -26,8 +26,8 @@ class ScoringConfig(BaseModel):
     references_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
-    encoding_call_budget: Ceiling
-    encoding_char_budget: Ceiling
+    encoding_call_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
+    encoding_char_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
     window_chars: Positive
     overlap_chars: Annotated[int, Field(strict=True, ge=0)]
     max_windows: Positive
