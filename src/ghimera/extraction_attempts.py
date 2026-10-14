@@ -21,6 +21,9 @@ class ExtractionRecoveryPolicy(BaseModel):
     mode: Literal["disabled", "generic_once"]
 
 
+INVALID_RESPONSE_REFUSALS = frozenset({RefusalCode.EXTRACTION_FAILED, RefusalCode.ADAPTER_CONTRACT})
+
+
 class HtmlExtractionAttempt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.html-extraction-attempt/1"] = Field(alias="schema")
@@ -51,8 +54,10 @@ class HtmlExtractionAttempt(BaseModel):
             raise ValueError("failed parsing must name its refusal")
         if self.outcome in {"success", "invalid_response"} and self.response_sha256 is None:
             raise ValueError("received parser outcomes must bind their response bytes")
-        if self.outcome == "invalid_response" and self.refusal != RefusalCode.ADAPTER_CONTRACT:
-            raise ValueError("invalid worker responses must name their adapter contract fault")
+        # Since 0.4.17 one page's invalid worker answer is a page fault
+        # (extraction_failed); journals before it named adapter_contract.
+        if self.outcome == "invalid_response" and self.refusal not in INVALID_RESPONSE_REFUSALS:
+            raise ValueError("invalid worker responses must name their page extraction fault")
         if self.generic_only and self.locators:
             raise ValueError("generic parsing cannot claim configured selector observations")
         return self
@@ -107,6 +112,7 @@ def validate_chain(attempts: tuple[HtmlExtractionAttempt, ...]) -> None:
         not in {
             ("refused", RefusalCode.EXTRACTION_FAILED),
             ("invalid_response", RefusalCode.ADAPTER_CONTRACT),
+            ("invalid_response", RefusalCode.EXTRACTION_FAILED),
         }
     ):
         raise ValueError("only a parsing/validation failure permits generic recovery")
@@ -139,10 +145,15 @@ class ExtractionCancelled(asyncio.CancelledError):
 
 
 class InvalidExtractionResponse(GhimeraRefused):
-    """Only this adapter's result-validation fault, not a damaged state store."""
+    """One page's worker answered something that failed result validation.
+
+    That is a fault of this page's reading, refused as ``extraction_failed`` so the
+    round continues; it is never a core contract fault.
+    """
 
     def __init__(self, detail: str | None = None) -> None:
         super().__init__(
-            RefusalCode.ADAPTER_CONTRACT,
-            detail or "HTML extraction worker response failed result validation",
+            RefusalCode.EXTRACTION_FAILED,
+            "HTML extraction worker response failed result validation"
+            + (f": {detail}" if detail else ""),
         )

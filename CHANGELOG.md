@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.17 — 2026-10-14
+
+- One page's HTML worker answering an invalid result is a page fault, not a
+  core contract fault (QA-GHIMERA-53). It is refused as `extraction_failed`
+  with a detail naming what failed validation (not JSON, locator events, no
+  result, or which evidence fields do not bind the page). The page gets its
+  generic retry and then the plain fallback reader, its bytes are archived if
+  nothing is readable, and the round continues. `adapter_contract` is reserved
+  for the core's own invariants and an injected adapter's wiring. Journals
+  that recorded `invalid_response` as `adapter_contract` still load.
+- Semantic window refusals say what was checked and found (QA-GHIMERA-54):
+  the window span, the phase and page size, and which mention or relation
+  failed and why (surface text not in the window, wrong citation, role or rule
+  not configured, review verdict), or which proposal bound was exceeded, or
+  the first line of a model-answer shape error. Reviewer refusals keep their
+  detail. A page whose semantic windows are refused keeps its document, graph
+  node and reading.
+
 ## 0.4.16 — 2026-10-14
 
 - The saturation window (`saturation_window`/`saturation_min_new`) counts only

@@ -27,6 +27,7 @@ from ghimera.refusals import (
     ModelCancelled,
     ModelFailure,
     RefusalCode,
+    refusal_detail,
 )
 from ghimera.semantic_batching import assemble_review, review_selections
 from ghimera.semantic_contract import build_graph_contract
@@ -131,6 +132,23 @@ def bound_service(config: GhimeraConfig) -> ModelServiceConfig:
     return models.service(policy.model_role)
 
 
+MENTION_REASONS = {
+    "unknown_role": "its role is not one of the configured entity_roles",
+    "citation_mismatch": "it cites a window other than the one it was read from",
+    "native_span_missing": "its surface text (at the stated occurrence) is not in the window",
+    "review_unsupported": "the independent review found it unsupported",
+    "review_ambiguous": "the independent review found it ambiguous",
+}
+RELATION_REASONS = {
+    "endpoint_quarantined": "an endpoint mention was refused or does not exist",
+    "unknown_relation": "its rule is not one of the configured relation_rules",
+    "endpoint_role_mismatch": "an endpoint's role is not allowed by the rule",
+    "citation_mismatch": "it cites a window other than the one it was read from",
+    "review_unsupported": "the independent review found it unsupported",
+    "review_ambiguous": "the independent review found it ambiguous",
+}
+
+
 def project(
     config: GhimeraConfig,
     graph: ResearchGraph,
@@ -148,26 +166,42 @@ def project(
     proposal = SemanticProposal.model_validate(proposal.model_dump())
     policy, graph_policy, call = config.semantics, config.graph, proposal.model_call
     if policy is None or graph_policy is None or call is None:
-        raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+        raise GhimeraRefused(
+            RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+            "projection needs semantics and graph policies and the proposal's model call",
+        )
     if policy.window_selection is None:
         if (
             selection is not None
             or selection_ref is not None
             or omitted not in {0, len(document.extracted.text) - end}
         ):
-            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+            raise GhimeraRefused(
+                RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+                f"window {start}-{end}: unselected window carries a selection or "
+                f"omits {omitted} chars that are not the text after it",
+            )
     else:
         if selection is None or selection_ref is None or selection.graph_document_id != document_id:
-            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+            raise GhimeraRefused(
+                RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+                f"window {start}-{end}: selected window lacks its selection plan for this document",
+            )
         try:
             validate_selection_source(selection, document, policy)
             validate_attempt(
                 selection, selection_ref, selection_ref.window_index, start, end, omitted
             )
-        except ValueError:
-            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED) from None
+        except ValueError as exc:
+            raise GhimeraRefused(
+                RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+                f"window {start}-{end}: selection does not bind this window ({exc})",
+            ) from None
     if (policy.verification is not None) != (review is not None):
-        raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+        raise GhimeraRefused(
+            RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+            f"window {start}-{end}: verification policy and review must be present together",
+        )
     if review is not None:
         review = restore_review(review)
         validate_review(config, proposal, review, document, start, end, intent)
@@ -207,7 +241,11 @@ def project(
             reason = "review_ambiguous"
         if reason is not None:
             if review is None:
-                raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+                raise GhimeraRefused(
+                    RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+                    f"window {start}-{end}: mention {mention.key!r} "
+                    f"({mention.surface[:60]!r}) refused: {MENTION_REASONS[reason]}",
+                )
             excluded_mentions.append(MentionExclusion(key=mention.key, reason=reason))
             continue
         match = matches[mention.occurrence]
@@ -260,11 +298,18 @@ def project(
             reason = "review_ambiguous"
         if reason is not None:
             if review is None:
-                raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+                raise GhimeraRefused(
+                    RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+                    f"window {start}-{end}: relation {index} ({relation.rule} "
+                    f"{relation.source}->{relation.target}) refused: {RELATION_REASONS[reason]}",
+                )
             excluded_relations.append(RelationExclusion(index=index, reason=reason))
             continue
         if source is None or target is None:
-            raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+            raise GhimeraRefused(
+                RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+                f"window {start}-{end}: relation {index} names an endpoint not in the window",
+            )
         edge = graph.edge(
             relation.rule,
             source.node.id,
@@ -592,12 +637,18 @@ class SemanticStage:
                     record_terminal=record_terminal_refusal or plan is not None,
                     selection=selection_ref,
                 )
-                detail = (
-                    exc.detail
+                base = (
+                    exc.detail or ""
                     if isinstance(exc, GhimeraRefused)
                     else "semantic window passed its service deadline"
                     if isinstance(exc, TimeoutError)
-                    else "semantic reply failed validation"
+                    else "model answer shape failed validation: " + str(exc).splitlines()[0][:200]
+                )
+                # Every window refusal names the window, the phase and what failed.
+                detail = refusal_detail(
+                    base
+                    if base.startswith("window ")
+                    else f"window {start}-{end} ({phase}, {len(text)}-char page): {base}"
                 )
                 self._failure(ledger, document.url, code, call, refusal, detail)
                 if refusal is not None and refusal.continued:
@@ -748,7 +799,17 @@ class SemanticStage:
             if isinstance(exc, ModelFailure):
                 call = exc.model_call
             # Do not replace the extractor call with reviewer provenance.
-            raise GhimeraRefused(refusal) from None
+            raise GhimeraRefused(
+                refusal,
+                (
+                    exc.detail
+                    if isinstance(exc, GhimeraRefused)
+                    else f"window {start}-{end}: review passed its service deadline"
+                    if isinstance(exc, TimeoutError)
+                    else f"window {start}-{end}: review reply failed validation: "
+                    + str(exc).splitlines()[0][:200]
+                ),
+            ) from None
         finally:
             ledger.append(
                 LedgerRow(

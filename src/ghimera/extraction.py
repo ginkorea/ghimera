@@ -358,8 +358,12 @@ class HtmlExtractor:
         responses.append(hashlib.sha256(response).hexdigest())
         try:
             wire = ExtractionResponse.model_validate_json(response)
-        except ValueError:
-            raise InvalidExtractionResponse() from None
+        except ValueError as exc:
+            first = str(exc).splitlines()
+            raise InvalidExtractionResponse(
+                f"answer of {len(response)} bytes is not a valid extraction response"
+                + (f" ({first[0][:160]})" if first else "")
+            ) from None
         expected = (
             {}
             if profile is None
@@ -375,7 +379,10 @@ class HtmlExtractor:
             or len({event.field for event in wire.locator_events}) != len(wire.locator_events)
             or any(expected.get(event.field) != event.selector for event in wire.locator_events)
         ):
-            raise InvalidExtractionResponse()
+            raise InvalidExtractionResponse(
+                "locator events do not match the publisher profile"
+                + (" (generic parse must report none)" if generic else "")
+            )
         locators.extend(wire.locator_events)
         if wire.refusal is not None:
             if self._health is not None and profile is not None:
@@ -389,23 +396,39 @@ class HtmlExtractor:
             raise GhimeraRefused(wire.refusal, wire.detail)
         result = wire.result
         if result is None or result.extraction is None:
-            raise InvalidExtractionResponse()
+            raise InvalidExtractionResponse(
+                "answer carries neither a result with evidence nor a refusal"
+            )
         evidence = result.extraction
-        if (
-            evidence.source_sha256 != hashlib.sha256(page.body).hexdigest()
-            or evidence.source_url != page.final_url
-            or evidence.text_sha256 != hashlib.sha256(result.text.encode()).hexdigest()
-            or evidence.config_digest != self.config.content_digest()
-            or evidence.parser_revision != self.revision
-            or evidence.rendered_sha256
-            != (page.rendered.html_sha256 if page.rendered is not None else None)
-            or len(result.text) > self.config.max_text_chars
-            or len(result.links) > self.config.max_links
-            or wire.locator_events != evidence.locators
-            or evidence.locator_health is not None
-            or evidence.attempts
-        ):
-            raise InvalidExtractionResponse()
+        checks = (
+            ("source_sha256", evidence.source_sha256 != hashlib.sha256(page.body).hexdigest()),
+            ("source_url", evidence.source_url != page.final_url),
+            (
+                "text_sha256",
+                evidence.text_sha256 != hashlib.sha256(result.text.encode()).hexdigest(),
+            ),
+            ("config_digest", evidence.config_digest != self.config.content_digest()),
+            ("parser_revision", evidence.parser_revision != self.revision),
+            (
+                "rendered_sha256",
+                evidence.rendered_sha256
+                != (page.rendered.html_sha256 if page.rendered is not None else None),
+            ),
+            (
+                f"text over max_text_chars={self.config.max_text_chars}",
+                len(result.text) > self.config.max_text_chars,
+            ),
+            (
+                f"links over max_links={self.config.max_links}",
+                len(result.links) > self.config.max_links,
+            ),
+            ("locators", wire.locator_events != evidence.locators),
+            ("locator_health set by the worker", evidence.locator_health is not None),
+            ("attempts set by the worker", bool(evidence.attempts)),
+        )
+        failed = [name for name, bad in checks if bad]
+        if failed:
+            raise InvalidExtractionResponse("result does not bind this page: " + ", ".join(failed))
         if self._health is not None and profile is not None:
             health = await asyncio.to_thread(
                 self._health.observe,

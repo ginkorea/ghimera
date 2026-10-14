@@ -28,20 +28,47 @@ def validate_proposal(
     intent: str,
 ) -> Citation:
     policy, models, call = config.semantics, config.models, proposal.model_call
-    if (
-        policy is None
-        or models is None
-        or call is None
-        or call.service != models.service(policy.model_role)
-        or call.task != "semantic_extract"
-        or call.prompt_revision != policy.effective_prompt_revision
-        or call.outcome != "success"
-        or len(proposal.mentions) > policy.max_mentions_per_window
-        or len(proposal.relations) > policy.max_relations_per_window
-        or not 0 <= start < end <= len(document.extracted.text)
-        or end - start > policy.window_chars
-    ):
-        raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+    if policy is None or models is None or call is None:
+        raise GhimeraRefused(
+            RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+            "semantic proposal needs its semantics policy, models and model call",
+        )
+    checks = (
+        (
+            "model call is not this recipe's semantic service",
+            call.service != models.service(policy.model_role),
+        ),
+        ("model call task is not semantic_extract", call.task != "semantic_extract"),
+        (
+            "prompt revision differs from the recipe",
+            call.prompt_revision != policy.effective_prompt_revision,
+        ),
+        ("model call did not succeed", call.outcome != "success"),
+        (
+            f"{len(proposal.mentions)} mentions over max_mentions_per_window="
+            f"{policy.max_mentions_per_window}",
+            len(proposal.mentions) > policy.max_mentions_per_window,
+        ),
+        (
+            f"{len(proposal.relations)} relations over max_relations_per_window="
+            f"{policy.max_relations_per_window}",
+            len(proposal.relations) > policy.max_relations_per_window,
+        ),
+        (
+            f"window outside the {len(document.extracted.text)}-char page",
+            not 0 <= start < end <= len(document.extracted.text),
+        ),
+        (
+            f"window of {end - start} chars over window_chars={policy.window_chars}",
+            end - start > policy.window_chars,
+        ),
+    )
+    failed = [name for name, bad in checks if bad]
+    if failed:
+        raise GhimeraRefused(
+            RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+            f"window {start}-{end}: " + "; ".join(failed),
+        )
     citation = native_citation(document, start, end)
     context = ContextSelector(
         call.service.context.model_copy(update={"max_documents": 1, "max_windows_per_document": 1})
@@ -51,7 +78,10 @@ def validate_proposal(
         or call.selected_spans != ((citation.document_id, start, end),)
         or call.omitted_chars != len(document.extracted.text) - (end - start)
     ):
-        raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
+        raise GhimeraRefused(
+            RefusalCode.SEMANTIC_EXTRACTION_FAILED,
+            f"window {start}-{end}: model call does not bind the exact window context sent",
+        )
     return citation
 
 
