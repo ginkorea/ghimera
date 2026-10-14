@@ -141,7 +141,10 @@ def _text(element: Any) -> str:
         node.text = "\n" + (node.text or "")
         if node is not element:
             node.tail = "\n" + (node.tail or "")
-    lines = (" ".join(line.split()) for line in "".join(element.itertext()).split("\n"))
+    from lxml import etree
+
+    raw = etree.tostring(element, method="text", encoding="unicode", with_tail=False)
+    lines = (" ".join(line.split()) for line in raw.split("\n"))
     return "\n".join(line for line in lines if line)
 
 
@@ -170,22 +173,45 @@ def read_fast(page: Page, config: "ExtractionConfig") -> Extracted | None:
         return None
 
     def select(element: Any, selector: str) -> list[Any]:
-        return _selector(selector)(element)  # type: ignore[no-any-return]
+        selected: list[Any] = _selector(selector)(element)
+        return selected
 
-    def first(selector: str, attribute: str | None = None) -> str | None:
-        for node in select(root, selector):
-            value = node.get(attribute) if attribute else "".join(node.itertext())
-            if isinstance(value, str) and value.strip():
-                return " ".join(value.split())
+    def clean(value: object) -> str | None:
+        return " ".join(value.split()) or None if isinstance(value, str) else None
+
+    # One pass over <head> metadata instead of whole-document selector scans.
+    metas: dict[tuple[str, str], str] = {}
+    head = root.find("head")
+    for node in head.iter("meta", "link", "title") if head is not None else ():
+        if node.tag == "meta":
+            for key in ("property", "name"):
+                name = (node.get(key) or "").strip().lower()
+                content = clean(node.get("content"))
+                if name and content:
+                    metas.setdefault((key, name), content)
+        elif node.tag == "link" and "canonical" in (node.get("rel") or "").lower().split():
+            metas.setdefault(("link", "canonical"), node.get("href") or "")
+        elif node.tag == "title":
+            if text := clean("".join(node.itertext())):
+                metas.setdefault(("title", ""), text)
+
+    def first_text(tag: str) -> str | None:
+        for node in root.iter(tag):
+            if value := clean("".join(node.itertext())):
+                return value
         return None
 
-    title = first('meta[property="og:title"]', "content") or first("h1") or first("title")
-    byline = first('meta[name="author"]', "content")
-    date = first('meta[property="article:published_time"]', "content") or first(
-        "time[datetime]", "datetime"
-    )
-    canonical = first('link[rel="canonical"]', "href")
-    declared_language = first("html[lang]", "lang")
+    def first_attribute(tag: str, attribute: str) -> str | None:
+        for node in root.iter(tag):
+            if value := clean(node.get(attribute)):
+                return value
+        return None
+
+    title = metas.get(("property", "og:title")) or first_text("h1") or metas.get(("title", ""))
+    byline = metas.get(("name", "author"))
+    date = metas.get(("property", "article:published_time")) or first_attribute("time", "datetime")
+    canonical = clean(metas.get(("link", "canonical")))
+    declared_language = clean(root.get("lang"))
     dropped = ALWAYS_DROPPED | set(config.excluded_tags)
     for node in list(root.iter(*dropped)):
         _drop(node)

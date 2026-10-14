@@ -3,7 +3,7 @@
 import asyncio
 import sys
 from enum import StrEnum
-from types import MappingProxyType
+from types import FrameType, MappingProxyType
 
 from ghimera.embedding_types import EncodingCall
 from ghimera.model_types import ModelCallEvidence
@@ -109,11 +109,11 @@ def refusal_detail(text: str) -> str:
 
 def _raise_site() -> str:
     """Name the check that refused when the raising code supplied no sentence."""
-    frame = sys._getframe(2)
+    frame: FrameType | None = sys._getframe(2)
     while frame is not None and (
         frame.f_code.co_filename == __file__ or frame.f_code.co_name == "__init__"
     ):
-        frame = frame.f_back  # type: ignore[assignment]
+        frame = frame.f_back
     if frame is None:
         return "refused without a recorded check"
     module = frame.f_globals.get("__name__", "unknown")

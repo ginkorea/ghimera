@@ -388,8 +388,9 @@ def test_new_fields_are_inert_and_legacy_model_client_schemas_stay_exact():
     assert inert.execution.operation == "observe_model_unknown"
     assert inert.execution.model_decision is None and inert.execution.model_attempt is None
     # Measured against exact ebeadc legacy source using the same pinned interpreter.
+    # 0.4.12 deliberately adds the optional SearchQuery.language to the plan schema.
     expected = {
-        ResearchPlan: "ca42524bdf8fae6a83d445f67c112c8e733385a7167ef051717505df249f3d49",
+        ResearchPlan: "1967bb364a241e533ebd4e327b55f6859fa8466966054157cbecbdc0bb817d12",
         Assessment: "6abab2df336a98b44f7ded6e198aebc0d2acff90ea2787b9ddfaacedec98bfa2",
         AnswerDraft: "6402f45c64aedcb2d3bdc92703070c1577a0a724fa5bd38766c6de044533cdd8",
         AnswerReview: "28170e1e8467ddc57d07d4e1b27a2192448ea9a56ed485899b849fc000ea5644",
