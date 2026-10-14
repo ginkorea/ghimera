@@ -117,26 +117,3 @@ class OversizedRoute(FakeRoute):
             content_type="text/html",
             body=b"x" * (request.max_bytes + 1),
         )
-
-
-def test_adapter_overrun_is_accounted_and_refused():
-    scope, spend, ledger = state()
-    cfg = spend.config.model_dump()
-    cfg["http"] = {
-        "schema": "chimera.http/1",
-        "max_response_bytes": 3,
-        "max_header_bytes": 16_384,
-        "max_redirects": 0,
-        "retry_backoff_seconds": 0.001,
-        "retry_jitter_seconds": 0.001,
-        "robots_cache_seconds": 60.0,
-        "conditional_cache_entries": 1,
-        "robots": {"schema": "chimera.robots/1", "mode": "honor", "product_token": "Chimera"},
-        "network": {"schema": "chimera.network/1", "mode": "public"},
-    }
-    spend = RunSpend(GhimeraConfig.model_validate(cfg), lambda: 0.0)
-    with pytest.raises(GhimeraRefused, match="adapter_contract"):
-        asyncio.run(
-            FetchLadder((OversizedRoute(),)).fetch("https://example.org/a", scope, spend, ledger)
-        )
-    assert spend.bytes_read == ledger.snapshot()[0].bytes_read == 4

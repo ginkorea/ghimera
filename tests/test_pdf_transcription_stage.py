@@ -137,9 +137,7 @@ def test_only_declared_native_extraction_failure_can_trigger_transcription(tmp_p
             raise GhimeraRefused(code)
 
     async def run():
-        return await adapter.extract(
-            source(), native=RefusingNative(), spend=spend, ledger=ledger
-        )
+        return await adapter.extract(source(), native=RefusingNative(), spend=spend, ledger=ledger)
 
     if code == RefusalCode.EXTRACTION_FAILED:
         result = asyncio.run(run())

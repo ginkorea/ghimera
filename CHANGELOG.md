@@ -34,6 +34,8 @@
   `.refused-pages/<run id>/`. A served judge outage keeps the page unjudged
   and the round continues; a skipped grade never stops a run. A `failed` stop
   row carries the detail of what failed.
+- Acceptance is one live collection on TAIPAN from a wheel built at this HEAD;
+  see [release acceptance](docs/RELEASE_0412.md).
 - Schema identities are unchanged (new fields are optional). Journals,
   receipts or checkpoints from earlier releases that recorded
   `budget_exhausted` or carry a removed recipe key no longer restore.

@@ -63,9 +63,7 @@ def retained():
     )
 
 
-def prepared(
-    tmp_path, *, before_scoring=False, journal_updates=None, judgment_policy=None
-):
+def prepared(tmp_path, *, before_scoring=False, journal_updates=None, judgment_policy=None):
     actual = retained()
     bound = service(
         9,

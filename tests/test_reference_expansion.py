@@ -108,9 +108,7 @@ def test_depth_is_configuration_not_a_one_hop_implementation_ceiling():
 @pytest.mark.parametrize("bound", ["max_parents", "max_queued_per_run"])
 def test_document_reference_limits_share_one_run_owned_bound(bound):
     result, route = run(
-        cfg=config(
-            references=references(outside_scope="observed_public", max_hops=3, **{bound: 1})
-        )
+        cfg=config(references=references(outside_scope="observed_public", max_hops=3, **{bound: 1}))
     )
     assert len(route.requests) == 2
     assert [row.reference.outcome for row in result.ledger if row.reference] == [

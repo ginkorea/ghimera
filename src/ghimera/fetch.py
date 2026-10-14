@@ -422,6 +422,7 @@ class FetchLadder:
         )
         page: Page | None = None
         code: RefusalCode | None = None
+        detail: str | None = None
         bytes_read = 0
         assistance: tuple[AssistanceObservation, ...] = ()
         try:
@@ -442,8 +443,19 @@ class FetchLadder:
                     raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
                 if operation is not None and bytes_read != operation.output.bytes_read:
                     raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+                if operation is None and not page.human_browser and bytes_read > request.max_bytes:
+                    raise GhimeraRefused(
+                        RefusalCode.ADAPTER_CONTRACT,
+                        f"route {route.name} returned {bytes_read} bytes over its request "
+                        f"max_bytes={request.max_bytes}",
+                    )
             except (GhimeraRefused, TimeoutError) as exc:
                 code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.FETCH_FAILED
+                detail = (
+                    exc.detail
+                    if isinstance(exc, GhimeraRefused)
+                    else f"route passed request_timeout_seconds={request.timeout_seconds:g}"
+                )
                 bytes_read = max(bytes_read, exc.bytes_read if isinstance(exc, FetchFailure) else 0)
                 assistance = exc.assistance if isinstance(exc, HumanCaptureFailure) else ()
                 if operation is not None:
@@ -482,6 +494,7 @@ class FetchLadder:
                     bytes_read=bytes_read,
                     refusal=code,
                     reason=code.value if code else "route_result",
+                    detail=detail,
                     source_session=page.source_session
                     if page
                     else route.source_session_selection(url),
@@ -495,7 +508,7 @@ class FetchLadder:
             if operation is None:
                 spend.record_bytes(bytes_read)
             if code is not None:
-                raise GhimeraRefused(code)
+                raise GhimeraRefused(code, detail)
             if page is None:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             return page

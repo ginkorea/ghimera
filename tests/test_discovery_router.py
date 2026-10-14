@@ -191,9 +191,7 @@ def test_concurrent_fanout_retains_every_neighbor_on_failure_and_reserves_quotas
             Adapter(failure=True, pause=0.01),
             Adapter(urls=("https://example.org/one",), pause=0.02),
         )
-        history, spend, ledger = state(
-            discovery(mode="fanout"), {"first": first, "second": second}
-        )
+        history, spend, ledger = state(discovery(mode="fanout"), {"first": first, "second": second})
         batches = await asyncio.gather(
             history.discover_many(query()), history.discover_many(query("other ports"))
         )
