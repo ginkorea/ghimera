@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.ledger import Ledger
 from ghimera.model_http import ModelHttpResponse
@@ -20,6 +19,7 @@ from ghimera.page_transcriber import LocalPageTranscriber
 from ghimera.page_transcription_config import PageRenderConfig, PageTranscriptionConfig
 from ghimera.page_transcription_types import ReviewedPageTranscription
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.spend import RunSpend
 from tests.test_document_extraction import native_pdf
 from tests.test_served_models import service
 
@@ -114,7 +114,7 @@ class ModelPort:
 
 
 def run_context():
-    return RunBudget(
+    return RunSpend(
         GhimeraConfig.from_toml(Path("examples/chimera.toml")), time.monotonic
     ), Ledger()
 
@@ -154,18 +154,18 @@ def test_generated_native_script_text_has_separate_review_and_no_ocr_confidence(
     cfg = policy(tmp_path)
     page = asyncio.run(PdfPageRenderer(cfg.renderer).render(native_pdf())).pages[0]
     first, second = ModelPort(cfg.transcriber), ModelPort(cfg.reviewer, review=True)
-    budget, ledger = run_context()
+    spend, ledger = run_context()
     result = asyncio.run(
         LocalPageTranscriber(cfg, transcription_http=first, review_http=second).transcribe(
             page,
             language_hint="zh-Hant",
             source_url="https://example.org/x.pdf",
-            budget=budget,
+            spend=spend,
             ledger=ledger,
         )
     )
     assert result.accepted and result.text == "臺灣港務公司"
-    assert budget.judge_calls == 2
+    assert spend.judge_calls == 2
     assert [row.event for row in ledger.snapshot()] == [
         "transcription_model",
         "transcription",
@@ -199,19 +199,19 @@ def test_wrong_source_truncation_and_incomplete_review_never_become_evidence(
     page = asyncio.run(PdfPageRenderer(cfg.renderer).render(native_pdf())).pages[0]
     first = ModelPort(cfg.transcriber, mutation=mutation if role == "transcription" else None)
     second = ModelPort(cfg.reviewer, review=True, mutation=mutation if role == "review" else None)
-    budget, ledger = run_context()
+    spend, ledger = run_context()
     with pytest.raises(GhimeraRefused):
         asyncio.run(
             LocalPageTranscriber(cfg, transcription_http=first, review_http=second).transcribe(
                 page,
                 language_hint="zh-Hans",
                 source_url="https://example.org/x.pdf",
-                budget=budget,
+                spend=spend,
                 ledger=ledger,
             )
         )
     calls = [row.transcription_call for row in ledger.snapshot() if row.event == "transcription"]
-    assert len(calls) == budget.judge_calls
+    assert len(calls) == spend.judge_calls
     assert all(call.response_sha256 for call in calls)
     if mutation == "truncated":
         assert calls[-1].finish_reason == "length" and calls[-1].outcome == "refused"
@@ -221,7 +221,7 @@ def test_wrong_source_truncation_and_incomplete_review_never_become_evidence(
 def test_review_uncertainty_retains_record_but_exposes_no_accepted_text(tmp_path):
     cfg = policy(tmp_path)
     page = asyncio.run(PdfPageRenderer(cfg.renderer).render(native_pdf())).pages[0]
-    budget, ledger = run_context()
+    spend, ledger = run_context()
     result = asyncio.run(
         LocalPageTranscriber(
             cfg,
@@ -231,7 +231,7 @@ def test_review_uncertainty_retains_record_but_exposes_no_accepted_text(tmp_path
             page,
             language_hint="zh-Hant",
             source_url="https://example.org/x.pdf",
-            budget=budget,
+            spend=spend,
             ledger=ledger,
         )
     )
@@ -243,19 +243,19 @@ def test_unknown_script_and_wrong_render_policy_refuse_before_model_spend(tmp_pa
     cfg = policy(tmp_path)
     page = asyncio.run(PdfPageRenderer(cfg.renderer).render(native_pdf())).pages[0]
     first, second = ModelPort(cfg.transcriber), ModelPort(cfg.reviewer, review=True)
-    budget, ledger = run_context()
+    spend, ledger = run_context()
     with pytest.raises(GhimeraRefused) as refused:
         asyncio.run(
             LocalPageTranscriber(cfg, transcription_http=first, review_http=second).transcribe(
                 page,
                 language_hint="unknown",
                 source_url="https://example.org/x.pdf",
-                budget=budget,
+                spend=spend,
                 ledger=ledger,
             )
         )
     assert refused.value.code == RefusalCode.ADAPTER_CONTRACT
-    assert not first.requests and not second.requests and budget.judge_calls == 0
+    assert not first.requests and not second.requests and spend.judge_calls == 0
 
 
 def test_cancelled_call_keeps_actual_attempt_and_releases_page_slot(tmp_path):
@@ -271,13 +271,13 @@ def test_cancelled_call_keeps_actual_attempt_and_releases_page_slot(tmp_path):
         reader = LocalPageTranscriber(
             cfg, transcription_http=first, review_http=ModelPort(cfg.reviewer, review=True)
         )
-        budget, ledger = run_context()
+        spend, ledger = run_context()
         task = asyncio.create_task(
             reader.transcribe(
                 page,
                 language_hint="zh-Hant",
                 source_url="https://example.org/x.pdf",
-                budget=budget,
+                spend=spend,
                 ledger=ledger,
             )
         )
@@ -289,16 +289,16 @@ def test_cancelled_call_keeps_actual_attempt_and_releases_page_slot(tmp_path):
             await task
         call = ledger.snapshot()[-1].transcription_call
         assert call.outcome == "cancelled" and call.response_sha256 is None
-        assert budget.judge_calls == 1
+        assert spend.judge_calls == 1
         waiting.set()
         result = await reader.transcribe(
             page,
             language_hint="zh-Hant",
             source_url="https://example.org/x.pdf",
-            budget=budget,
+            spend=spend,
             ledger=ledger,
         )
-        assert result.accepted and budget.judge_calls == 3
+        assert result.accepted and spend.judge_calls == 3
         assert sum(row.event == "transcription_model" for row in ledger.snapshot()) == 3
 
     asyncio.run(scenario())
@@ -325,7 +325,7 @@ def test_model_request_limit_refuses_without_spending_the_run(tmp_path):
     cfg = PageTranscriptionConfig.model_validate(values)
     page = asyncio.run(PdfPageRenderer(cfg.renderer).render(native_pdf())).pages[0]
     first = ModelPort(cfg.transcriber)
-    budget, ledger = run_context()
+    spend, ledger = run_context()
     with pytest.raises(GhimeraRefused) as refused:
         asyncio.run(
             LocalPageTranscriber(
@@ -334,9 +334,9 @@ def test_model_request_limit_refuses_without_spending_the_run(tmp_path):
                 page,
                 language_hint="en",
                 source_url="https://example.org/x.pdf",
-                budget=budget,
+                spend=spend,
                 ledger=ledger,
             )
         )
-    assert refused.value.code == RefusalCode.BUDGET_EXHAUSTED
-    assert budget.judge_calls == 0 and not first.requests and not ledger.snapshot()
+    assert refused.value.code == RefusalCode.BOUND_EXCEEDED
+    assert spend.judge_calls == 0 and not first.requests and not ledger.snapshot()

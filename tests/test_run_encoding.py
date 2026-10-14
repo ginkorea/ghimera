@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.doubles import FakeJudge
 from ghimera.embedding_types import EncodingBatch, EncodingCall, encoding_request
@@ -23,15 +22,15 @@ from ghimera.run_encoding import encoding_usage, validate_run_encoding_rows
 from ghimera.run_encoding_types import RunEncodingDecision
 from ghimera.semantic_scoring import EmbeddingScorer
 from ghimera.source_feed_parse import parse_feed
+from ghimera.spend import RunSpend
 from tests.test_embedding_scoring import intent_policy, policy, references, service
 
 
-def prepared(tmp_path, *, calls=20, recovery_updates=None):
+def prepared(tmp_path, *, recovery_updates=None):
     encoder = service(9, max_batch_texts=20, text_prefix="passage: ")
     recovery = dict(
         schema="ghimera.run-encoding-recovery/1",
         max_result_bytes=20000,
-        max_total_result_bytes=100000,
         unknown_policy="hold",
     )
     recovery.update(recovery_updates or {})
@@ -43,7 +42,6 @@ def prepared(tmp_path, *, calls=20, recovery_updates=None):
         references_sha256=None,
         query_encoder=service(9, text_prefix="query: "),
         max_windows=1,
-        encoding_call_budget=calls,
         run_encoding_recovery=recovery,
     )
     feed = tomllib.loads(Path("examples/source-feeds.toml").read_text())
@@ -159,7 +157,7 @@ def exercise(root, mode):
                 source_feed=doc.source_feed,
             )
         )
-    budget = RunBudget(cfg, lambda: 0.0)
+    spend = RunSpend(cfg, lambda: 0.0)
     if restored:
         calls, chars = encoding_usage(cfg, restored)
         receipt = Receipt(
@@ -174,7 +172,7 @@ def exercise(root, mode):
             effective_config=cfg,
             judge=FakeJudge().model,
         )
-        budget.restore(receipt, restored, 0, 2.0)
+        spend.restore(receipt, restored, 0, 2.0)
     decisions = None
     if mode == "replay":
         if any(row.intent_reference is not None for row in restored):
@@ -198,7 +196,7 @@ def exercise(root, mode):
         encoding_decisions=decisions,
     )
     try:
-        asyncio.run(scorer.score(goal, doc, budget, ledger))
+        asyncio.run(scorer.score(goal, doc, spend, ledger))
     finally:
         ledger.close()
 
@@ -262,7 +260,7 @@ def test_actual_process_death_charges_original_and_explicit_ack_replay(
             receipt=receipt,
         )
         assert Harvest.model_validate_json(harvest.model_dump_json()) == harvest
-        restored = RunBudget(cfg, lambda: 0.0)
+        restored = RunSpend(cfg, lambda: 0.0)
         restored.restore(receipt, replayed.rows, 0, 4.0)
         assert restored.encoding_calls == 2 and restored.elapsed == 7.0
 
@@ -270,14 +268,15 @@ def test_actual_process_death_charges_original_and_explicit_ack_replay(
 def test_legacy_profiles_preserve_dump_and_deny_even_null_new_policy():
     cfg = service(9)
     old = policy(cfg, references(cfg))
+    # Re-pinned in 0.4.12: the dump no longer carries the removed encoding ceilings.
     assert hashlib.sha256(old.model_dump_json().encode()).hexdigest() == (
-        "419ab26d19321a8ac22a3cdc36a0f9301d81fe551194a006eb4346c3c9577d4a"
+        "c04bf5e16950ea7d0c67a09c8927495bbd48a9d09877129372f7cfe87abf07cc"
     )
     old_two = intent_policy(
         cfg, schema="ghimera.scoring/2", query_encoder=service(9, text_prefix="query: ")
     )
     assert hashlib.sha256(old_two.model_dump_json().encode()).hexdigest() == (
-        "37c2e80521b9b14d7ae408a2e624c9b4f022b73ece57ccdb400b9d50751fdcde"
+        "9ae66c0e0c17995389001f97f0f49c27e9c364ae21b7d27917052d30c3643f7d"
     )
     assert "run_encoding_recovery" not in old.model_dump()
     for version in ("chimera.scoring/1", "ghimera.scoring/2"):
@@ -295,12 +294,12 @@ def test_missing_real_native_journal_refuses_before_contact(tmp_path):
     query = EncoderFixture(cfg.scoring.query_encoder, tmp_path / "contacts")
     scorer = EmbeddingScorer(cfg.scoring, encoder, query_encoder=query)
     with pytest.raises((ValueError, RuntimeError)):
-        asyncio.run(scorer.score(goal, doc, RunBudget(cfg, lambda: 0.0), Ledger()))
+        asyncio.run(scorer.score(goal, doc, RunSpend(cfg, lambda: 0.0), Ledger()))
     assert not (tmp_path / "contacts").exists()
 
 
-def live(tmp_path, *, calls=20, recovery_updates=None):
-    cfg, goal, doc = prepared(tmp_path, calls=calls, recovery_updates=recovery_updates)
+def live(tmp_path, *, recovery_updates=None):
+    cfg, goal, doc = prepared(tmp_path, recovery_updates=recovery_updates)
     ledger = Ledger(sink=DirectoryLedgerSink(cfg, "live", goal, FakeJudge().model))
     ledger.append(
         LedgerRow(
@@ -311,35 +310,34 @@ def live(tmp_path, *, calls=20, recovery_updates=None):
             source_feed=doc.source_feed,
         )
     )
-    budget = RunBudget(cfg, lambda: 0.0)
+    spend = RunSpend(cfg, lambda: 0.0)
     scorer = EmbeddingScorer(
         cfg.scoring,
         EncoderFixture(cfg.scoring.encoder, tmp_path / "contacts"),
         query_encoder=EncoderFixture(cfg.scoring.query_encoder, tmp_path / "contacts"),
     )
-    return cfg, goal, doc, ledger, budget, scorer
+    return cfg, goal, doc, ledger, spend, scorer
 
 
-def test_original_quota_and_unknown_receipt_cannot_reset(tmp_path):
-    cfg, goal, doc, ledger, budget, scorer = live(tmp_path, calls=1)
+def test_encoder_spend_is_counted_without_a_quota_and_cannot_reset(tmp_path):
+    cfg, goal, doc, ledger, spend, scorer = live(tmp_path)
     try:
-        with pytest.raises(GhimeraRefused, match="budget_exhausted"):
-            asyncio.run(scorer.score(goal, doc, budget, ledger))
-        assert budget.encoding_calls == 1
-        assert len((tmp_path / "contacts").read_bytes().splitlines()) == 1
-        assert encoding_usage(cfg, ledger.snapshot())[0] == 1
+        asyncio.run(scorer.score(goal, doc, spend, ledger))
+        contacts = len((tmp_path / "contacts").read_bytes().splitlines())
+        assert spend.encoding_calls == contacts >= 1
+        assert encoding_usage(cfg, ledger.snapshot())[0] == spend.encoding_calls
         with pytest.raises(ValueError, match="counters"):
-            asyncio.run(scorer.score(goal, doc, RunBudget(cfg, lambda: 0.0), ledger))
-        assert len((tmp_path / "contacts").read_bytes().splitlines()) == 1
+            asyncio.run(scorer.score(goal, doc, RunSpend(cfg, lambda: 0.0), ledger))
+        assert len((tmp_path / "contacts").read_bytes().splitlines()) == contacts
     finally:
         ledger.close()
 
 
 @pytest.mark.parametrize("drift", ["source", "reading", "purpose", "output", "header", "scope"])
 def test_native_readback_refuses_original_identity_drift(tmp_path, drift):
-    cfg, goal, doc, ledger, budget, scorer = live(tmp_path)
+    cfg, goal, doc, ledger, spend, scorer = live(tmp_path)
     try:
-        asyncio.run(scorer.score(goal, doc, budget, ledger))
+        asyncio.run(scorer.score(goal, doc, spend, ledger))
         rows = list(ledger.snapshot())
         original = next(row for row in rows if row.run_encoding_intent is not None)
         intent = original.run_encoding_intent
@@ -364,15 +362,15 @@ def test_native_readback_refuses_original_identity_drift(tmp_path, drift):
         rows[original.sequence] = LedgerRow.model_validate(raw)
         with pytest.raises(ValueError):
             validate_run_encoding_rows(cfg, tuple(rows), header=ledger.run_header(cfg))
-        assert intent is not None and budget.encoding_calls == 2
+        assert intent is not None and spend.encoding_calls == 2
     finally:
         ledger.close()
 
 
 def test_explicit_replay_schedule_cannot_change_source_or_replay_twice(tmp_path):
-    cfg, goal, doc, ledger, budget, scorer = live(tmp_path)
+    cfg, goal, doc, ledger, spend, scorer = live(tmp_path)
     try:
-        asyncio.run(scorer.score(goal, doc, budget, ledger))
+        asyncio.run(scorer.score(goal, doc, spend, ledger))
         source = next(
             row.sequence
             for row in ledger.snapshot()
@@ -388,12 +386,12 @@ def test_explicit_replay_schedule_cannot_change_source_or_replay_twice(tmp_path)
         )
         with pytest.raises(ValueError, match="source/goal/reading"):
             asyncio.run(
-                replay.score(goal, doc.model_copy(update={"title": "changed"}), budget, ledger)
+                replay.score(goal, doc.model_copy(update={"title": "changed"}), spend, ledger)
             )
         assert len((tmp_path / "contacts").read_bytes().splitlines()) == 2
-        asyncio.run(replay.score(goal, doc, budget, ledger))
+        asyncio.run(replay.score(goal, doc, spend, ledger))
         assert len((tmp_path / "contacts").read_bytes().splitlines()) == 2
-        assert budget.encoding_calls == 2
+        assert spend.encoding_calls == 2
         double = EmbeddingScorer(
             cfg.scoring,
             EncoderFixture(cfg.scoring.encoder, tmp_path / "contacts"),
@@ -404,7 +402,7 @@ def test_explicit_replay_schedule_cannot_change_source_or_replay_twice(tmp_path)
             * 2,
         )
         with pytest.raises(ValueError, match="entire batch plan"):
-            asyncio.run(double.score(goal, doc, budget, ledger))
+            asyncio.run(double.score(goal, doc, spend, ledger))
         assert len((tmp_path / "contacts").read_bytes().splitlines()) == 2
     finally:
         ledger.close()
@@ -433,18 +431,18 @@ def test_unknown_native_harvest_and_restoration_keep_original_charge(tmp_path):
         schema="chimera.harvest/1", goal=goal, documents=(), ledger=report.rows, receipt=receipt
     )
     assert Harvest.model_validate_json(result.model_dump_json()) == result
-    budget = RunBudget(cfg, lambda: 0.0)
-    budget.restore(receipt, report.rows, 0, 4.0)
-    assert (budget.encoding_calls, budget.encoding_chars, budget.elapsed) == (1, chars, 7.0)
+    spend = RunSpend(cfg, lambda: 0.0)
+    spend.restore(receipt, report.rows, 0, 4.0)
+    assert (spend.encoding_calls, spend.encoding_chars, spend.elapsed) == (1, chars, 7.0)
     with pytest.raises(ValueError, match="original charged intents"):
-        RunBudget(cfg, lambda: 0.0).restore(
+        RunSpend(cfg, lambda: 0.0).restore(
             receipt.model_copy(update={"encoding_calls": 0}), report.rows, 0, 4.0
         )
 
 
 @pytest.mark.parametrize("failure", ["nonfinite", "request", "refused", "cancelled"])
 def test_invalid_or_refused_original_output_stays_charged_without_vector_ack(tmp_path, failure):
-    cfg, goal, doc, ledger, budget, _ = live(tmp_path)
+    cfg, goal, doc, ledger, spend, _ = live(tmp_path)
 
     class Broken(EncoderFixture):
         async def encode_batch(self, texts):
@@ -466,11 +464,11 @@ def test_invalid_or_refused_original_output_stays_charged_without_vector_ack(tmp
     )
     try:
         with pytest.raises((GhimeraRefused, asyncio.CancelledError)):
-            asyncio.run(scorer.score(goal, doc, budget, ledger))
-        assert encoding_usage(cfg, ledger.snapshot())[0] == budget.encoding_calls == 1
+            asyncio.run(scorer.score(goal, doc, spend, ledger))
+        assert encoding_usage(cfg, ledger.snapshot())[0] == spend.encoding_calls == 1
         assert not any(row.run_encoding_ack is not None for row in ledger.snapshot())
         with pytest.raises(ValueError, match="unknown"):
-            asyncio.run(scorer.score(goal, doc, budget, ledger))
+            asyncio.run(scorer.score(goal, doc, spend, ledger))
         assert len((tmp_path / "contacts").read_bytes().splitlines()) == 1
     finally:
         ledger.close()
@@ -497,11 +495,11 @@ def test_native_capacity_refuses_before_reservation_or_contact(tmp_path):
         EncoderFixture(cfg.scoring.encoder, tmp_path / "contacts"),
         query_encoder=EncoderFixture(cfg.scoring.query_encoder, tmp_path / "contacts"),
     )
-    budget = RunBudget(cfg, lambda: 0.0)
+    spend = RunSpend(cfg, lambda: 0.0)
     try:
         with pytest.raises(GhimeraRefused, match="ledger_sink_failed"):
-            asyncio.run(scorer.score(goal, doc, budget, ledger))
-        assert budget.encoding_calls == 0 and not (tmp_path / "contacts").exists()
+            asyncio.run(scorer.score(goal, doc, spend, ledger))
+        assert spend.encoding_calls == 0 and not (tmp_path / "contacts").exists()
     finally:
         ledger.close()
 
@@ -530,17 +528,17 @@ def test_inert_example_is_valid_and_explicit():
 
 
 def test_concurrent_native_run_scores_share_intent_and_keep_owned_ack_order(tmp_path):
-    cfg, goal, doc, ledger, budget, scorer = live(tmp_path)
+    cfg, goal, doc, ledger, spend, scorer = live(tmp_path)
 
     async def concurrent():
         return await asyncio.gather(
-            scorer.score(goal, doc, budget, ledger), scorer.score(goal, doc, budget, ledger)
+            scorer.score(goal, doc, spend, ledger), scorer.score(goal, doc, spend, ledger)
         )
 
     try:
         assert asyncio.run(concurrent()) == [(), ()]
         rows = ledger.snapshot()
-        assert encoding_usage(cfg, rows)[0] == budget.encoding_calls == 3
+        assert encoding_usage(cfg, rows)[0] == spend.encoding_calls == 3
         assert tuple(
             row.run_encoding_intent.reserved_call
             for row in rows
@@ -550,14 +548,14 @@ def test_concurrent_native_run_scores_share_intent_and_keep_owned_ack_order(tmp_
         assert sum(row.intent_reference is not None for row in rows) == 1
         assert sum(row.similarity is not None for row in rows) == 2
         assert len((tmp_path / "contacts").read_bytes().splitlines()) == 3
-        assert not budget.encoding_score_lock.locked() and not budget.encoding_lock.locked()
+        assert not spend.encoding_score_lock.locked() and not spend.encoding_lock.locked()
     finally:
         ledger.close()
     assert read_journal(cfg.journal, "live").rows == rows
 
 
 def test_cancelled_owned_encoding_releases_schedule_lock_but_not_charge(tmp_path):
-    cfg, goal, doc, ledger, budget, _ = live(tmp_path)
+    cfg, goal, doc, ledger, spend, _ = live(tmp_path)
     contacted = asyncio.Event()
 
     class Paused(EncoderFixture):
@@ -573,34 +571,32 @@ def test_cancelled_owned_encoding_releases_schedule_lock_but_not_charge(tmp_path
     )
 
     async def cancelled():
-        task = asyncio.create_task(scorer.score(goal, doc, budget, ledger))
+        task = asyncio.create_task(scorer.score(goal, doc, spend, ledger))
         await asyncio.wait_for(contacted.wait(), 2.0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert not budget.encoding_score_lock.locked() and not budget.encoding_lock.locked()
+        assert not spend.encoding_score_lock.locked() and not spend.encoding_lock.locked()
         with pytest.raises(ValueError, match="unknown"):
-            await scorer.score(goal, doc, budget, ledger)
+            await scorer.score(goal, doc, spend, ledger)
 
     try:
         asyncio.run(cancelled())
-        assert budget.encoding_calls == encoding_usage(cfg, ledger.snapshot())[0] == 1
+        assert spend.encoding_calls == encoding_usage(cfg, ledger.snapshot())[0] == 1
         assert not any(row.run_encoding_ack is not None for row in ledger.snapshot())
         assert len((tmp_path / "contacts").read_bytes().splitlines()) == 1
     finally:
         ledger.close()
 
 
-@pytest.mark.parametrize(
-    "limits,contact", [({"max_result_bytes": 128}, True), ({"max_total_result_bytes": 20000}, True)]
-)
-def test_result_and_total_retained_bounds_never_fabricate_vector_ack(tmp_path, limits, contact):
-    cfg, goal, doc, ledger, budget, scorer = live(tmp_path, recovery_updates=limits)
+@pytest.mark.parametrize("limits,contact", [({"max_result_bytes": 128}, True)])
+def test_result_bound_never_fabricates_vector_ack(tmp_path, limits, contact):
+    cfg, goal, doc, ledger, spend, scorer = live(tmp_path, recovery_updates=limits)
     try:
         with pytest.raises(GhimeraRefused):
-            asyncio.run(scorer.score(goal, doc, budget, ledger))
+            asyncio.run(scorer.score(goal, doc, spend, ledger))
         assert len((tmp_path / "contacts").read_bytes().splitlines()) == 1
-        assert budget.encoding_calls == encoding_usage(cfg, ledger.snapshot())[0] == 1
+        assert spend.encoding_calls == encoding_usage(cfg, ledger.snapshot())[0] == 1
         if "max_result_bytes" in limits:
             assert not any(row.run_encoding_ack is not None for row in ledger.snapshot())
             call = next(
@@ -614,9 +610,9 @@ def test_result_and_total_retained_bounds_never_fabricate_vector_ack(tmp_path, l
 
 
 def test_tampered_fresh_decision_with_original_sequence_refuses_before_contact(tmp_path):
-    cfg, goal, doc, ledger, budget, scorer = live(tmp_path)
+    cfg, goal, doc, ledger, spend, scorer = live(tmp_path)
     try:
-        asyncio.run(scorer.score(goal, doc, budget, ledger))
+        asyncio.run(scorer.score(goal, doc, spend, ledger))
         source = next(
             row.sequence
             for row in ledger.snapshot()
@@ -632,9 +628,9 @@ def test_tampered_fresh_decision_with_original_sequence_refuses_before_contact(t
             encoding_decisions=(malformed,),
         )
         with pytest.raises(ValidationError, match="fresh forbids"):
-            asyncio.run(changed.score(goal, doc, budget, ledger))
+            asyncio.run(changed.score(goal, doc, spend, ledger))
         assert len((tmp_path / "contacts").read_bytes().splitlines()) == 2
-        assert encoding_usage(cfg, ledger.snapshot())[0] == budget.encoding_calls == 2
+        assert encoding_usage(cfg, ledger.snapshot())[0] == spend.encoding_calls == 2
     finally:
         ledger.close()
 

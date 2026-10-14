@@ -8,7 +8,6 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
-from ghimera.ceilings import exceeds
 from ghimera.config import GhimeraConfig
 from ghimera.identifiers import RUN_ID_SCHEMA_PATTERN
 from ghimera.models import Record
@@ -43,7 +42,6 @@ class ResearchCheckpoint(Record):
             or harvest.goal.text != self.request.intent
             or harvest.goal.seeds != self.request.seeds
             or not progress.rounds
-            or exceeds(len(progress.rounds), policy.max_rounds)
             or tuple(round_.number for round_ in progress.rounds)
             != tuple(range(1, len(progress.rounds) + 1))
             or any(row.event == "stop" for row in harvest.ledger)

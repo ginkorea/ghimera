@@ -1,9 +1,5 @@
 # Example only: provision Tor separately on the approved crawl-egress host.
 schema = "chimera.config/1"
-page_budget = 20
-byte_budget = 16777216
-wall_seconds = 600.0
-judge_budget = 20
 grade_interval = 5
 grade_threshold = 0.9
 saturation_window = 5

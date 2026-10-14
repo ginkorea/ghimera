@@ -127,7 +127,7 @@ class NativeLexicalIndex:
         for identity, text in passages:
             tokens = native_tokens(text)
             if len(tokens) > policy.max_tokens_per_passage:
-                raise ValueError("passage token budget exhausted; no silent truncation")
+                raise ValueError("passage token bound exceeded; no silent truncation")
             counts = Counter(tokens)
             self._counts[identity] = counts
             self._frequency.update(counts.keys())
@@ -138,7 +138,7 @@ class NativeLexicalIndex:
     def admit_query(self, text: str) -> set[str]:
         query = set(native_tokens(text))
         if len(query) > self.policy.max_tokens_per_passage:
-            raise ValueError("query token budget exhausted")
+            raise ValueError("query token bound exceeded")
         return query
 
     def search(self, text: str) -> tuple[tuple[int, float], ...]:

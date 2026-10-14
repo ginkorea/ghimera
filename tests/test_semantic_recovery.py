@@ -64,14 +64,14 @@ def test_review_failure_retains_proposal_and_calls_without_projecting(tmp_path, 
         SemanticWire(cfg.models.analyst),
         ReviewWire(cfg.models.reviewer, defect=defect),
     )
-    graph, rows, budget = run_stage(cfg, extractor, reviewer, (doc,))
+    graph, rows, spend = run_stage(cfg, extractor, reviewer, (doc,))
     failed = rows[-1].semantic_refusal
     assert failed.phase == "review" and failed.continued
     assert failed.proposal.model_call == rows[-1].model_call
     assert failed.proposal.mentions[0].surface == "甲委員會"
     assert failed.review_sequences == (rows[0].sequence,)
     assert rows[0].refusal is not None and rows[0].semantic_review is None
-    assert budget.judge_calls == 2 and budget.semantic_review_calls == 1
+    assert spend.judge_calls == 2 and spend.semantic_review_calls == 1
     assert not any(edge.claim_status for edge in graph.snapshot().edges)
     assert validate_rows(cfg, rows) == (rows[-1],)
     context = build_context(cfg, rows)
@@ -121,7 +121,7 @@ class FirstReviewFails(ReviewWire):
 def test_success_after_failed_native_window_is_not_reordered_as_first_window(tmp_path):
     text = document().extracted.text
     cfg = recovery_config(tmp_path, window_chars=len(text))
-    graph, rows, budget = run_stage(
+    graph, rows, spend = run_stage(
         cfg,
         SemanticWire(cfg.models.analyst),
         FirstReviewFails(cfg.models.reviewer),
@@ -130,7 +130,7 @@ def test_success_after_failed_native_window_is_not_reordered_as_first_window(tmp
     attempts = validate_rows(cfg, rows)
     assert attempts[0].semantic_refusal.start == 0
     assert attempts[1].semantic_window.start == len(text)
-    assert budget.semantic_calls == 2 and budget.semantic_review_calls == 2
+    assert spend.semantic_calls == 2 and spend.semantic_review_calls == 2
     assert sum(edge.rule == "reports_to" for edge in graph.snapshot().edges) == 1
 
 
@@ -228,20 +228,6 @@ def test_collector_follows_frontier_and_restores_completed_gap_without_retry(tmp
     failed_row["semantic_refusal"]["document_sha256"] = "0" * 64
     with pytest.raises(ValidationError):
         Harvest.model_validate(altered)
-
-
-def test_run_budget_exhaustion_remains_terminal_under_failure_policy(tmp_path):
-    raw = recovery_config(tmp_path).model_dump(by_alias=True)
-    raw["judge_budget"] = 1
-    cfg = GhimeraConfig.model_validate(raw)
-    loop, _ = assemble(cfg)
-    result = asyncio.run(
-        loop.run(
-            Goal(text="organization", seeds=("https://example.org/a",)), scope(), run_id="budget"
-        )
-    )
-    assert result.receipt.stop_reason == "budget_exhausted"
-    assert not any(row.semantic_refusal and row.semantic_refusal.continued for row in result.ledger)
 
 
 def test_prior_recipe_still_skips_failed_source_followups(tmp_path):

@@ -2,20 +2,46 @@
 
 ## 0.4.12 — 2026-10-14
 
-- Run limits are off by default. `page_budget`, `byte_budget`, `judge_budget`,
-  `wall_seconds`, research `max_rounds`/`query_budget` and scoring encoding
-  call/char budgets may be omitted (or `"unbounded"`, `0`, `null`). Spend is
-  still accounted on every receipt; `BUDGET_EXHAUSTED` is raised only for a
-  configured limit and names it with used/limit. Research without `max_rounds`
-  stops on saturation (`saturation_rounds`, default 2 rounds without new
-  evidence). Integer recipes parse and serialize unchanged.
-- One page's refusal never ends a round: a reader deadline, an overlong link or
-  an encoder/model still unavailable after retries refuses that page only.
-  Overlong link texts are cut to the encoder bound (URL head kept, anchor
+- **Run ceilings are removed.** `page_budget`, `byte_budget`, `judge_budget`,
+  `wall_seconds`, research `max_rounds`/`query_budget`, scoring
+  `encoding_call_budget`/`encoding_char_budget`, discovery provider
+  `max_calls`/`byte_budget`/`call_seconds_budget` and references
+  `cited_by_query_budget` no longer exist, and neither do the per-run feature
+  caps: `semantics`/`semantics.verification` `max_calls_per_run`,
+  `identity_automation` `max_proposal_calls`/`max_review_calls`,
+  `research.reranking` `max_calls`, `local_inputs`
+  `max_files_per_run`/`max_total_bytes`, `model_work`
+  `max_input_bytes`/`max_unanswered_calls`, and `max_total_result_bytes` of
+  `model_work.results` and `run_encoding_recovery`. A recipe carrying one is refused at
+  load by name ("recipe key 'page_budget' is refused: the core no longer has run
+  ceilings (removed in 0.4.12); delete the key"). `RunBudget` became `RunSpend`
+  (`ghimera.spend`): fetches, bytes, judge/encoder/search/rerank calls are still
+  counted on receipts, rounds and ledger rows, with no limit. Runs end on the
+  mission's own rules; research saturates after `saturation_rounds` (default 2)
+  rounds without new evidence. Per-call deadlines are the services' timeouts.
+- `BUDGET_EXHAUSTED`, `BudgetExhausted` and the `budget_exhausted` stop reason
+  are gone. Input bounds that were misnamed as budgets either **cut** (a page
+  over `extraction.max_input_bytes` is read as its first bytes,
+  `ExtractionEvidence.omitted_bytes`; evidence contexts take the windows that
+  fit; dedup simhashes the bounded prefix, `ContentFingerprint.omitted_chars`)
+  or **refuse one input** with the new `BOUND_EXCEEDED`, naming the bound,
+  used/limit and "an input bound, not a spend limit" (an image bomb, a stream
+  over its bound, a reader that never answers). A per-input refusal never ends
+  a round.
+- **Results are not thrown away.** A rich-tier HTML extraction failure keeps
+  the page as plain body text (`tier = "fallback_plain"`, failed attempt kept);
+  only a page with no text is refused, its bytes kept under the run journal's
+  `.refused-pages/<run id>/`. A served judge outage keeps the page unjudged
+  and the round continues; a skipped grade never stops a run. A `failed` stop
+  row carries the detail of what failed.
+- Schema identities are unchanged (new fields are optional). Journals,
+  receipts or checkpoints from earlier releases that recorded
+  `budget_exhausted` or carry a removed recipe key no longer restore.
+- Overlong link texts are cut to the encoder bound (URL head kept, anchor
   truncated, `omitted_chars` recorded); whitespace-only windows are skipped.
 - Transient model/encoder refusals (HTTP 408/409/425/429/5xx, dropped
   connections) retry with bounded backoff (`model_retry`, default 180 s).
-  Every try is an accounted call; durable model-work calls are not retried.
+  Every try is a counted call; durable model-work calls are not retried.
 - Opt-in in-process first-pass HTML reader (`extraction.fast_reader`) reads a
   1 MB page in under 100 ms; thin, script-only and profiled pages use the
   unchanged rich tier. Opt-in `worker_mode = "persistent"` parser interpreters

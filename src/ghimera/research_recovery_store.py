@@ -8,7 +8,6 @@ from typing import Protocol
 
 from pydantic import TypeAdapter
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.journal_types import JournalReport, canonical
 from ghimera.model_reconciliation import (
@@ -41,6 +40,7 @@ from ghimera.research_types import (
     ResearchRequest,
     SearchRequest,
 )
+from ghimera.spend import RunSpend
 
 
 class ResearchRecoveryPolicy(Protocol):
@@ -110,15 +110,14 @@ class ResearchRecoveryStore:
             or report.rows[: len(rows)] != rows
             or any(row.event == "stop" for row in report.rows)
             or unreconciled_model_sequences(rows)
-            or validate_model_rows(self._config.model_work, self._config.judge_budget, rows)
-            != harvest.receipt.judge_calls
+            or validate_model_rows(self._config.model_work, rows) != harvest.receipt.judge_calls
         ):
             raise ValueError("recovery requires the exact intact unsealed original journal prefix")
-        # Reuse the native serializer. This inert budget performs no work or
+        # Reuse the native serializer. This inert spend performs no work or
         # reservation; its configured model-work policy selects port serialization.
         if isinstance(snapshot, ResearchQueryControlSnapshot):
             return report
-        request = port_input(RunBudget(self._config, lambda: 0.0), snapshot.model_request)
+        request = port_input(RunSpend(self._config, lambda: 0.0), snapshot.model_request)
         pending = snapshot.pending_model
         if pending.input_sha256 != hashlib.sha256(
             request

@@ -190,9 +190,7 @@ class Politeness:
             if entry is None or entry.expires <= loop.time():
                 try:
                     page = await fetch(origin + "/robots.txt")
-                except GhimeraRefused as exc:
-                    if exc.code == RefusalCode.BUDGET_EXHAUSTED:
-                        raise
+                except GhimeraRefused:
                     raise GhimeraRefused(RefusalCode.ROBOTS_DISALLOWED) from None
                 if page.status in {404, 410}:
                     parser = Protego.parse("")

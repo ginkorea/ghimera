@@ -269,12 +269,12 @@ def test_empty_index_call_remains_a_retained_budgeted_observation(index):
         provider("onions", binding=binding(index[0]), domains=["onion"]),
         target_domains=["onion"],
     )
-    history, budget, ledger = state(selected, {"onions": AhmiaIndexSearch(binding(index[0]))})
+    history, spend, ledger = state(selected, {"onions": AhmiaIndexSearch(binding(index[0]))})
     observations = asyncio.run(history.discover_many(request().query))
     assert observations[0].response.hits == ()
     assert observations[0].response.index_retrieved_at is not None
-    assert budget.search_calls == budget.fetches == 1
-    assert budget.bytes_read == len(observations[0].response.raw) == ledger.snapshot()[0].bytes_read
+    assert spend.search_calls == spend.fetches == 1
+    assert spend.bytes_read == len(observations[0].response.raw) == ledger.snapshot()[0].bytes_read
 
 
 def test_application_mcp_payload_uses_existing_lead_envelope_and_preserves_index_provenance(index):

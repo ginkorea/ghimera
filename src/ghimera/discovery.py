@@ -3,7 +3,6 @@
 from collections.abc import Mapping
 from urllib.parse import urlsplit
 
-from ghimera.budget import RunBudget
 from ghimera.corpus_search import CorpusLeadSearch, corpus_leads
 from ghimera.corpus_search_wire import CorpusSearchWire
 from ghimera.discovery_config import DiscoveryConfig, DiscoveryProvider, Domain
@@ -13,6 +12,7 @@ from ghimera.query_work_types import QueryCorpusBinding, QueryReservation
 from ghimera.research_reranking_types import RerankDecision
 from ghimera.research_types import SearchQuery, SearchRequest, SearchResponse
 from ghimera.search import GroundedSearch
+from ghimera.spend import RunSpend
 from ghimera.transport_types import TransportEvidence
 
 
@@ -55,16 +55,16 @@ class BoundSearch(GroundedSearch):
     async def request_for_run(
         self,
         request: SearchRequest,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         rerank_decision: RerankDecision | None,
         query_work: QueryWork | None = None,
     ) -> SearchResponse:
         response = (
-            await self._adapter.request_for_run(request, budget, ledger, rerank_decision)
+            await self._adapter.request_for_run(request, spend, ledger, rerank_decision)
             if query_work is None
             else await self._adapter.request_for_run(
-                request, budget, ledger, rerank_decision, query_work
+                request, spend, ledger, rerank_decision, query_work
             )
         )
         return self._filter(request, response)

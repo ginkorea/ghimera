@@ -216,7 +216,7 @@ def test_cancelled_read_keeps_drained_original_and_exact_native_byte_spend(
             release.set()
             with pytest.raises(asyncio.CancelledError):
                 await task
-            assert session.budget._bytes_reserved == 0
+            assert session.spend._bytes_reserved == 0
             return loop.finish(session, "failed")
         finally:
             session.close()

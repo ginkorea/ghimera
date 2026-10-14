@@ -56,7 +56,6 @@ def test_earlier_verification_profiles_cannot_silently_change_questions(version)
     raw = dict(
         schema=f"ghimera.semantic-verification/{version}",
         model_role="reviewer",
-        max_calls_per_run=8,
         prompt_profile="assigned_role_checks",
     )
     if version == 3:

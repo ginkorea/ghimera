@@ -72,10 +72,10 @@ def source():
 def test_original_native_reading_is_not_overwritten_and_generated_citation_is_labelled(tmp_path):
     cfg = configured(tmp_path)
     adapter, first, second = stage(cfg)
-    budget, ledger = run_context()
+    spend, ledger = run_context()
     page = source()
     result = asyncio.run(
-        adapter.extract(page, native=DocumentExtractor(cfg), budget=budget, ledger=ledger)
+        adapter.extract(page, native=DocumentExtractor(cfg), spend=spend, ledger=ledger)
     )
     assert result.text == "臺灣港務公司"  # Scripted reply: no model-quality claim.
     proof = result.pdf_transcription
@@ -113,19 +113,19 @@ def test_original_native_reading_is_not_overwritten_and_generated_citation_is_la
 def test_native_refused_mode_does_not_contact_models_for_readable_pdf(tmp_path):
     cfg = configured(tmp_path, "native_refused")
     adapter, first, second = stage(cfg)
-    budget, ledger = run_context()
+    spend, ledger = run_context()
     result = asyncio.run(
-        adapter.extract(source(), native=DocumentExtractor(cfg), budget=budget, ledger=ledger)
+        adapter.extract(source(), native=DocumentExtractor(cfg), spend=spend, ledger=ledger)
     )
     assert result.pdf_transcription is None and "terminal construction" in result.text
-    assert not first.requests and not second.requests and budget.judge_calls == 0
+    assert not first.requests and not second.requests and spend.judge_calls == 0
 
 
 @pytest.mark.parametrize("code", [RefusalCode.EXTRACTION_FAILED, RefusalCode.ADAPTER_CONTRACT])
 def test_only_declared_native_extraction_failure_can_trigger_transcription(tmp_path, code):
     cfg = configured(tmp_path, "native_refused")
     adapter, first, second = stage(cfg)
-    budget, ledger = run_context()
+    spend, ledger = run_context()
 
     class RefusingNative:
         revision = "fixture"
@@ -138,7 +138,7 @@ def test_only_declared_native_extraction_failure_can_trigger_transcription(tmp_p
 
     async def run():
         return await adapter.extract(
-            source(), native=RefusingNative(), budget=budget, ledger=ledger
+            source(), native=RefusingNative(), spend=spend, ledger=ledger
         )
 
     if code == RefusalCode.EXTRACTION_FAILED:
@@ -156,12 +156,12 @@ def test_only_declared_native_extraction_failure_can_trigger_transcription(tmp_p
 def test_uncertain_review_never_promotes_a_partial_document(tmp_path):
     cfg = configured(tmp_path)
     adapter, _, _ = stage(cfg, "uncertain_review")
-    budget, ledger = run_context()
+    spend, ledger = run_context()
     with pytest.raises(GhimeraRefused) as error:
         asyncio.run(
-            adapter.extract(source(), native=DocumentExtractor(cfg), budget=budget, ledger=ledger)
+            adapter.extract(source(), native=DocumentExtractor(cfg), spend=spend, ledger=ledger)
         )
-    assert error.value.code == RefusalCode.EXTRACTION_FAILED and budget.judge_calls == 2
+    assert error.value.code == RefusalCode.EXTRACTION_FAILED and spend.judge_calls == 2
     assert sum(row.transcription_call is not None for row in ledger.snapshot()) == 2
 
 

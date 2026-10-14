@@ -25,8 +25,8 @@ from ghimera.research_reranking_types import (
 from ghimera.retrieval import HybridRetrievalConfig, RetrievalEvidence
 
 if TYPE_CHECKING:
-    from ghimera.budget import RunBudget
     from ghimera.config import GhimeraConfig
+    from ghimera.spend import RunSpend
 
 
 def _model(request: RerankRequest) -> ModelIdentity:
@@ -90,7 +90,7 @@ def validate_rerank_rows(
     config: "GhimeraConfig", rows: tuple[LedgerRow, ...]
 ) -> tuple[int, int, int]:
     """Count originals including UNKNOWN; validate every retained CPU return/replay."""
-    from ghimera.budget import RunBudget
+    from ghimera.spend import RunSpend
 
     uncertain_model_sequences(rows)
     calls = pairs = chars = 0
@@ -106,7 +106,7 @@ def validate_rerank_rows(
         if key in keys:
             raise ValueError("one fresh rerank operation cannot reserve multiple invocations")
         keys.add(key)
-        wire = port_input(RunBudget(config, lambda: 0.0), reservation)
+        wire = port_input(RunSpend(config, lambda: 0.0), reservation)
         intent = row.model_intent
         if (
             intent is None
@@ -129,11 +129,6 @@ def validate_rerank_rows(
                 raise ValueError("rerank ACK must retain the original CPU scores")
             scores = RerankScores.model_validate_json(ack.stored_output.body())
             scores.validate_request(reservation.request)
-    policy = config.research.reranking if config.research is not None else None
-    if policy is not None and (
-        calls > policy.max_calls or pairs > policy.max_pairs or chars > policy.max_input_chars
-    ):
-        raise ValueError("original rerank reservations exceed their declared run allowance")
     return calls, pairs, chars
 
 
@@ -185,17 +180,17 @@ def validate_run_evidence(
 
 
 class RunBoundReranker:
-    """One explicit decision, same native budget and durable journal as research."""
+    """One explicit decision, same native spend and durable journal as research."""
 
     def __init__(
         self,
-        budget: "RunBudget",
+        spend: "RunSpend",
         ledger: Ledger,
         *,
         channel: Literal["discovery", "retained"],
         decision: RerankDecision,
     ) -> None:
-        self._budget, self._ledger, self._channel = budget, ledger, channel
+        self._spend, self._ledger, self._channel = spend, ledger, channel
         self._decision = RerankDecision.model_validate(decision.model_dump())
         self._used = False
 
@@ -212,24 +207,24 @@ class RunBoundReranker:
         retrieval: HybridRetrievalConfig | None,
         generation: int | None = None,
     ) -> None:
-        budget, ledger, decision = self._budget, self._ledger, self._decision
-        policy = budget.config.research.reranking if budget.config.research is not None else None
+        spend, ledger, decision = self._spend, self._ledger, self._decision
+        policy = spend.config.research.reranking if spend.config.research is not None else None
         if (
             policy is None
-            or budget.config.model_work is None
-            or budget.config.model_work.results is None
+            or spend.config.model_work is None
+            or spend.config.model_work.results is None
             or corpus.reranking is None
             or corpus.encoding_recovery is None
-            or not ledger.has_replay_binding(budget.config)
+            or not ledger.has_replay_binding(spend.config)
         ):
             raise FatalModelWorkFailure(
                 "learned research needs its exact durable and corpus ACK owners"
             )
-        _admit_corpus(budget.config, self._channel, corpus, corpus_id, retrieval)
+        _admit_corpus(spend.config, self._channel, corpus, corpus_id, retrieval)
         rows = ledger.snapshot()
-        usage = validate_rerank_rows(budget.config, rows)
-        if usage != (budget.rerank_calls, budget.rerank_pairs, budget.rerank_chars):
-            raise FatalModelWorkFailure("rerank budget lost original reservations")
+        usage = validate_rerank_rows(spend.config, rows)
+        if usage != (spend.rerank_calls, spend.rerank_pairs, spend.rerank_chars):
+            raise FatalModelWorkFailure("rerank spend lost original reservations")
         matching = tuple(
             row
             for row in rows
@@ -239,13 +234,13 @@ class RunBoundReranker:
         )
         if decision.action == "fresh":
             if matching or any(
-                rows[i].rerank_reservation is not None and i not in budget.active_rerank_sequences
+                rows[i].rerank_reservation is not None and i not in spend.active_rerank_sequences
                 for i in uncertain_model_sequences(rows)
             ):
                 raise FatalModelWorkFailure(
                     "original rerank work is held; select its exact ACK explicitly"
                 )
-            budget.check_rerank(0, 0)
+            spend.check_rerank(0, 0)
         else:
             sequence = decision.original_intent_sequence
             if (
@@ -292,14 +287,14 @@ class RunBoundReranker:
             retrieval=retrieval,
             request=request,
         )
-        _admitted(self._budget.config, reservation)
-        wire = port_input(self._budget, reservation)
+        _admitted(self._spend.config, reservation)
+        wire = port_input(self._spend, reservation)
         replaying = self._decision.original_intent_sequence
         if replaying is None:
-            self._budget.check_rerank(len(request.candidates), reservation.input_chars)
+            self._spend.check_rerank(len(request.candidates), reservation.input_chars)
         sequence = replaying if replaying is not None else self._ledger.next_sequence
         invocation = ModelInvocation(
-            self._budget,
+            self._spend,
             self._ledger,
             phase="reranking",
             model=_model(request),
@@ -323,7 +318,7 @@ class RunBoundReranker:
         if replaying is not None:
             scores = invocation.replay(lambda stored: decode(stored.body()))
         else:
-            with self._budget.rerank_contact(sequence):
+            with self._spend.rerank_contact(sequence):
                 scores = await invocation.invoke(call, record_output)
         rows = self._ledger.snapshot()
         acknowledged = next(
@@ -344,6 +339,6 @@ class RunBoundReranker:
             replay_sequence=rows[-1].sequence if replaying is not None else None,
         )
         validate_run_evidence(
-            self._budget.config, rows, request, scores, evidence, channel=self._channel
+            self._spend.config, rows, request, scores, evidence, channel=self._channel
         )
         return RunRerankResult(scores=scores, evidence=evidence)

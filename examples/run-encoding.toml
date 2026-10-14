@@ -3,8 +3,6 @@
 # Change the service/model, quotas and private journal capacities deliberately.
 schema = "ghimera.scoring/3"
 reference_source = "intent"
-encoding_call_budget = 100
-encoding_char_budget = 100000
 window_chars = 1000
 overlap_chars = 100
 max_windows = 8
@@ -16,7 +14,6 @@ keyword_weight = 0.2
 [run_encoding_recovery]
 schema = "ghimera.run-encoding-recovery/1"
 max_result_bytes = 262144
-max_total_result_bytes = 26214400
 unknown_policy = "hold"
 
 [encoder]

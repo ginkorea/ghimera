@@ -1,5 +1,5 @@
 # Inert fragment; requires a complete native recipe with matching enabled graph,
-# bound analyst, existing run budgets and (for ACK replay) journal/model results.
+# bound analyst, existing run spend accounting and (for ACK replay) journal/model results.
 # These generic definitions are operator inputs, not a built-in domain ontology.
 # The graph must supply entity roles and a semantic reports_to relation with
 # entity source/target roles, plus its native document-to-entity mentions rule.
@@ -9,7 +9,6 @@ prompt_profile = "graph_bound_native_spans"
 model_role = "analyst"
 window_chars = 1000
 max_windows_per_document = 3
-max_calls_per_run = 8
 max_mentions_per_window = 8
 max_relations_per_window = 8
 entity_roles = ["entity"]

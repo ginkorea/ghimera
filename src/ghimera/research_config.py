@@ -5,8 +5,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ghimera.ceilings import Ceiling
 from ghimera.graph_planning_types import GraphPlanningConfig
+from ghimera.removed_ceilings import REMOVED_RESEARCH_CEILINGS, refuse_removed
 from ghimera.research_reranking_types import ResearchRerankingConfig
 from ghimera.research_reuse_config import ResearchReuseConfig
 
@@ -19,10 +19,8 @@ DEFAULT_SATURATION_ROUNDS = 2
 class ResearchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["chimera.research/1"] = Field(alias="schema")
-    max_rounds: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
     max_questions: Positive
     max_queries_per_round: Positive
-    query_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
     results_per_query: Positive
     search_concurrency: Positive
     max_pages_per_round: Positive
@@ -45,16 +43,21 @@ class ResearchConfig(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     reranking: ResearchRerankingConfig | None = Field(default=None, exclude_if=lambda v: v is None)
-    # Consecutive rounds retaining no new evidence that end research as saturated.
-    # Without max_rounds, research saturates after DEFAULT_SATURATION_ROUNDS.
+    # Consecutive rounds retaining no new evidence that end research as saturated
+    # (default DEFAULT_SATURATION_ROUNDS). There is no round ceiling.
     saturation_rounds: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
 
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_RESEARCH_CEILINGS, "research.")
+
     @property
-    def effective_saturation_rounds(self) -> int | None:
+    def effective_saturation_rounds(self) -> int:
         """The mission's own stop: no new evidence for this many consecutive rounds."""
-        if self.saturation_rounds is not None:
-            return self.saturation_rounds
-        return DEFAULT_SATURATION_ROUNDS if self.max_rounds is None else None
+        return (
+            DEFAULT_SATURATION_ROUNDS if self.saturation_rounds is None else self.saturation_rounds
+        )
 
     @model_validator(mode="after")
     def coherent(self) -> "ResearchConfig":
@@ -63,7 +66,7 @@ class ResearchConfig(BaseModel):
         if self.search_concurrency > self.max_queries_per_round:
             raise ValueError("search concurrency exceeds per-round queries")
         if len(self.allowed_hosts) > self.max_source_hosts:
-            raise ValueError("configured scope exceeds host budget")
+            raise ValueError("configured scope exceeds max_source_hosts")
         if set(self.allowed_hosts) & set(self.denied_hosts):
             raise ValueError("source policy cannot both allow and deny the same host")
         for host in self.allowed_hosts + self.denied_hosts:

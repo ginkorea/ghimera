@@ -11,13 +11,12 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
-from ghimera.ceilings import exceeds, reached
 from ghimera.embedding_types import EncodingBatch, EncodingCall, encoding_request
 from ghimera.journal_types import JournalEntry, JournalHeader, canonical, digest
 from ghimera.judgment_validation import validate_native_reading, validate_scoring_readings
 from ghimera.models import Goal, LedgerRow
 from ghimera.refusals import (
-    BudgetExhausted,
+    BoundExceeded,
     EncodingCancelled,
     EncodingFailure,
     GhimeraRefused,
@@ -32,11 +31,11 @@ from ghimera.run_encoding_types import (
 )
 
 if TYPE_CHECKING:
-    from ghimera.budget import RunBudget
     from ghimera.config import GhimeraConfig
     from ghimera.ledger import Ledger
     from ghimera.model_config import EmbeddingServiceConfig
     from ghimera.ports import EvidenceEncoder
+    from ghimera.spend import RunSpend
 
 Purpose = Literal["intent", "source"]
 BatchPlan = tuple[Purpose, "EmbeddingServiceConfig", tuple[str, ...], int]
@@ -51,7 +50,11 @@ def encoding_batches(
     for text in texts:
         chars = len(text) + len(service.text_prefix)
         if chars > service.max_text_chars or chars > service.max_input_chars:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BoundExceeded(
+                "encoder max_text_chars/max_input_chars",
+                chars,
+                min(service.max_text_chars, service.max_input_chars),
+            )
         if len(pending) >= service.max_batch_texts or size + chars > service.max_input_chars:
             batches.append((start, tuple(pending)))
             start += len(pending)
@@ -155,10 +158,6 @@ def validate_run_encoding_rows(
                 raise ValueError(
                     "run encoding reservation drifted from its exact run/recipe/purpose"
                 )
-            if exceeds(calls, policy.encoding_call_budget) or exceeds(
-                chars, policy.encoding_char_budget
-            ):
-                raise ValueError("run encoding reservations exceed original shared allowance")
             header_binding = binding
             intents[index] = intent
         if row.encoding_call is not None:
@@ -197,7 +196,6 @@ def validate_run_encoding_rows(
                 ack.intent_sha256 != reserved.content_digest()
                 or ack.result.call != row.encoding_call
                 or size > recovery.max_result_bytes
-                or stored > recovery.max_total_result_bytes
             ):
                 raise ValueError("run vector ACK changed identity or exceeded retained bounds")
             acks[original] = row
@@ -244,17 +242,17 @@ class RunEncodingWork:
 
     def __init__(
         self,
-        budget: "RunBudget",
+        spend: "RunSpend",
         ledger: "Ledger",
         scope: RunEncodingScope,
         plan: tuple[BatchPlan, ...],
         decisions: tuple[RunEncodingDecision, ...] | None,
     ) -> None:
-        self.budget, self.ledger, self.scope, self.plan = budget, ledger, scope, plan
+        self.spend, self.ledger, self.scope, self.plan = spend, ledger, scope, plan
         from ghimera.config import GhimeraConfig
 
-        GhimeraConfig.model_validate(budget.config.model_dump())
-        self.header = ledger.run_header(budget.config)
+        GhimeraConfig.model_validate(spend.config.model_dump())
+        self.header = ledger.run_header(spend.config)
         self.decisions = (
             tuple(RunEncodingDecision(mode="fresh") for _ in plan)
             if decisions is None
@@ -263,9 +261,9 @@ class RunEncodingWork:
         self.position = 0
         self.last_encoding_sequence: int | None = None
         rows = ledger.snapshot()
-        usage = validate_run_encoding_rows(budget.config, rows, header=self.header)
-        if usage != (budget.encoding_calls, budget.encoding_chars):
-            raise ValueError("run encoding budget must restore original charged intent counters")
+        usage = validate_run_encoding_rows(spend.config, rows, header=self.header)
+        if usage != (spend.encoding_calls, spend.encoding_chars):
+            raise ValueError("run encoding spend must restore original charged intent counters")
         if unknown_encoding_sequences(rows):
             raise ValueError("unknown run encoding remains charged and held, never retried")
         if len(self.decisions) != len(plan):
@@ -325,14 +323,14 @@ class RunEncodingWork:
         return tuple(output)
 
     async def _batch(self, expected: BatchPlan, encoder: "EvidenceEncoder") -> EncodingBatch:
-        async with self.budget.encoding_lock:
+        async with self.spend.encoding_lock:
             return await self._locked_batch(expected, encoder)
 
     async def _locked_batch(self, expected: BatchPlan, encoder: "EvidenceEncoder") -> EncodingBatch:
-        config, ledger, budget = self.budget.config, self.ledger, self.budget
+        config, ledger, spend = self.spend.config, self.ledger, self.spend
         ledger.run_header(config)
         usage = validate_run_encoding_rows(config, ledger.snapshot(), header=self.header)
-        if usage != (budget.encoding_calls, budget.encoding_chars):
+        if usage != (spend.encoding_calls, spend.encoding_chars):
             raise ValueError("run encoding counters changed from the native charged prefix")
         if unknown_encoding_sequences(ledger.snapshot()):
             raise ValueError("unknown run encoding remains charged and held")
@@ -368,14 +366,6 @@ class RunEncodingWork:
         if scoring is None or scoring.run_encoding_recovery is None or config.journal is None:
             raise ValueError("run encoding requires its explicit native policy")
         recovery = scoring.run_encoding_recovery
-        budget.check_time()
-        input_chars = sum(len(service.text_prefix) + len(text) for text in texts)
-        if reached(usage[0], scoring.encoding_call_budget):
-            raise BudgetExhausted("encoding_call_budget", usage[0], scoring.encoding_call_budget)
-        if exceeds(usage[1] + input_chars, scoring.encoding_char_budget):
-            raise BudgetExhausted(
-                "encoding_char_budget", usage[1] + input_chars, scoring.encoding_char_budget
-            )
         intent = RunEncodingIntent(
             schema="ghimera.run-encoding-intent/1",
             run_id=self.header.run_id,
@@ -399,13 +389,6 @@ class RunEncodingWork:
             run_encoding_intent=intent,
         )
         validate_run_encoding_rows(config, ledger.snapshot() + (row,), header=self.header)
-        stored = sum(
-            len(canonical(r.run_encoding_ack.result))
-            for r in ledger.snapshot()
-            if r.run_encoding_ack is not None
-        )
-        if stored + recovery.max_result_bytes > recovery.max_total_result_bytes:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         # Exact wrapper overhead around a bounded EncodingBatch; no guessed storage
         # helper or replacement persistence. Largest admitted sequence avoids a
         # concurrent observation increasing the decimal wrapper length.
@@ -474,7 +457,7 @@ class RunEncodingWork:
             + 1
         )
         ledger.check_capacity(config, (intent_size, ack_size))
-        budget.reserve_encoding(intent.input_chars)
+        spend.reserve_encoding(intent.input_chars)
         ledger.append(row)
         started = asyncio.get_running_loop().time()
         observed: EncodingCall | None = None

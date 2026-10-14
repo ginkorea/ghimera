@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ghimera.ahmia_config import AhmiaConfig
 from ghimera.browser_config import BrowserConfig
 from ghimera.cadence_config import CadenceConfig
-from ghimera.ceilings import Ceiling, SecondsCeiling, exceeds
 from ghimera.challenge_config import ChallengeConfig
 from ghimera.continuation_config import ContinuationConfig
 from ghimera.corpus_search_config import CorpusSearchConfig
@@ -32,6 +31,7 @@ from ghimera.model_retry import DEFAULT_MODEL_RETRY, ModelRetryPolicy
 from ghimera.model_work_types import ModelWorkConfig
 from ghimera.page_transcription_config import PdfTranscriptionConfig
 from ghimera.reference_config import ReferenceConfig
+from ghimera.removed_ceilings import REMOVED_RUN_CEILINGS, refuse_removed
 from ghimera.research_config import ResearchConfig
 from ghimera.research_recovery_config import ResearchRecoveryConfig
 from ghimera.scoring_config import ScoringConfig
@@ -119,12 +119,7 @@ class GhimeraConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
 
     schema_version: Literal["chimera.config/1"] = Field(alias="schema")
-    # Run limits are OFF unless configured: absent, "unbounded", 0 or null means no
-    # limit. Spend is still accounted on the receipt; see ceilings.py.
-    page_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
-    byte_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
-    wall_seconds: SecondsCeiling = Field(default=None, exclude_if=lambda value: value is None)
-    judge_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
+    # There are no run ceilings; spend is counted on receipts (see spend.py).
     grade_interval: PositiveInt
     grade_threshold: Probability
     saturation_window: PositiveInt
@@ -194,6 +189,11 @@ class GhimeraConfig(BaseModel):
     )
     source_work: SourceWorkConfig | None = Field(default=None, exclude_if=lambda v: v is None)
     model_work: ModelWorkConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_RUN_CEILINGS)
 
     @model_validator(mode="after")
     def consistent(self) -> "GhimeraConfig":
@@ -312,23 +312,15 @@ class GhimeraConfig(BaseModel):
             raise ValueError("research recovery requires journal, research and retained model work")
         reranking = self.research.reranking if self.research is not None else None
         if reranking is not None and (
-            self.journal is None
-            or self.model_work is None
-            or self.model_work.results is None
-            or exceeds(reranking.max_calls, self.judge_budget)
+            self.journal is None or self.model_work is None or self.model_work.results is None
         ):
-            raise ValueError(
-                "research reranking requires retained durable model work and judge allowance"
-            )
-        if self.model_work is not None and (
-            self.journal is None or exceeds(self.model_work.max_unanswered_calls, self.judge_budget)
-        ):
-            raise ValueError("model work needs a durable journal and a bound within judge budget")
+            raise ValueError("research reranking requires retained durable model work")
+        if self.model_work is not None and self.journal is None:
+            raise ValueError("model work needs a durable journal")
         if self.model_work is not None and self.model_work.results is not None:
             results, journal = self.model_work.results, self.journal
             if journal is None or (
                 4 * ((results.max_result_bytes + 2) // 3) >= journal.max_record_bytes
-                or 4 * ((results.max_total_result_bytes + 2) // 3) >= journal.max_journal_bytes
             ):
                 raise ValueError("retained model bytes must fit within the declared journal bounds")
         if self.source_work is not None and self.journal is None:
@@ -341,7 +333,7 @@ class GhimeraConfig(BaseModel):
         if self.visuals is not None:
             if self.http is None or self.http.max_response_bytes > self.visuals.max_image_bytes:
                 raise ValueError(
-                    "visual reads require HTTP with a response bound within the image budget"
+                    "visual reads require HTTP with a response bound within max_image_bytes"
                 )
             if any(
                 host != host.lower() or "/" in host or ":" in host or "." not in host

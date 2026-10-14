@@ -1,7 +1,7 @@
 """Atomic evidence bundles for explicitly requested identity-first planning.
 
 This selector owns only one population's candidate closure and ordering. It
-does not resolve identity, change a graph, enlarge budgets or invent evidence.
+does not resolve identity, change a graph, enlarge bounds or invent evidence.
 The caller remains the owner of admission under the serialized context limits.
 """
 

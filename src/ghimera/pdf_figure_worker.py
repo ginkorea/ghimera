@@ -15,7 +15,7 @@ def crop_figures(request: FigureCropRequest) -> FigureCropResult:
     from PIL import Image
 
     if not 0 < len(request.selections) <= request.config.max_figures:
-        raise ValueError("figure selection count exceeds the admitted crop budget")
+        raise ValueError("figure selection count exceeds the admitted crop bound")
     rendered = render(PageRenderRequest(config=request.config.renderer, pdf=request.pdf))
     result: list[FigureCrop] = []
     for selection in request.selections:
@@ -66,7 +66,7 @@ def main() -> None:
     request = FigureCropRequest.model_validate_json(sys.stdin.buffer.read())
     response = crop_figures(request).model_dump_json().encode()
     if len(response) > request.config.renderer.max_output_bytes:
-        raise ValueError("figure crop worker output budget exceeded")
+        raise ValueError("figure crop worker output bound exceeded")
     sys.stdout.buffer.write(response)
 
 

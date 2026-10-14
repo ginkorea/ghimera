@@ -1,10 +1,6 @@
 # Example policy, not an active deployment. Select an approved egress host and
 # explicit self-hosted models separately; the package launches neither.
 schema = "chimera.config/1"
-page_budget = 400
-byte_budget = 2147483648
-wall_seconds = 3600.0
-judge_budget = 500
 grade_interval = 20
 grade_threshold = 0.9
 saturation_window = 20
@@ -43,10 +39,8 @@ product_token = "Chimera"
 
 [research]
 schema = "chimera.research/1"
-max_rounds = 8
 max_questions = 12
 max_queries_per_round = 4
-query_budget = 32
 results_per_query = 8
 search_concurrency = 2
 max_pages_per_round = 20
@@ -63,7 +57,7 @@ allowed_ports = [80, 443]
 content_types = ["text/html", "text/plain", "application/pdf"]
 max_depth = 2
 
-# Optional source expansion; all limits share the original run's budgets.
+# Optional source expansion; its bounds are per source; there are no run ceilings.
 # Choose depth and host policy here, not by editing Python.
 [references]
 schema = "chimera.references/1"
@@ -76,7 +70,6 @@ max_parents = 8
 max_candidates_per_parent = 8
 max_queued_per_run = 32
 max_extra_hosts = 16
-cited_by_query_budget = 8
 cited_by_query_template = '"{title}" "{url}" cited by'
 max_query_title_chars = 160
 # For Tor, supply [transport] and [transport.tor] from chimera-tor.toml.

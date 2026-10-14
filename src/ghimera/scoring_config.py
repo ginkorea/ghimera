@@ -4,8 +4,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ghimera.ceilings import Ceiling
 from ghimera.model_config import EmbeddingServiceConfig
+from ghimera.removed_ceilings import REMOVED_SCORING_CEILINGS, refuse_removed
 from ghimera.run_encoding_types import RunEncodingRecoveryConfig
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
@@ -26,8 +26,6 @@ class ScoringConfig(BaseModel):
     references_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
-    encoding_call_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
-    encoding_char_budget: Ceiling = Field(default=None, exclude_if=lambda value: value is None)
     window_chars: Positive
     overlap_chars: Annotated[int, Field(strict=True, ge=0)]
     max_windows: Positive
@@ -38,6 +36,11 @@ class ScoringConfig(BaseModel):
     run_encoding_recovery: RunEncodingRecoveryConfig | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_SCORING_CEILINGS, "scoring.")
 
     @model_validator(mode="after")
     def coherent(self) -> "ScoringConfig":

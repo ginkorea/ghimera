@@ -10,7 +10,6 @@ from pydantic.json_schema import SkipJsonSchema
 
 from ghimera.browser_operation_types import BrowserSourceAction
 from ghimera.browser_types import RenderResult
-from ghimera.ceilings import exceeds
 from ghimera.challenge_types import ChallengeEvidence
 from ghimera.config import GhimeraConfig, Probability
 from ghimera.dedup_types import ContentDrift, DedupEvidence
@@ -78,7 +77,7 @@ from ghimera.visual_types import ImageCandidate, ImageEvidence
 
 NonEmpty = Annotated[str, Field(min_length=1)]
 NonNegative = Annotated[int, Field(strict=True, ge=0)]
-StopReason = Literal["frontier_empty", "budget_exhausted", "saturated", "goal_satisfied", "failed"]
+StopReason = Literal["frontier_empty", "saturated", "goal_satisfied", "failed"]
 
 
 class Record(BaseModel):
@@ -1028,7 +1027,7 @@ class LedgerRow(Record):
             or self.refusal is not None
             or self.reason != "browser_source_action_reserved"
         ):
-            raise ValueError("browser action is a known budget reservation, not an HTTP result")
+            raise ValueError("browser action is a known spend reservation, not an HTTP result")
         if (
             self.route == "human_browser_dom"
             or self.human_browser is not None
@@ -1319,12 +1318,8 @@ class Harvest(Record):
             raise ValueError("fresh feed documents must preserve their parse observation")
         inputs = tuple(row for row in self.ledger if row.event == "local_input")
         input_policy = self.receipt.effective_config.local_inputs
-        if inputs and (
-            input_policy is None
-            or len(inputs) > input_policy.max_files_per_run
-            or sum(row.bytes_read for row in inputs) > input_policy.max_total_bytes
-        ):
-            raise ValueError("local imports exceed the effective input policy")
+        if inputs and input_policy is None:
+            raise ValueError("local imports require the effective input policy")
         for row in inputs:
             if row.local_input is not None:
                 row.local_input.validate_policy(input_policy)
@@ -1448,7 +1443,7 @@ class Harvest(Record):
         if challenge_rows and (
             challenge_policy is None or len(challenge_rows) > challenge_policy.max_attempts_per_run
         ):
-            raise ValueError("challenge attempts exceed their configured run budget")
+            raise ValueError("challenge attempts exceed their configured max_attempts_per_run")
         if self.receipt.bytes_read != sum(row.bytes_read for row in self.ledger):
             raise ValueError("byte spend does not match ledger")
         from ghimera.model_reconciliation import validate_policy as validate_model_decisions
@@ -1462,9 +1457,7 @@ class Harvest(Record):
 
         validate_query_rows(self.receipt.effective_config, self.ledger)
         observed_judge_calls = (
-            validate_model_rows(
-                native_model_policy, self.receipt.effective_config.judge_budget, self.ledger
-            )
+            validate_model_rows(native_model_policy, self.ledger)
             if native_model_policy is not None
             else sum(
                 row.event
@@ -1506,11 +1499,6 @@ class Harvest(Record):
             )
         ):
             raise ValueError("encoding ledger must bind the effective service configuration")
-        if scoring_policy is not None and (
-            exceeds(self.receipt.encoding_calls, scoring_policy.encoding_call_budget)
-            or exceeds(self.receipt.encoding_chars, scoring_policy.encoding_char_budget)
-        ):
-            raise ValueError("encoding spend exceeds the shared run budget")
         native_sources = {
             hashlib.sha256(document.extracted.text.encode()).hexdigest(): document.extracted
             for document in self.source_documents

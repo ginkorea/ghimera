@@ -14,7 +14,6 @@ import pytest
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
 from ghimera.fetch import FetchLadder
@@ -25,6 +24,7 @@ from ghimera.ledger import Ledger
 from ghimera.loop import GoalLoop
 from ghimera.model_http import ModelHttpResponse
 from ghimera.models import Goal, Page, Scope, Verdict
+from ghimera.spend import RunSpend
 from ghimera.visual_config import VisualConfig
 from ghimera.visual_model import LocalVisionReader
 from ghimera.visual_stage import VisualStage
@@ -163,9 +163,6 @@ def run_config(visual):
     raw = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     raw.update(
         visuals=visual,
-        page_budget=8,
-        judge_budget=8,
-        byte_budget=1000000,
         http={
             "schema": "chimera.http/1",
             "max_response_bytes": 100000,
@@ -238,7 +235,7 @@ def test_rejected_visual_leaves_no_image_or_vector_artifact(tmp_path):
             parent=page('<img src="/chart.png" alt="chart">'),
             scope=Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",)),
             fetcher=fetcher,
-            budget=RunBudget(config, time.monotonic),
+            spend=RunSpend(config, time.monotonic),
             ledger=ledger,
             language_hint="en",
         )
@@ -316,12 +313,12 @@ def test_visual_model_protocol_reviews_actual_image_and_refuses_unbound_claims(t
         ),
         review_http=VisionWire(visual.reviewer, unsupported=mode == "unsupported"),
     )
-    budget, ledger = RunBudget(config, time.monotonic), Ledger()
+    spend, ledger = RunSpend(config, time.monotonic), Ledger()
     call = reader.interpret(
         intent="ports",
         raw=raw,
         ocr=ocr,
-        budget=budget,
+        spend=spend,
         ledger=ledger,
         url="https://example.org/chart.png",
     )
@@ -331,5 +328,5 @@ def test_visual_model_protocol_reviews_actual_image_and_refuses_unbound_claims(t
     else:
         result = asyncio.run(call)
         assert (result is not None) == (mode == "supported")
-        assert budget.judge_calls == 2
-    assert budget.judge_calls == sum(row.event == "visual_model" for row in ledger.snapshot())
+        assert spend.judge_calls == 2
+    assert spend.judge_calls == sum(row.event == "visual_model" for row in ledger.snapshot())

@@ -56,7 +56,13 @@ from ghimera.model_types import (
     TokenUsage,
 )
 from ghimera.models import Document, Extracted, Goal, Grade, ModelIdentity, Record, Verdict
-from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
+from ghimera.refusals import (
+    BoundExceeded,
+    GhimeraRefused,
+    ModelCancelled,
+    ModelFailure,
+    RefusalCode,
+)
 from ghimera.research_reuse import RetainedSourceNotice
 from ghimera.research_types import (
     AnswerDraft,
@@ -633,7 +639,7 @@ class SelfHostedModel:
                 else service.max_input_chars
             )
             if len(packet) > limit:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                raise BoundExceeded("model max_input_chars", len(packet), limit)
             schema = model_schema(
                 output,
                 template_ids=service.citation_format == "template_ids",
@@ -996,7 +1002,7 @@ class SelfHostedModel:
             )
             input_chars += len(system)
             if input_chars > limit:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                raise BoundExceeded("model max_input_chars", input_chars, limit)
             body = json.dumps(
                 {
                     "model": service.served_model,
@@ -1016,7 +1022,7 @@ class SelfHostedModel:
                 separators=(",", ":"),
             ).encode()
             if len(body) > service.max_request_bytes:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                raise BoundExceeded("model max_request_bytes", len(body), service.max_request_bytes)
             response = await self._http.post(body)
             if len(response.body) > service.max_response_bytes:
                 output_contract_failure = ModelOutputContractFailure(

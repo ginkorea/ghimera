@@ -55,7 +55,7 @@ def test_fresh_command_primary_cut_processes_only_unstarted_frontier_under_origi
     assert result.harvest.ledger[: len(cut.journal.rows)] == cut.journal.rows
     assert result.harvest.receipt.fetches == original.receipt.fetches + 2  # new robots + new source
     assert result.harvest.receipt.fetches - cut.snapshot.quantum_start == cut.snapshot.fetch_limit
-    assert len(result.rounds) == cfg.research.max_rounds == 1
+    assert len(result.rounds) == 1 and cfg.research.saturation_rounds == 1
     assert result.harvest.documents[0].raw == original.documents[0].raw
 
 
@@ -114,9 +114,7 @@ def test_fresh_cited_by_cut_preserves_own_leg_cursor_and_never_repeats_discovery
     from tests.test_reference_expansion import references
 
     raw = offline_settings(tmp_path, pages=4).model_dump()
-    raw["references"] = references(
-        discover_cited_by=True, cited_by_query_budget=2, outside_scope="observed_public"
-    )
+    raw["references"] = references(discover_cited_by=True, outside_scope="observed_public")
     cfg = GhimeraConfig.model_validate(raw)
     path = tmp_path / "cited-config.json"
     path.write_text(cfg.model_dump_json())

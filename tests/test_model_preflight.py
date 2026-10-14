@@ -84,7 +84,7 @@ def test_oversized_request_refuses_before_any_network(tmp_path, monkeypatch, bou
         raise AssertionError("oversized preflight must not use network")
 
     monkeypatch.setattr(PinnedModelHttp, "post", forbidden)
-    with pytest.raises(ModelFailure, match="budget_exhausted") as refused:
+    with pytest.raises(ModelFailure, match="bound_exceeded") as refused:
         inspect(cfg, doc, proposal)
     assert refused.value.model_call.status is None
     assert refused.value.model_call.response_bytes == 0
@@ -126,14 +126,14 @@ def test_later_oversized_partition_refuses_complete_preflight(tmp_path):
     raw = cfg.model_dump()
     raw["models"]["reviewer"]["max_request_bytes"] = footprints[0].request_bytes
     cfg = GhimeraConfig.model_validate(raw)
-    with pytest.raises(ModelFailure, match="budget_exhausted"):
+    with pytest.raises(ModelFailure, match="bound_exceeded"):
         inspect(cfg, doc, proposal)
 
 
 def test_real_model_stage_prepares_all_parts_before_reserving_or_calling_review(
     tmp_path, monkeypatch
 ):
-    from ghimera.budget import RunBudget
+    from ghimera.spend import RunSpend
 
     cfg, doc = quote_config(tmp_path), native_document()
     proposal = original_proposal(cfg, doc)
@@ -144,9 +144,9 @@ def test_real_model_stage_prepares_all_parts_before_reserving_or_calling_review(
     wire = RecordingQuoteWire(cfg.models.reviewer)
 
     def forbidden(*args, **kwargs):
-        raise AssertionError("no review budget may be reserved for an oversized batch")
+        raise AssertionError("no review spend may be reserved for an oversized batch")
 
-    monkeypatch.setattr(RunBudget, "reserve_semantic_review", forbidden)
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
+    monkeypatch.setattr(RunSpend, "reserve_semantic_review", forbidden)
+    with pytest.raises(GhimeraRefused, match="bound_exceeded"):
         run_stage(cfg, SemanticWire(cfg.models.analyst), wire, (doc,))
     assert wire.bodies == []

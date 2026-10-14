@@ -6,13 +6,13 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.ledger import Ledger
 from ghimera.refusals import GhimeraRefused
 from ghimera.research_types import SearchQuery
 from ghimera.search_config import SearxConfig
 from ghimera.search_history import SearchHistory
+from ghimera.spend import RunSpend
 from tests.test_html_extraction import policy as extraction_policy
 from tests.test_http_fetch import ResolverFixture
 from tests.test_search_conformance import endpoint, provider
@@ -75,8 +75,8 @@ def test_html_search_retains_native_results_and_excludes_navigation(tmp_path, en
     endpoint[2].update(body=HTML, content_type="text/html; charset=utf-8")
     adapter, cfg = html_provider(tmp_path, endpoint)
     ledger = Ledger()
-    budget = RunBudget(cfg, lambda: 0.0)
-    history = SearchHistory(adapter, budget, ledger)
+    spend = RunSpend(cfg, lambda: 0.0)
+    history = SearchHistory(adapter, spend, ledger)
     response = asyncio.run(history.discover(SearchQuery(text="ports", question_ids=("q1",))))
     assert [hit.url for hit in response.hits] == [
         "https://example.org/one",
@@ -86,7 +86,7 @@ def test_html_search_retains_native_results_and_excludes_navigation(tmp_path, en
     assert response.hits[0].snippet == "原文 摘要 & evidence."
     assert response.raw == HTML == history.observations[0].response.raw
     assert ledger.snapshot()[0].search_response_sha256 == response.content_digest()
-    assert budget.search_calls == budget.fetches == len(endpoint[1]) == 1
+    assert spend.search_calls == spend.fetches == len(endpoint[1]) == 1
     parameters = parse_qs(urlsplit(endpoint[1][0]).query)
     assert "format" not in parameters and parameters["theme"] == ["simple"]
     assert parameters["language"] == ["zh-TW"]
@@ -116,13 +116,13 @@ def test_html_search_does_not_turn_failed_layout_or_access_into_results(
         endpoint[2]["status"] = 302
     endpoint[2].update(body=body, content_type="text/html")
     adapter, cfg = html_provider(tmp_path, endpoint)
-    budget, ledger = RunBudget(cfg, lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(cfg, lambda: 0.0), Ledger()
     with pytest.raises(GhimeraRefused):
         asyncio.run(
-            adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), budget, ledger)
+            adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), spend, ledger)
         )
     assert len(endpoint[1]) == 1
-    assert budget.bytes_read == ledger.snapshot()[0].bytes_read == len(body)
+    assert spend.bytes_read == ledger.snapshot()[0].bytes_read == len(body)
     assert ledger.snapshot()[0].refusal is not None
     if failure in {"challenge", "substation"}:
         assert ledger.snapshot()[0].refusal.value == "challenge_not_solved"
@@ -136,7 +136,7 @@ def test_html_empty_results_are_success_only_in_the_observed_results_envelope(tm
     adapter, cfg = html_provider(tmp_path, endpoint)
     response = asyncio.run(
         adapter.discover(
-            SearchQuery(text="ports", question_ids=("q1",)), RunBudget(cfg, lambda: 0.0), Ledger()
+            SearchQuery(text="ports", question_ids=("q1",)), RunSpend(cfg, lambda: 0.0), Ledger()
         )
     )
     assert response.hits == ()
@@ -149,7 +149,7 @@ def test_json_mode_does_not_silently_retry_html(tmp_path, endpoint):
         asyncio.run(
             adapter.discover(
                 SearchQuery(text="ports", question_ids=("q1",)),
-                RunBudget(cfg, lambda: 0.0),
+                RunSpend(cfg, lambda: 0.0),
                 Ledger(),
             )
         )
@@ -179,7 +179,7 @@ def test_html_response_limit_and_parser_input_budget_are_real(tmp_path, endpoint
     adapter, cfg = html_provider(tmp_path, endpoint, research=policy(results_per_query=1))
     response = asyncio.run(
         adapter.discover(
-            SearchQuery(text="ports", question_ids=("q1",)), RunBudget(cfg, lambda: 0.0), Ledger()
+            SearchQuery(text="ports", question_ids=("q1",)), RunSpend(cfg, lambda: 0.0), Ledger()
         )
     )
     assert len(response.hits) == 1 and response.raw == HTML
@@ -188,12 +188,12 @@ def test_html_response_limit_and_parser_input_budget_are_real(tmp_path, endpoint
         endpoint,
         extraction=extraction_policy(tmp_path / "limited", max_input_bytes=len(HTML) - 1),
     )
-    budget, ledger = RunBudget(cfg, lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(cfg, lambda: 0.0), Ledger()
     with pytest.raises(GhimeraRefused, match="search_unavailable"):
         asyncio.run(
-            adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), budget, ledger)
+            adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), spend, ledger)
         )
-    assert budget.bytes_read == len(HTML)
+    assert spend.bytes_read == len(HTML)
     assert not cfg.extraction.work_directory.exists()
 
 
@@ -205,12 +205,12 @@ def test_parser_cancel_keeps_bytes_already_fetched(tmp_path, endpoint, monkeypat
         raise asyncio.CancelledError
 
     monkeypatch.setattr(adapter._worker, "run", cancelled)
-    budget, ledger = RunBudget(cfg, lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(cfg, lambda: 0.0), Ledger()
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(
-            adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), budget, ledger)
+            adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), spend, ledger)
         )
-    assert budget.bytes_read == ledger.snapshot()[0].bytes_read == len(HTML)
+    assert spend.bytes_read == ledger.snapshot()[0].bytes_read == len(HTML)
     assert len(endpoint[1]) == 1 and ledger.snapshot()[0].refusal is not None
 
 
@@ -230,7 +230,7 @@ def test_html_search_uses_configured_tor_and_never_source_dns(tmp_path, endpoint
             adapter = SearxHtmlSearch(cfg, cfg.search, resolver=NoLocalDNS())
             response = await adapter.discover(
                 SearchQuery(text="ports", question_ids=("q1",)),
-                RunBudget(cfg, asyncio.get_running_loop().time),
+                RunSpend(cfg, asyncio.get_running_loop().time),
                 Ledger(),
             )
             assert response.transport.mode == "tor" and response.raw == HTML

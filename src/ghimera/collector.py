@@ -9,7 +9,6 @@ from pydantic import SecretStr
 from ghimera.ahmia import AhmiaIndexSearch
 from ghimera.ahmia_config import AhmiaConfig
 from ghimera.browser import IsolatedBrowserRenderer
-from ghimera.ceilings import exceeds
 from ghimera.config import GhimeraConfig
 from ghimera.corpus import EvidenceCorpus
 from ghimera.corpus_evidence import CorpusEvidenceReader
@@ -41,7 +40,7 @@ from ghimera.page_renderer import PdfPageRenderer
 from ghimera.page_transcriber import LocalPageTranscriber
 from ghimera.pdf_transcription import PdfTranscriptionStage
 from ghimera.ports import Extractor
-from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.refusals import BoundExceeded, GhimeraRefused, RefusalCode
 from ghimera.research import ResearchLoop
 from ghimera.research_recovery_types import ResearchRecoveryModels, ResearchRecoveryRead
 from ghimera.research_types import ResearchRequest, ResearchResult
@@ -379,13 +378,13 @@ class Collector:
         policy = self.config.scoring
         if policy is not None and policy.reference_source == "intent":
             chars = len(text) + len(policy.encoder.text_prefix)
-            if chars > min(policy.encoder.max_text_chars, policy.encoder.max_input_chars) or (
-                exceeds(chars, policy.encoding_char_budget)
-            ):
-                raise GhimeraRefused(
-                    RefusalCode.BUDGET_EXHAUSTED,
-                    f"intent text of {chars} chars (with prefix) exceeds the intent encoder's "
-                    "text/input bound or encoding_char_budget; an intent is never truncated",
+            bound = min(policy.encoder.max_text_chars, policy.encoder.max_input_chars)
+            if chars > bound:
+                raise BoundExceeded(
+                    "intent encoder max_text_chars/max_input_chars",
+                    chars,
+                    bound,
+                    "an intent (with its prefix) is never truncated",
                 )
 
     async def run(
@@ -462,7 +461,7 @@ class Collector:
         self._validate_intent(request.intent)
         if request.local_documents:
             policy = self.config.local_inputs
-            if policy is None or len(request.local_documents) > policy.max_files_per_run:
+            if policy is None:
                 raise GhimeraRefused(RefusalCode.LOCAL_INPUT_FAILED)
             if any(not policy.permits(seed.path) for seed in request.local_documents):
                 raise GhimeraRefused(RefusalCode.LOCAL_INPUT_FAILED)

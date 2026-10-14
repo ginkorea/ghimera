@@ -6,7 +6,6 @@ prompt_profile = "defined_ontology"
 model_role = "analyst"
 window_chars = 1500
 max_windows_per_document = 64
-max_calls_per_run = 256
 max_mentions_per_window = 32
 max_relations_per_window = 32
 entity_roles = ["person", "organization", "position"]
@@ -36,8 +35,7 @@ definition = "The source explicitly identifies membership of the source person i
 [verification]
 schema = "ghimera.semantic-verification/1"
 model_role = "reviewer"
-max_calls_per_run = 256
 
-# Each reviewed window uses two model calls from the shared judge budget.
+# Each reviewed window uses two model calls, both counted as judge spend.
 # Use graph-planning/2 if a research graph context is also configured.
 # Definitions must match the application's graph roles, endpoint roles and rules.

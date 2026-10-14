@@ -9,7 +9,6 @@ from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from ghimera.ahmia_config import AhmiaConfig
 from ghimera.ahmia_wire import AhmiaHitEvidence, decode_ahmia
-from ghimera.ceilings import exceeds
 from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.corpus_search_wire import CorpusSearchWire
 from ghimera.corpus_types import BoundCorpusDocument
@@ -361,7 +360,7 @@ class ResearchResult(ResearchRecord):
         "chimera.research-result/1", "chimera.research-result/2", "chimera.research-result/3"
     ] = Field(alias="schema")
     status: Literal["answered", "partial", "failed"]
-    stop_reason: Literal["answered", "rounds_exhausted", "budget_exhausted", "failed", "saturated"]
+    stop_reason: Literal["answered", "rounds_exhausted", "failed", "saturated"]
     harvest: Harvest
     questions: tuple[Question, ...]
     rounds: tuple[ResearchRound, ...]
@@ -589,15 +588,12 @@ class ResearchResult(ResearchRecord):
                     for row in attempts
                     if row.route == f"search:{provider.identity[0]}@{provider.identity[1]}"
                 )
-                if (
-                    len(provider_rows) > provider.max_calls
-                    or sum(row.bytes_read for row in provider_rows) > provider.byte_budget
-                    or any(row.bytes_read > provider.max_response_bytes for row in provider_rows)
-                    or any(
-                        len(obs.response.hits) > provider.max_results
-                        for obs in self.search_observations
-                        if (obs.provider, obs.provider_revision) == provider.identity
-                    )
+                if any(
+                    row.bytes_read > provider.max_response_bytes for row in provider_rows
+                ) or any(
+                    len(obs.response.hits) > provider.max_results
+                    for obs in self.search_observations
+                    if (obs.provider, obs.provider_revision) == provider.identity
                 ):
                     raise ValueError("discovery evidence exceeds its provider limits")
         for row in self.harvest.ledger:
@@ -627,8 +623,6 @@ class ResearchResult(ResearchRecord):
         ids = {question.id for question in self.questions}
         if policy is None or len(ids) != len(self.questions) or not set(self.unresolved) <= ids:
             raise ValueError("research result must bind a valid question pack and research policy")
-        if exceeds(self.search_calls, policy.query_budget):
-            raise ValueError("search count exceeds the recorded policy")
         if policy.graph_context is not None:
             plans = tuple(row for row in self.harvest.ledger if row.event == "plan")
             for round_ in self.rounds:

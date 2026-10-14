@@ -1,10 +1,8 @@
 """Selective visual enrichment of accepted pages; only accepted bytes survive."""
 
-import asyncio
 import hashlib
 from functools import partial
 
-from ghimera.budget import RunBudget
 from ghimera.fetch import FetchLadder
 from ghimera.image_candidates import admitted, image_candidates
 from ghimera.image_ocr import ImageOcr
@@ -14,6 +12,7 @@ from ghimera.models import Document, Extracted, Goal, LedgerRow, Page, Scope
 from ghimera.pdf_figures import PdfFigureCropper, select_figures
 from ghimera.ports import Judge
 from ghimera.refusals import GhimeraRefused, ModelFailure, RefusalCode
+from ghimera.spend import RunSpend
 from ghimera.visual_config import VisualConfig
 from ghimera.visual_model import VisionReader
 from ghimera.visual_types import ImageCandidate, ImageEvidence
@@ -43,7 +42,7 @@ class VisualStage:
         raw: bytes,
         final_url: str,
         media_type: str,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         language_hint: str | None,
     ) -> ImageEvidence | None:
@@ -58,7 +57,7 @@ class VisualStage:
                 intent=goal.text,
                 raw=raw,
                 ocr=ocr,
-                budget=budget,
+                spend=spend,
                 ledger=ledger,
                 url=final_url,
             )
@@ -68,12 +67,12 @@ class VisualStage:
                 title=candidate.caption or "image OCR", text=ocr.text, language="und"
             )
             invocation = ModelInvocation(
-                budget,
+                spend,
                 ledger,
                 phase="verdict",
                 model=self._judge.model,
                 url=final_url,
-                request=port_input(budget, goal, extracted, second_look=False),
+                request=port_input(spend, goal, extracted, second_look=False),
             )
             try:
                 verdict = await invocation.invoke(
@@ -89,7 +88,7 @@ class VisualStage:
                         model=self._judge.model,
                         refusal=exc.code
                         if isinstance(exc, GhimeraRefused)
-                        else RefusalCode.BUDGET_EXHAUSTED,
+                        else RefusalCode.BOUND_EXCEEDED,
                         model_call=exc.model_call if isinstance(exc, ModelFailure) else None,
                         reason="visual_ocr_judge_failed",
                     )
@@ -139,7 +138,7 @@ class VisualStage:
         *,
         goal: Goal,
         document: Document,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         language_hint: str | None = None,
     ) -> tuple[ImageEvidence, ...]:
@@ -156,26 +155,24 @@ class VisualStage:
                 )
             )
         try:
-            async with asyncio.timeout(budget.remaining_seconds):
-                crops = await self._pdf_cropper.crop(document, selections)
-                retained: dict[str, ImageEvidence] = {}
-                for crop in crops:
-                    image = await self._inspect(
-                        goal=goal,
-                        candidate=crop.candidate,
-                        raw=crop.png,
-                        final_url=crop.candidate.url,
-                        media_type="image/png",
-                        budget=budget,
-                        ledger=ledger,
-                        language_hint=language_hint,
-                    )
-                    if image is not None:
-                        retained.setdefault(image.sha256, image)
-                return tuple(retained.values())
+            crops = await self._pdf_cropper.crop(document, selections)
+            retained: dict[str, ImageEvidence] = {}
+            for crop in crops:
+                image = await self._inspect(
+                    goal=goal,
+                    candidate=crop.candidate,
+                    raw=crop.png,
+                    final_url=crop.candidate.url,
+                    media_type="image/png",
+                    spend=spend,
+                    ledger=ledger,
+                    language_hint=language_hint,
+                )
+                if image is not None:
+                    retained.setdefault(image.sha256, image)
+            return tuple(retained.values())
         except (ValueError, GhimeraRefused) as exc:
             if isinstance(exc, GhimeraRefused) and exc.code in {
-                RefusalCode.BUDGET_EXHAUSTED,
                 RefusalCode.LEDGER_SINK_FAILED,
             }:
                 raise
@@ -192,7 +189,10 @@ class VisualStage:
             )
             return ()
         except TimeoutError:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED) from None
+            raise GhimeraRefused(
+                RefusalCode.BOUND_EXCEEDED,
+                "visual read passed its service deadline; an input bound, not a spend limit",
+            ) from None
 
     async def collect(
         self,
@@ -201,7 +201,7 @@ class VisualStage:
         parent: Page,
         scope: Scope,
         fetcher: FetchLadder,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         language_hint: str | None = None,
     ) -> tuple[ImageEvidence, ...]:
@@ -234,30 +234,28 @@ class VisualStage:
             attempts += 1
             image: Page | None = None
             try:
-                async with asyncio.timeout(budget.remaining_seconds):
-                    image = await fetcher.fetch_image(candidate.url, image_scope, budget, ledger)
-                    evidence = await self._inspect(
-                        goal=goal,
-                        candidate=candidate,
-                        raw=image.body,
-                        final_url=image.final_url,
-                        media_type=image.content_type,
-                        budget=budget,
-                        ledger=ledger,
-                        language_hint=language_hint,
-                    )
-                    if evidence is not None and evidence.sha256 not in {
-                        item.sha256 for item in retained
-                    }:
-                        retained.append(evidence)
+                image = await fetcher.fetch_image(candidate.url, image_scope, spend, ledger)
+                evidence = await self._inspect(
+                    goal=goal,
+                    candidate=candidate,
+                    raw=image.body,
+                    final_url=image.final_url,
+                    media_type=image.content_type,
+                    spend=spend,
+                    ledger=ledger,
+                    language_hint=language_hint,
+                )
+                if evidence is not None and evidence.sha256 not in {
+                    item.sha256 for item in retained
+                }:
+                    retained.append(evidence)
             except (GhimeraRefused, ValueError, TimeoutError) as exc:
                 if isinstance(exc, GhimeraRefused) and exc.code in {
-                    RefusalCode.BUDGET_EXHAUSTED,
                     RefusalCode.LEDGER_SINK_FAILED,
                 }:
                     raise
-                if isinstance(exc, TimeoutError):
-                    raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED) from None
+                # One image's refusal (an image bomb, a decoder past its deadline)
+                # refuses that image only; the page and the round continue.
                 ledger.append(
                     LedgerRow(
                         sequence=ledger.next_sequence,
@@ -265,8 +263,16 @@ class VisualStage:
                         url=candidate.url,
                         refusal=exc.code
                         if isinstance(exc, GhimeraRefused)
+                        else RefusalCode.BOUND_EXCEEDED
+                        if isinstance(exc, TimeoutError)
                         else RefusalCode.EXTRACTION_FAILED,
                         reason="visual_refused:no_image_retained",
+                        detail=exc.detail
+                        if isinstance(exc, GhimeraRefused)
+                        else "visual read passed its service deadline; "
+                        "an input bound, not a spend limit"
+                        if isinstance(exc, TimeoutError)
+                        else None,
                     )
                 )
             finally:

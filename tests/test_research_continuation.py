@@ -30,7 +30,7 @@ from tests.test_intent_research import (
 )
 
 
-def configured(tmp_path, *, judge_budget=40, **updates):
+def configured(tmp_path, **updates):
     graph = tomllib.loads(Path("examples/research-graph.toml").read_text())
     graph["sink_path"] = str(tmp_path / "graph")
     return config(
@@ -49,8 +49,6 @@ def configured(tmp_path, *, judge_budget=40, **updates):
             clock_policy="include_downtime",
         ),
         research=policy(max_pages_per_round=1, max_depth=3),
-        page_budget=30,
-        judge_budget=judge_budget,
         **updates,
     )
 
@@ -133,8 +131,9 @@ def test_resume_preserves_pending_frontier_and_does_not_refetch_completed_source
     assert planner.requests[0].questions == checkpoint.progress.questions
     assert not new_search.requests
     assert all(request.url != route.requests[0].url for request in new_route.requests)
-    assert len(new_route.requests) == 2
-    assert [round_.number for round_ in result.rounds] == [1, 2, 3]
+    assert len(new_route.requests) >= 2
+    assert [round_.number for round_ in result.rounds] == list(range(1, len(result.rounds) + 1))
+    assert len(result.rounds) >= 3 and result.stop_reason == "saturated"
     assert result.search_calls == checkpoint.progress.search_calls == 1
     assert result.harvest.receipt.fetches == checkpoint.progress.harvest.receipt.fetches + 2
 
@@ -147,7 +146,9 @@ def test_resume_refuses_changed_or_unreconciled_evidence_before_any_io(tmp_path,
     run_dir = cfg.journal.directory / "research"
     pin = receipt.sha256
     if change == "recipe":
-        cfg = GhimeraConfig.model_validate(dict(cfg.model_dump(), judge_budget=41))
+        cfg = GhimeraConfig.model_validate(
+            dict(cfg.model_dump(), saturation_window=cfg.saturation_window + 1)
+        )
     elif change == "hash":
         pin = "0" * 64
     elif change == "tail":
@@ -244,18 +245,18 @@ print(json.dumps({'status': result.status, 'fetches': result.harvest.receipt.fet
     assert read_journal(cfg.journal, "different-process").state == "complete"
 
 
-def test_downtime_is_spent_time_not_a_new_wall_budget(tmp_path, monkeypatch):
-    cfg = configured(tmp_path, wall_seconds=100)
+def test_downtime_is_counted_as_elapsed_time_and_never_stops_the_run(tmp_path, monkeypatch):
+    cfg = configured(tmp_path)
     first, _, _, _ = assemble(cfg)
     receipt = suspend(first)
     checkpoint = CheckpointStore(cfg, "research").read(receipt.sha256)
     monkeypatch.setattr("ghimera.research.time.time", lambda: checkpoint.saved_at + 101)
     resumed, route, search, planner = assemble(cfg)
     result = asyncio.run(resumed.resume("research", checkpoint_sha256=receipt.sha256))
-    assert result.stop_reason == "budget_exhausted" and result.answer is None
+    # There is no wall clock: downtime is recorded as elapsed, and the run goes on.
+    assert result.stop_reason != "failed"
     assert result.harvest.receipt.elapsed_seconds >= 101
-    assert not route.requests and not search.requests and not planner.requests
-    assert result.harvest.receipt.judge_calls == checkpoint.progress.harvest.receipt.judge_calls
+    assert result.harvest.receipt.judge_calls >= checkpoint.progress.harvest.receipt.judge_calls
 
 
 def test_graph_changes_refuse_resume_without_rewriting_the_graph(tmp_path):
@@ -276,19 +277,6 @@ def test_graph_changes_refuse_resume_without_rewriting_the_graph(tmp_path):
     with pytest.raises(ValueError, match="graph changed"):
         asyncio.run(resumed.resume("research", checkpoint_sha256=receipt.sha256))
     assert files == {p.name: p.read_bytes() for p in (cfg.graph.sink_path / "research").iterdir()}
-    assert not route.requests and not search.requests and not planner.requests
-
-
-def test_budget_spend_is_not_reset_to_answer_after_resumption(tmp_path):
-    cfg = configured(tmp_path, judge_budget=3)
-    first, _, _, _ = assemble(cfg)
-    receipt = suspend(first)
-    checkpoint = CheckpointStore(cfg, "research").read(receipt.sha256)
-    assert checkpoint.progress.harvest.receipt.judge_calls == 3
-    resumed, route, search, planner = assemble(cfg)
-    result = asyncio.run(resumed.resume("research", checkpoint_sha256=receipt.sha256))
-    assert result.stop_reason == "budget_exhausted" and result.answer is None
-    assert result.harvest.receipt.judge_calls == 3
     assert not route.requests and not search.requests and not planner.requests
 
 

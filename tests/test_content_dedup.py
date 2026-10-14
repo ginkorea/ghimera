@@ -131,15 +131,14 @@ def test_policy_refuses_unbounded_or_ambiguous_settings():
             policy(**change)
 
 
-def test_index_limit_refuses_without_silently_eviction():
-    from ghimera.refusals import GhimeraRefused, RefusalCode
-
+def test_full_index_keeps_the_document_unindexed_and_never_evicts():
     index = ContentIndex(policy(max_index_documents=1))
     index.add(document(TEXT))
-    with pytest.raises(GhimeraRefused) as exc:
-        index.add(document("Different source", url="https://example.org/other"))
-    assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED
+    other = document("Different source", url="https://example.org/other")
+    index.add(other)  # input bound, cut not refused: kept, only not indexed
+    assert index.omitted_documents == 1
     assert index.match(document(TEXT)).reason == "content_sha256"
+    assert index.match(other) is None
 
 
 def test_changed_numbers_remain_independent_documents():
@@ -196,12 +195,17 @@ def test_drift_is_bound_to_effective_policy_and_both_retained_revisions():
     assert index.drift(second) is None
 
 
-def test_fingerprint_limit_refuses_rather_than_merging_truncated_text():
-    from ghimera.refusals import GhimeraRefused, RefusalCode
-
-    with pytest.raises(GhimeraRefused) as exc:
-        fingerprint(document(TEXT), policy(max_text_chars=10))
-    assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED
+def test_fingerprint_bound_cuts_the_simhash_but_never_merges_truncated_text():
+    bounded = fingerprint(document(TEXT), policy(max_text_chars=10))
+    whole = fingerprint(document(TEXT), policy())
+    assert bounded.omitted_chars == len(TEXT) - 10 and whole.omitted_chars == 0
+    # The exact-text digest still covers the whole text, so a shared prefix is no match.
+    assert bounded.normalized_text_sha256 == whole.normalized_text_sha256
+    index = ContentIndex(policy(max_text_chars=10))
+    index.add(document(TEXT))
+    longer = document(TEXT + " A different conclusion.", url="https://example.org/other")
+    match = index.match(longer)
+    assert match is None or match.reason != "normalized_text"
 
 
 @pytest.mark.parametrize(

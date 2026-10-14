@@ -19,9 +19,7 @@ from tests.test_semantic_verification import ReviewWire, reviewed_config, run_st
 def factorized_config(tmp_path):
     return reviewed_config(
         tmp_path,
-        verification=dict(
-            schema="ghimera.semantic-verification/2", model_role="reviewer", max_calls_per_run=8
-        ),
+        verification=dict(schema="ghimera.semantic-verification/2", model_role="reviewer"),
     )
 
 
@@ -61,7 +59,7 @@ class FactorizedWire(ReviewWire):
 def test_factorized_wire_retains_all_dimensions_and_replays(tmp_path):
     cfg = factorized_config(tmp_path)
     wire = FactorizedWire(cfg.models.reviewer)
-    _, rows, budget = run_stage(cfg, SemanticWire(cfg.models.analyst), wire, (document(),))
+    _, rows, spend = run_stage(cfg, SemanticWire(cfg.models.analyst), wire, (document(),))
     window = rows[-1].semantic_window
     assert window.review.schema_version == "ghimera.semantic-review/2"
     assert window.review.model_call.prompt_revision == "ghimera-semantic-verification/2"
@@ -70,7 +68,7 @@ def test_factorized_wire_retains_all_dimensions_and_replays(tmp_path):
     restored = type(window).model_validate_json(window.model_dump_json(by_alias=True))
     assert restored == window and restored.review.mentions[0].checks is not None
     assert validate_rows(cfg, rows) == (rows[-1],)
-    assert budget.semantic_calls == budget.semantic_review_calls == 1
+    assert spend.semantic_calls == spend.semantic_review_calls == 1
     assert "named_entity" in wire.requests[0][0]["messages"][0]["content"]
 
 
@@ -220,13 +218,13 @@ def test_dimensioned_loop_archive_and_journal_keep_checks_and_call_accounting(tm
     import asyncio
     import time
 
-    from ghimera.budget import RunBudget
     from ghimera.doubles import FakeJudge, FakeRoute, KeywordScorer
     from ghimera.fetch import FetchLadder
     from ghimera.journal import read_journal
     from ghimera.loop import GoalLoop
     from ghimera.model_client import SelfHostedModel
     from ghimera.models import Goal, Harvest, Scope
+    from ghimera.spend import RunSpend
     from tests.test_graph_planning import NativeFixture, with_journal
 
     cfg = with_journal(factorized_config(tmp_path), tmp_path)
@@ -258,7 +256,7 @@ def test_dimensioned_loop_archive_and_journal_keep_checks_and_call_accounting(tm
     review = next(row.semantic_review for row in restored.ledger if row.event == "semantic_review")
     assert review.relations[0].checks.direction.verdict == "unsupported"
     assert not any(edge.rule == "reports_to" for edge in restored.graph.edges)
-    budget = RunBudget(cfg, time.monotonic)
-    budget.restore(harvest.receipt, harvest.ledger, search_calls=0, downtime_seconds=0)
-    assert budget.semantic_calls == budget.semantic_review_calls == 1
-    assert budget.judge_calls == 3
+    spend = RunSpend(cfg, time.monotonic)
+    spend.restore(harvest.receipt, harvest.ledger, search_calls=0, downtime_seconds=0)
+    assert spend.semantic_calls == spend.semantic_review_calls == 1
+    assert spend.judge_calls == 3

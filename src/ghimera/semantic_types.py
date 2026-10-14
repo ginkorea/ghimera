@@ -20,6 +20,7 @@ from ghimera.graph_types import (
     Text,
 )
 from ghimera.model_types import ModelCallEvidence
+from ghimera.removed_ceilings import REMOVED_SEMANTIC_CEILINGS, refuse_removed
 from ghimera.semantic_selection_types import SemanticSelectionRef, SemanticWindowSelectionConfig
 
 CitationId = Annotated[str, Field(pattern=r"^cite:[0-9a-f]{64}$")]
@@ -73,7 +74,6 @@ class SemanticVerificationConfig(GraphRecord):
         "ghimera.semantic-verification/4",
     ] = Field(alias="schema")
     model_role: Literal["analyst", "reviewer", "judge"]
-    max_calls_per_run: Positive
     max_coverage_findings: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
     max_mentions_per_call: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
     max_relations_per_call: Positive | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -87,6 +87,11 @@ class SemanticVerificationConfig(GraphRecord):
         ]
         | None
     ) = Field(default=None, exclude_if=lambda v: v is None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_SEMANTIC_CEILINGS, "semantics.verification.")
 
     @model_validator(mode="after")
     def coverage_bound(self) -> "SemanticVerificationConfig":
@@ -169,7 +174,6 @@ class SemanticConfig(GraphRecord):
     model_role: Literal["analyst", "reviewer", "judge"]
     window_chars: Positive
     max_windows_per_document: Positive
-    max_calls_per_run: Positive
     max_mentions_per_window: Positive
     max_relations_per_window: Positive
     entity_roles: Annotated[tuple[Name, ...], Field(min_length=1)]
@@ -186,6 +190,11 @@ class SemanticConfig(GraphRecord):
     window_selection: SemanticWindowSelectionConfig | None = Field(
         default=None, exclude_if=lambda v: v is None
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_SEMANTIC_CEILINGS, "semantics.")
 
     @model_validator(mode="after")
     def distinct(self) -> "SemanticConfig":
@@ -219,13 +228,11 @@ class SemanticConfig(GraphRecord):
             raise ValueError("definitions and verification require semantics/4")
         if self.schema_version == "ghimera.semantics/5" and "verification" in self.model_fields_set:
             raise ValueError("graph-bound /5 assertions are unreviewed: omit verification")
-        if self.failure is not None and (
-            not reviewed or self.failure.max_failed_windows_per_run > self.max_calls_per_run
-        ):
+        if self.failure is not None and not reviewed:
             raise ValueError(
-                "bounded failure continuation requires semantics/6 and its call limit"
+                "bounded failure continuation requires semantics/6"
                 if self.schema_version == "ghimera.semantics/6"
-                else "bounded failure continuation requires semantics/4 and its call limit"
+                else "bounded failure continuation requires semantics/4"
             )
         return self
 

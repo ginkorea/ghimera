@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.challenge_config import ChallengeConfig
 from ghimera.challenges import ChallengeSessions
 from ghimera.config import GhimeraConfig
@@ -23,6 +22,7 @@ from ghimera.ledger import Ledger
 from ghimera.loop import GoalLoop
 from ghimera.models import Goal, Harvest
 from ghimera.refusals import GhimeraRefused
+from ghimera.spend import RunSpend
 from tests.test_http_fetch import ResolverFixture, state
 
 SECRET = "owned-fixture-clearance-not-a-real-credential"
@@ -155,8 +155,8 @@ def endpoints():
 
 def setup(endpoints, **updates):
     source_port, service_port = endpoints[:2]
-    _, scope, budget, _, origin = state((source_port,))
-    raw = budget.config.model_dump(by_alias=True)
+    _, scope, spend, _, origin = state((source_port,))
+    raw = spend.config.model_dump(by_alias=True)
     policy = dict(
         schema="ghimera.challenges/1",
         provider="flaresolverr",
@@ -182,18 +182,18 @@ def setup(endpoints, **updates):
 
 def test_clearance_retry_reuses_matching_agent_cookie_without_archiving_secrets(endpoints):
     cfg, ladder, scope, origin = setup(endpoints)
-    budget, ledger = RunBudget(cfg, time.monotonic), Ledger()
+    spend, ledger = RunSpend(cfg, time.monotonic), Ledger()
 
     async def run():
-        first = await ladder.fetch(origin + "/first", scope, budget, ledger)
-        second = await ladder.fetch(origin + "/second", scope, budget, ledger)
+        first = await ladder.fetch(origin + "/first", scope, spend, ledger)
+        second = await ladder.fetch(origin + "/second", scope, spend, ledger)
         return first, second
 
     first, second = asyncio.run(run())
     assert first.body == second.body == ARTICLE and first.status == second.status == 200
-    assert len(endpoints[3]) == budget.challenge_attempts == 1
-    assert budget.fetches == len(endpoints[2]) + len(endpoints[3]) == 5
-    assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
+    assert len(endpoints[3]) == spend.challenge_attempts == 1
+    assert spend.fetches == len(endpoints[2]) + len(endpoints[3]) == 5
+    assert spend.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
     assert endpoints[3][0][1]["returnOnlyCookies"] is True
     assert "cookies" not in endpoints[3][0][1] and "session" not in endpoints[3][0][1]
     assert "Authorization" not in endpoints[3][0][2]
@@ -217,8 +217,8 @@ def test_byparr_uses_its_declared_wire_and_preserves_native_evidence(endpoints, 
         provider="byparr",
         wire_dialect=dialect,
     )
-    ledger, budget = Ledger(), RunBudget(cfg, time.monotonic)
-    page = asyncio.run(ladder.fetch(origin + "/first", scope, budget, ledger))
+    ledger, spend = Ledger(), RunSpend(cfg, time.monotonic)
+    page = asyncio.run(ladder.fetch(origin + "/first", scope, spend, ledger))
     assert page.body == ARTICLE and page.challenge_use.provider == "byparr"
     assert page.challenge_use.schema_version == "ghimera.challenge-evidence/2"
     assert len(endpoints[3]) == 1
@@ -234,7 +234,7 @@ def test_byparr_uses_its_declared_wire_and_preserves_native_evidence(endpoints, 
             maxTimeout=payload["maxTimeout"],
             returnOnlyCookies=True,
         )
-    assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
+    assert spend.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
     assert SECRET not in page.model_dump_json()
     assert "private-gateway-dom" not in page.model_dump_json()
     page.challenge_use.validate_policy(cfg.challenges, page.final_url)
@@ -273,7 +273,7 @@ def test_byparr_success_envelope_does_not_make_a_blocked_source_clearance(endpoi
     )
     ledger = Ledger()
     with pytest.raises(GhimeraRefused, match="challenge_not_solved"):
-        asyncio.run(ladder.fetch(origin + "/first", scope, RunBudget(cfg, time.monotonic), ledger))
+        asyncio.run(ladder.fetch(origin + "/first", scope, RunSpend(cfg, time.monotonic), ledger))
     assert len(endpoints[3]) == 1
     assert sum(path == "/first" for path, _ in endpoints[2]) == 1
     assert SECRET not in "".join(row.model_dump_json() for row in ledger.snapshot())
@@ -299,7 +299,7 @@ def test_shipped_challenge_examples_validate_and_retain_their_dialect(name):
 def test_entitlement_and_robots_walls_do_not_invoke_gateway(endpoints, path, code):
     cfg, ladder, scope, origin = setup(endpoints)
     with pytest.raises(GhimeraRefused, match=code):
-        asyncio.run(ladder.fetch(origin + path, scope, RunBudget(cfg, time.monotonic), Ledger()))
+        asyncio.run(ladder.fetch(origin + path, scope, RunSpend(cfg, time.monotonic), Ledger()))
     assert not endpoints[3]
 
 
@@ -318,14 +318,14 @@ def test_entitlement_and_robots_walls_do_not_invoke_gateway(endpoints, path, cod
 def test_bad_gateway_results_refuse_without_retrying_or_leaking(endpoints, control):
     endpoints[4].update(control)
     cfg, ladder, scope, origin = setup(endpoints)
-    ledger, budget = Ledger(), RunBudget(cfg, time.monotonic)
+    ledger, spend = Ledger(), RunSpend(cfg, time.monotonic)
     with pytest.raises(GhimeraRefused, match="challenge_not_solved"):
-        asyncio.run(ladder.fetch(origin + "/first", scope, budget, ledger))
+        asyncio.run(ladder.fetch(origin + "/first", scope, spend, ledger))
     assert len(endpoints[3]) == 1
     assert len([path for path, _ in endpoints[2] if path == "/first"]) == 1
     assert ledger.snapshot()[-1].event == "challenge"
     assert ledger.snapshot()[-1].refusal is not None
-    assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
+    assert spend.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
     assert SECRET not in "".join(row.model_dump_json() for row in ledger.snapshot())
 
 
@@ -349,18 +349,18 @@ def test_origin_and_route_configuration_do_not_silently_expand_access(endpoints)
 def test_default_refusal_remains_and_a_failed_retry_cannot_loop_forever(endpoints):
     cfg, ladder, scope, origin = setup(endpoints, max_attempts_per_run=1)
     endpoints[4]["always_challenge"] = True
-    budget = RunBudget(cfg, time.monotonic)
+    spend = RunSpend(cfg, time.monotonic)
     for path in ("/one", "/two"):
         with pytest.raises(GhimeraRefused, match="challenge_not_solved"):
-            asyncio.run(ladder.fetch(origin + path, scope, budget, Ledger()))
-    assert len(endpoints[3]) == 1 and budget.challenge_attempts == 1
+            asyncio.run(ladder.fetch(origin + path, scope, spend, Ledger()))
+    assert len(endpoints[3]) == 1 and spend.challenge_attempts == 1
     raw = cfg.model_dump(by_alias=True)
     raw.pop("challenges")
     disabled = GhimeraConfig.model_validate(raw)
     route = FetchLadder((CurlRoute(disabled, resolver=ResolverFixture()),))
     with pytest.raises(GhimeraRefused, match="challenge_not_solved"):
         asyncio.run(
-            route.fetch(origin + "/disabled", scope, RunBudget(disabled, time.monotonic), Ledger())
+            route.fetch(origin + "/disabled", scope, RunSpend(disabled, time.monotonic), Ledger())
         )
     assert len(endpoints[3]) == 1
 
@@ -420,7 +420,7 @@ def test_clearance_does_not_follow_a_cross_origin_redirect(endpoints):
         dict(scope.model_dump(), allowed_hosts=("fixture.example", "other.example"))
     )
     page = asyncio.run(
-        ladder.fetch(origin + "/redirect", scope, RunBudget(cfg, time.monotonic), Ledger())
+        ladder.fetch(origin + "/redirect", scope, RunSpend(cfg, time.monotonic), Ledger())
     )
     assert page.body == ARTICLE and page.challenge_use is None
     headers = next(headers for path, headers in endpoints[2] if path == "/public")
@@ -563,7 +563,7 @@ def test_challenged_robots_file_can_be_read_without_overriding_its_disallow(endp
     cfg, ladder, scope, origin = setup(endpoints)
     with pytest.raises(GhimeraRefused, match="robots_disallowed"):
         asyncio.run(
-            ladder.fetch(origin + "/blocked", scope, RunBudget(cfg, time.monotonic), Ledger())
+            ladder.fetch(origin + "/blocked", scope, RunSpend(cfg, time.monotonic), Ledger())
         )
     assert len(endpoints[3]) == 1
     assert endpoints[3][0][1]["url"] == origin + "/robots.txt"
@@ -582,8 +582,8 @@ def test_javascript_created_challenge_gets_one_recovery_then_native_refetch(endp
     ladder = FetchLadder(
         (CurlRoute(cfg, resolver=ResolverFixture()),), renderer=IsolatedBrowserRenderer(cfg)
     )
-    ledger, budget = Ledger(), RunBudget(cfg, time.monotonic)
-    page = asyncio.run(ladder.fetch(origin + "/first", scope, budget, ledger))
+    ledger, spend = Ledger(), RunSpend(cfg, time.monotonic)
+    page = asyncio.run(ladder.fetch(origin + "/first", scope, spend, ledger))
     assert page.body == ARTICLE and page.challenge_use is not None
     assert len(endpoints[3]) == 1
     assert next(row for row in ledger.snapshot() if row.event == "render").refusal is not None

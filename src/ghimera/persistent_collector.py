@@ -73,7 +73,7 @@ class PersistentCollector:
     """Borrow configured components; persist before reporting successful completion.
 
     The caller owns both components and closes the corpus after all operations.
-    Collection and corpus model budgets stay separate in their original receipts.
+    Collection and corpus model spend stays separate in their original receipts.
     One operation per facade is an invariant, not an unbounded implicit work queue;
     independent corpus readers may still query its last committed generation.
     """

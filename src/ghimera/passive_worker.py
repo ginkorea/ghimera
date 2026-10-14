@@ -7,6 +7,10 @@ from pathlib import Path
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.worker_package import admit_package
 
+# A worker that refuses its input over a named input bound exits with this status
+# and writes one sentence (the bound, used and limit) to stderr.
+BOUND_EXIT = 3
+
 
 def private_directory(path: Path) -> None:
     """Never widen or reuse another owner's state directory."""
@@ -66,7 +70,11 @@ class PassiveWorker:
                     }
                     return await self._run(request, environment)
         except TimeoutError:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED) from None
+            raise GhimeraRefused(
+                RefusalCode.BOUND_EXCEEDED,
+                f"reader passed its deadline timeout_seconds={self._timeout:g}; "
+                "an input bound, not a spend limit",
+            ) from None
         except OSError:
             raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED) from None
 
@@ -100,12 +108,24 @@ class PassiveWorker:
                 process.stdin.write(request)
                 await process.stdin.drain()
                 process.stdin.close()
-                response, _ = await asyncio.gather(*readers)
-                if await process.wait() != 0:
+                response, diagnostic = await asyncio.gather(*readers)
+                status = await process.wait()
+                if status == BOUND_EXIT:
+                    # The worker refused its input over an input bound it names.
+                    raise GhimeraRefused(
+                        RefusalCode.BOUND_EXCEEDED,
+                        diagnostic.decode("utf-8", errors="replace")[:300]
+                        + "; an input bound, not a spend limit",
+                    )
+                if status != 0:
                     raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED)
                 return response
         except TimeoutError:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED) from None
+            raise GhimeraRefused(
+                RefusalCode.BOUND_EXCEEDED,
+                f"reader passed its deadline timeout_seconds={self._timeout:g}; "
+                "an input bound, not a spend limit",
+            ) from None
         except OSError:
             raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED) from None
         finally:

@@ -9,6 +9,7 @@ from ghimera.embedding_types import EncodingBatch, EncodingCall, encoding_reques
 from ghimera.identifiers import RUN_ID_SCHEMA_PATTERN
 from ghimera.judgment_types import ScoringSourceBinding
 from ghimera.model_config import EmbeddingServiceConfig
+from ghimera.removed_ceilings import REMOVED_RESULT_CEILINGS, refuse_removed
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Count = Annotated[int, Field(strict=True, ge=0)]
@@ -25,14 +26,12 @@ class RunEncodingRecord(BaseModel):
 class RunEncodingRecoveryConfig(RunEncodingRecord):
     schema_version: Literal["ghimera.run-encoding-recovery/1"] = Field(alias="schema")
     max_result_bytes: Positive
-    max_total_result_bytes: Positive
     unknown_policy: Literal["hold"]
 
-    @model_validator(mode="after")
-    def bounds(self) -> "RunEncodingRecoveryConfig":
-        if self.max_result_bytes > self.max_total_result_bytes:
-            raise ValueError("one vector result cannot exceed the total retained allowance")
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_RESULT_CEILINGS, "run_encoding_recovery.")
 
 
 class RunEncodingDecision(RunEncodingRecord):

@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.doubles import FakeJudge
 from ghimera.journal import DirectoryLedgerSink, read_journal
@@ -25,6 +24,7 @@ from ghimera.models import Goal, Receipt
 from ghimera.refusals import GhimeraRefused
 from ghimera.research import ModelCalls
 from ghimera.research_types import PlanningRequest
+from ghimera.spend import RunSpend
 from tests.test_intent_research import PlannerFixture
 from tests.test_model_work import configured, invocation, opened
 
@@ -36,7 +36,7 @@ def receipt(cfg, calls):
         judge_calls=calls,
         accepted_documents=0,
         elapsed_seconds=0,
-        stop_reason="budget_exhausted",
+        stop_reason="frontier_empty",
         effective_config=cfg,
         judge=FakeJudge().model,
     )
@@ -47,7 +47,6 @@ def retained_config(tmp_path, **bounds):
     results = dict(
         schema="ghimera.model-results/1",
         max_result_bytes=4096,
-        max_total_result_bytes=16384,
     )
     results.update(bounds)
     raw["model_work"]["results"] = results
@@ -55,25 +54,25 @@ def retained_config(tmp_path, **bounds):
 
 
 def reopen(cfg, report):
-    budget = RunBudget(cfg, time.monotonic)
-    budget.restore(receipt(cfg, len([r for r in report.rows if r.model_intent])), report.rows, 0, 0)
+    spend = RunSpend(cfg, time.monotonic)
+    spend.restore(receipt(cfg, len([r for r in report.rows if r.model_intent])), report.rows, 0, 0)
     sink = DirectoryLedgerSink(
         cfg, report.header.run_id, report.header.goal, report.header.judge, resume_rows=report.rows
     )
-    return budget, Ledger(sink=sink, restored_rows=report.rows)
+    return spend, Ledger(sink=sink, restored_rows=report.rows)
 
 
 def test_budget_restore_rejects_inconsistent_call_count_before_mutating(tmp_path):
     cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
 
     async def call():
         return "answer"
 
-    asyncio.run(invocation(budget, ledger).invoke(call, str.encode))
+    asyncio.run(invocation(spend, ledger).invoke(call, str.encode))
     ledger.close()
     rows = read_journal(cfg.journal, "operation").rows
-    restored = RunBudget(cfg, time.monotonic)
+    restored = RunSpend(cfg, time.monotonic)
     started = restored.started
     with pytest.raises(ValueError, match="reservation"):
         restored.restore(receipt(cfg, 0), rows, 0, 0)
@@ -82,13 +81,13 @@ def test_budget_restore_rejects_inconsistent_call_count_before_mutating(tmp_path
 
 def test_new_call_refuses_a_non_restored_budget_before_contact(tmp_path):
     cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
 
     async def call():
         return "answer"
 
-    asyncio.run(invocation(budget, ledger).invoke(call, str.encode))
-    fresh = RunBudget(cfg, time.monotonic)
+    asyncio.run(invocation(spend, ledger).invoke(call, str.encode))
+    fresh = RunSpend(cfg, time.monotonic)
     before = ledger.snapshot()
     with pytest.raises(FatalModelWorkFailure, match="reservation"):
         invocation(fresh, ledger)
@@ -98,14 +97,14 @@ def test_new_call_refuses_a_non_restored_budget_before_contact(tmp_path):
 
 def test_acknowledged_payload_replays_from_native_reopened_run_without_contact(tmp_path):
     cfg = retained_config(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
     contacts = []
 
     async def call():
         contacts.append(True)
         return "native answer 中文"
 
-    expected = asyncio.run(invocation(budget, ledger).invoke(call, str.encode))
+    expected = asyncio.run(invocation(spend, ledger).invoke(call, str.encode))
     ledger.close()
     report = read_journal(cfg.journal, "operation")
     assert report.rows[1].model_ack.stored_output.body() == expected.encode()
@@ -132,12 +131,12 @@ def test_acknowledged_payload_replays_from_native_reopened_run_without_contact(t
 @pytest.mark.parametrize("mismatch", ["request", "phase", "model", "url", "sequence"])
 def test_replay_requires_original_input_phase_identity_and_sequence(tmp_path, mismatch):
     cfg = retained_config(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
 
     async def call():
         return "answer"
 
-    asyncio.run(invocation(budget, ledger).invoke(call, str.encode))
+    asyncio.run(invocation(spend, ledger).invoke(call, str.encode))
     args = dict(
         phase="plan", model=PlannerFixture.model, request=b"request", replay_intent_sequence=0
     )
@@ -153,40 +152,20 @@ def test_replay_requires_original_input_phase_identity_and_sequence(tmp_path, mi
         args["replay_intent_sequence"] = 1
     before = ledger.snapshot()
     with pytest.raises(FatalModelWorkFailure):
-        ModelInvocation(budget, ledger, **args)
-    assert ledger.snapshot() == before and budget.judge_calls == 1
+        ModelInvocation(spend, ledger, **args)
+    assert ledger.snapshot() == before and spend.judge_calls == 1
     ledger.close()
-
-
-def test_result_quota_reserves_inflight_space_before_starting_another_call(tmp_path):
-    cfg = retained_config(tmp_path, max_result_bytes=16, max_total_result_bytes=32)
-    budget, ledger = opened(cfg)
-    first, second = invocation(budget, ledger), invocation(budget, ledger)
-    before = ledger.snapshot()
-    with pytest.raises(GhimeraRefused):
-        invocation(budget, ledger)
-    assert ledger.snapshot() == before and budget.judge_calls == 2
-
-    async def call():
-        return "answer"
-
-    asyncio.run(first.invoke(call, str.encode))
-    asyncio.run(second.invoke(call, str.encode))
-    third = invocation(budget, ledger)
-    asyncio.run(third.invoke(call, str.encode))
-    ledger.close()
-    assert read_journal(cfg.journal, "operation").uncertain_model_calls == ()
 
 
 def test_oversized_return_is_observed_but_held_not_truncated_or_replayable(tmp_path):
-    cfg = retained_config(tmp_path, max_result_bytes=4, max_total_result_bytes=16)
-    budget, ledger = opened(cfg)
+    cfg = retained_config(tmp_path, max_result_bytes=4)
+    spend, ledger = opened(cfg)
 
     async def call():
         return "long answer"
 
     with pytest.raises(GhimeraRefused):
-        asyncio.run(invocation(budget, ledger).invoke(call, str.encode))
+        asyncio.run(invocation(spend, ledger).invoke(call, str.encode))
     ledger.close()
     report = read_journal(cfg.journal, "operation")
     ack = report.rows[-1].model_ack
@@ -198,16 +177,16 @@ def test_wire_replay_preserves_original_bytes_status_and_media_type(tmp_path):
     from ghimera.model_work import wire_observation
 
     cfg = retained_config(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
     original = ModelHttpResponse(429, b'{"message":"try later"}', "application/json; charset=utf-8")
 
     async def call():
         return original
 
-    first = invocation(budget, ledger, scope="wire_request")
+    first = invocation(spend, ledger, scope="wire_request")
     assert asyncio.run(first.invoke(call, wire_observation)) == original
     again = ModelInvocation(
-        budget,
+        spend,
         ledger,
         phase="plan",
         model=PlannerFixture.model,
@@ -219,18 +198,18 @@ def test_wire_replay_preserves_original_bytes_status_and_media_type(tmp_path):
     def decode(stored):
         return ModelHttpResponse(stored.wire.status, stored.body(), stored.wire.content_type)
 
-    assert again.replay(decode) == original and budget.judge_calls == 1
+    assert again.replay(decode) == original and spend.judge_calls == 1
     ledger.close()
 
 
 def test_reader_rejects_tampered_payload_and_missing_declared_retention(tmp_path):
     cfg = retained_config(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
 
     async def call():
         return "answer"
 
-    asyncio.run(invocation(budget, ledger).invoke(call, str.encode))
+    asyncio.run(invocation(spend, ledger).invoke(call, str.encode))
     ledger.close()
     raw = read_journal(cfg.journal, "operation").model_dump(by_alias=True)
     raw["rows"][1]["model_ack"]["stored_output"]["body_base64"] = base64.b64encode(
@@ -246,8 +225,8 @@ def test_reader_rejects_tampered_payload_and_missing_declared_retention(tmp_path
 
 def test_research_owner_decodes_retained_plan_without_invoking_its_planner(tmp_path):
     cfg = retained_config(tmp_path)
-    budget, ledger = opened(cfg)
-    session = CollectionSession(Goal(text="find ports"), budget, ledger, None)
+    spend, ledger = opened(cfg)
+    session = CollectionSession(Goal(text="find ports"), spend, ledger, None)
     request = PlanningRequest(
         intent=session.goal.text,
         questions=(),
@@ -278,7 +257,7 @@ def test_optional_retention_does_not_change_published_nonretaining_recipe(tmp_pa
         max_result_bytes=2,
         max_total_result_bytes=1,
     )
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="no longer has run ceilings"):
         GhimeraConfig.model_validate(raw)
 
 
@@ -301,7 +280,7 @@ def test_fresh_process_exit_after_answer_ack_replays_before_phase_apply(tmp_path
 import asyncio, os, sys, time
 from pathlib import Path
 from ghimera.config import GhimeraConfig
-from ghimera.budget import RunBudget
+from ghimera.spend import RunSpend
 from ghimera.journal import DirectoryLedgerSink
 from ghimera.ledger import Ledger
 from ghimera.loop import CollectionSession
@@ -318,8 +297,8 @@ class CutAfterAck(DirectoryLedgerSink):
             os._exit(89)
 goal = Goal(text="find ports")
 ledger = Ledger(sink=CutAfterAck(cfg, "interrupted", goal, judge))
-budget = RunBudget(cfg, time.monotonic)
-session = CollectionSession(goal, budget, ledger, None)
+spend = RunSpend(cfg, time.monotonic)
+session = CollectionSession(goal, spend, ledger, None)
 request = PlanningRequest(intent=goal.text, questions=(), documents=(), assessment=None,
     max_questions=cfg.research.max_questions, max_queries=cfg.research.max_queries_per_round,
     max_query_chars=cfg.research.max_query_chars)
@@ -357,15 +336,15 @@ asyncio.run(ModelCalls(session, cfg.research).invoke("plan", model, request, cal
 
 def test_borrowed_rows_cannot_be_replayed_into_another_native_run(tmp_path):
     cfg = retained_config(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
 
     async def call():
         return "answer"
 
-    asyncio.run(invocation(budget, ledger).invoke(call, str.encode))
+    asyncio.run(invocation(spend, ledger).invoke(call, str.encode))
     rows = ledger.snapshot()
     ledger.close()
-    restored = RunBudget(cfg, time.monotonic)
+    restored = RunSpend(cfg, time.monotonic)
     restored.restore(receipt(cfg, 1), rows, 0, 0)
     sink = DirectoryLedgerSink(cfg, "other", Goal(text="find ports"), FakeJudge().model)
     borrowed = Ledger(sink=sink, restored_rows=rows)
@@ -384,22 +363,22 @@ def test_borrowed_rows_cannot_be_replayed_into_another_native_run(tmp_path):
 
 def test_decode_failure_does_not_contact_or_acknowledge_a_replayed_answer(tmp_path):
     cfg = retained_config(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
 
     async def call():
         return "not a plan"
 
-    asyncio.run(invocation(budget, ledger).invoke(call, str.encode))
+    asyncio.run(invocation(spend, ledger).invoke(call, str.encode))
     before = ledger.snapshot()
     owner = ModelCalls(
-        CollectionSession(Goal(text="find ports"), budget, ledger, None), cfg.research
+        CollectionSession(Goal(text="find ports"), spend, ledger, None), cfg.research
     )
     # This original request has a different shape, so refusal is before decode.
     with pytest.raises(FatalModelWorkFailure):
         owner.replay("plan", PlannerFixture.model, planning_request(cfg), intent_sequence=0)
-    assert ledger.snapshot() == before and budget.judge_calls == 1
+    assert ledger.snapshot() == before and spend.judge_calls == 1
     attempt = ModelInvocation(
-        budget,
+        spend,
         ledger,
         phase="plan",
         model=PlannerFixture.model,
@@ -412,22 +391,22 @@ def test_decode_failure_does_not_contact_or_acknowledge_a_replayed_answer(tmp_pa
 
     with pytest.raises(ValueError, match="decoder refused"):
         attempt.replay(fail)
-    assert ledger.snapshot() == before and budget.judge_calls == 1
+    assert ledger.snapshot() == before and spend.judge_calls == 1
     ledger.close()
 
 
 def test_replay_cannot_invoke_the_service_callback(tmp_path):
     cfg = retained_config(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
     contacts = []
 
     async def call():
         contacts.append(True)
         return "answer"
 
-    asyncio.run(invocation(budget, ledger).invoke(call, str.encode))
+    asyncio.run(invocation(spend, ledger).invoke(call, str.encode))
     attempt = ModelInvocation(
-        budget,
+        spend,
         ledger,
         phase="plan",
         model=PlannerFixture.model,
@@ -436,7 +415,7 @@ def test_replay_cannot_invoke_the_service_callback(tmp_path):
     )
     with pytest.raises(FatalModelWorkFailure):
         asyncio.run(attempt.invoke(call, str.encode))
-    assert contacts == [True] and budget.judge_calls == 1
+    assert contacts == [True] and spend.judge_calls == 1
     assert attempt.replay(lambda stored: stored.body()) == b"answer"
     ledger.close()
 
@@ -448,18 +427,18 @@ def test_semantic_restore_counts_original_intents_not_later_consumer_rows(tmp_pa
     storage = retained_config(tmp_path)
     raw.update(journal=storage.journal, model_work=storage.model_work)
     cfg = GhimeraConfig.model_validate(raw)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
 
     async def call():
         return "semantic response"
 
-    extract = invocation(budget, ledger, phase="semantic_extract", reserve=budget.reserve_semantic)
+    extract = invocation(spend, ledger, phase="semantic_extract", reserve=spend.reserve_semantic)
     asyncio.run(extract.invoke(call, str.encode))
     review = invocation(
-        budget, ledger, phase="semantic_review", reserve=budget.reserve_semantic_review
+        spend, ledger, phase="semantic_review", reserve=spend.reserve_semantic_review
     )
     asyncio.run(review.invoke(call, str.encode))
-    assert budget.semantic_calls == budget.semantic_review_calls == 1
+    assert spend.semantic_calls == spend.semantic_review_calls == 1
     ledger.close()
     report = read_journal(cfg.journal, "operation")
     restored, replayed = reopen(cfg, report)
@@ -474,15 +453,15 @@ def test_semantic_restore_counts_original_intents_not_later_consumer_rows(tmp_pa
     )
     assert attempt.replay(lambda stored: stored.body()) == b"semantic response"
     replayed.close()
-    final_budget = RunBudget(cfg, time.monotonic)
+    final_budget = RunSpend(cfg, time.monotonic)
     final_budget.restore(receipt(cfg, 2), read_journal(cfg.journal, "operation").rows, 0, 0)
     assert final_budget.semantic_calls == final_budget.semantic_review_calls == 1
 
 
 def test_storage_failure_after_return_keeps_intent_and_blocks_replay(tmp_path):
     cfg = retained_config(tmp_path)
-    budget, ledger = opened(cfg)
-    attempt = invocation(budget, ledger)
+    spend, ledger = opened(cfg)
+    attempt = invocation(spend, ledger)
     sink = ledger._sink
     original_append = sink.append
 
@@ -500,7 +479,7 @@ def test_storage_failure_after_return_keeps_intent_and_blocks_replay(tmp_path):
         asyncio.run(attempt.invoke(call, str.encode))
     with pytest.raises(FatalModelWorkFailure):
         ModelInvocation(
-            budget,
+            spend,
             ledger,
             phase="plan",
             model=PlannerFixture.model,

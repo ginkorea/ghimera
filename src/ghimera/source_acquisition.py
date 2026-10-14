@@ -4,7 +4,6 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
-from ghimera.ceilings import exceeds
 from ghimera.journal_types import Digest, JournalReport, RunId
 from ghimera.models import Record, Scope
 from ghimera.research_recovery_types import ResearchRecoveryModels
@@ -76,7 +75,6 @@ class SourceAcquisitionSnapshot(Record):
             or h.goal.seeds != self.request.seeds
             or self.runtime.judge != h.receipt.judge
             or self.round_number != len(p.rounds) + 1
-            or exceeds(self.round_number, cfg.research.max_rounds)
             or tuple(r.number for r in p.rounds) != tuple(range(1, self.round_number))
             or any(row.event == "stop" for row in h.ledger)
             or h.graph is not None

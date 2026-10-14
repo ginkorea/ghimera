@@ -311,11 +311,10 @@ def test_unstarted_learned_retained_query_then_score_ack_crash_reuses_original_k
         ).fetchone() == (1,)
 
 
-@pytest.mark.parametrize("remaining,blocks", [(0.05, False), (0.05, True), (0.0, False)])
-def test_saved_search_request_keeps_bytes_but_execution_uses_restored_deadline(
-    tmp_path, monkeypatch, remaining, blocks
+@pytest.mark.parametrize("blocks", [False, True])
+def test_saved_search_request_keeps_bytes_and_its_own_service_deadline(
+    tmp_path, monkeypatch, blocks
 ):
-    from ghimera.budget import RunBudget
     from ghimera.doubles import FakeJudge
     from ghimera.journal import DirectoryLedgerSink
     from ghimera.ledger import Ledger
@@ -324,14 +323,14 @@ def test_saved_search_request_keeps_bytes_but_execution_uses_restored_deadline(
     from ghimera.query_work_types import QueryCursor
     from ghimera.refusals import GhimeraRefused, RefusalCode
     from ghimera.research_types import SearchQuery, SearchRequest
+    from ghimera.spend import RunSpend
     from tests.test_discovery_router import Adapter
     from tests.test_model_work import configured as work_configuration
 
-    raw = work_configuration(tmp_path, wall_seconds=10).model_dump()
+    raw = work_configuration(tmp_path).model_dump()
     raw["model_work"]["results"] = dict(
         schema="ghimera.model-results/1",
         max_result_bytes=65536,
-        max_total_result_bytes=524288,
     )
     raw["research_recovery"] = dict(
         schema="ghimera.research-recovery/4",
@@ -341,7 +340,7 @@ def test_saved_search_request_keeps_bytes_but_execution_uses_restored_deadline(
         query_control="serial_acknowledged",
     )
     cfg = GhimeraConfig.model_validate(raw)
-    budget = RunBudget(cfg, lambda: 100.0)
+    spend = RunSpend(cfg, lambda: 100.0)
     judge = FakeJudge().model
     ledger = Ledger(sink=DirectoryLedgerSink(cfg, "deadline", Goal(text="ports"), judge))
     query = SearchQuery(text="ports", question_ids=("q1",))
@@ -357,30 +356,30 @@ def test_saved_search_request_keeps_bytes_but_execution_uses_restored_deadline(
 
     adapter = DeadlineAdapter()
     first = QueryWork(
-        budget,
+        spend,
         ledger,
         QueryCursor(stage="discovery", round_number=1, query_index=0),
         lambda reservation: None,
     )
     original = first.prepare("discovery", request_bytes, adapter.identity)
-    budget.restore(
+    spend.restore(
         Receipt(
             fetches=0,
             bytes_read=0,
             judge_calls=0,
             accepted_documents=0,
             elapsed_seconds=0,
-            stop_reason="budget_exhausted",
+            stop_reason="frontier_empty",
             effective_config=cfg,
             judge=judge,
         ),
         (),
         0,
-        10 - remaining,
+        10.0,
     )
-    work = QueryWork(budget, ledger, original.cursor, lambda reservation: None, original=original)
+    work = QueryWork(spend, ledger, original.cursor, lambda reservation: None, original=original)
     wrong_key = QueryWork(
-        budget, ledger, original.cursor, lambda reservation: None, original=original
+        spend, ledger, original.cursor, lambda reservation: None, original=original
     )
     with pytest.raises(ValueError, match="exact original reservation"):
         wrong_key.prepare(
@@ -392,36 +391,29 @@ def test_saved_search_request_keeps_bytes_but_execution_uses_restored_deadline(
 
     def execution_timeout(seconds):
         timeouts.append(seconds)
-        assert seconds == pytest.approx(remaining)
         return native_timeout(seconds)
 
     monkeypatch.setattr("ghimera.search.asyncio.timeout", execution_timeout)
 
     async def run():
-        if remaining == 0:
+        if blocks:
             with pytest.raises(GhimeraRefused) as refused:
-                await adapter.discover(query, budget, ledger, query_work=work)
-            assert refused.value.code == RefusalCode.BUDGET_EXHAUSTED
-        elif blocks:
-            with pytest.raises(GhimeraRefused) as refused:
-                await adapter.discover(query, budget, ledger, query_work=work)
+                await adapter.discover(query, spend, ledger, query_work=work)
             assert refused.value.code == RefusalCode.SEARCH_UNAVAILABLE
         else:
-            await adapter.discover(query, budget, ledger, query_work=work)
+            await adapter.discover(query, spend, ledger, query_work=work)
 
     try:
         asyncio.run(run())
         assert work.reservation == original
         assert original.request_json == request_bytes
         assert original.request_sha256 == hashlib.sha256(request_bytes).hexdigest()
-        assert budget.remaining_seconds == pytest.approx(remaining)
-        assert len(adapter.calls) == budget.search_calls == budget.fetches == (remaining > 0)
-        if remaining > 0:
-            assert adapter.calls[0].model_dump_json().encode() == request_bytes
-            assert timeouts == pytest.approx([remaining])
-            assert ledger.snapshot()[-1].query_ack.outcome == ("refused" if blocks else "returned")
-        else:
-            assert not timeouts and not ledger.snapshot()
+        # Downtime is counted as elapsed spend; it never shortens the call's deadline.
+        assert spend.elapsed == pytest.approx(10.0)
+        assert len(adapter.calls) == spend.search_calls == spend.fetches == 1
+        assert adapter.calls[0].model_dump_json().encode() == request_bytes
+        assert timeouts == pytest.approx([request.timeout_seconds])
+        assert ledger.snapshot()[-1].query_ack.outcome == ("refused" if blocks else "returned")
     finally:
         ledger.close()
 
@@ -431,7 +423,7 @@ def test_fresh_command_cited_by_cursor_keeps_original_quantum_and_parent(
 ):
     cfg = configured(tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint)
     raw = cfg.model_dump()
-    raw["references"] = references(discover_cited_by=True, cited_by_query_budget=2)
+    raw["references"] = references(discover_cited_by=True)
     raw["research"]["max_pages_per_round"] = 2
     cfg = GhimeraConfig.model_validate(raw)
     opts, pin, saved = interrupted(tmp_path, cfg, "cited_by")
@@ -588,7 +580,7 @@ def test_selected_serial_search_refusal_preserves_native_partial_run_behavior(
     assert validate_query_rows(cfg, result.harvest.ledger) == ()
 
 
-@pytest.mark.parametrize("drift", ["config", "active_writer", "later_intent", "downtime"])
+@pytest.mark.parametrize("drift", ["config", "active_writer", "later_intent"])
 def test_fresh_query_recovery_refuses_changed_original_or_unsafe_tail_before_contact(
     tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint, drift
 ):
@@ -598,7 +590,7 @@ def test_fresh_query_recovery_refuses_changed_original_or_unsafe_tail_before_con
     lock = None
     if drift == "config":
         raw = cfg.model_dump()
-        raw["research"]["query_budget"] += 1
+        raw["research"]["results_per_query"] += 1
         opts.config_path.write_text(
             "\n".join(toml_lines(GhimeraConfig.model_validate(raw).model_dump(mode="json")))
         )
@@ -634,12 +626,6 @@ def test_fresh_query_recovery_refuses_changed_original_or_unsafe_tail_before_con
             )
         )
         sink.close()
-    else:
-        path = cfg.journal.directory / opts.run_id / "research-control.json"
-        raw = saved.model_dump()
-        raw["saved_at"] -= cfg.wall_seconds + 1
-        path.write_text(ResearchQueryControlSnapshot.model_validate(raw).model_dump_json())
-        pin = hashlib.sha256(path.read_bytes()).hexdigest()
     try:
         done = invoke(tmp_path, recovering(opts, pin))
         assert done.returncode == 2

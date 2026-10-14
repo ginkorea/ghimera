@@ -12,7 +12,7 @@ from ghimera.source_session_types import origin_key, safe_path
 
 
 class BrowserSourceAction(BaseModel):
-    """Known request budget reservation, not total browser traffic or completion."""
+    """Known request spend reservation, not total browser traffic or completion."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["ghimera.browser-source-action/1"] = Field(alias="schema")
@@ -34,7 +34,7 @@ class BrowserSourceAdmission(BrowserNavigationAdmission, Protocol):
     async def yield_to_human(self) -> None: ...
 
 
-class BrowserOutputBudget(Protocol):
+class BrowserOutputBound(Protocol):
     @property
     def bytes_read(self) -> int: ...
 
@@ -44,4 +44,4 @@ class BrowserOutputBudget(Protocol):
 @dataclass(frozen=True)
 class BrowserOperation:
     admission: BrowserSourceAdmission
-    output: BrowserOutputBudget
+    output: BrowserOutputBound

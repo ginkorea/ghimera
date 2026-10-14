@@ -1,6 +1,5 @@
 """Offline collaborators for C0 contracts, explicitly not production fallbacks."""
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.fetch import FetchRoute
 from ghimera.ledger import Ledger
@@ -17,6 +16,7 @@ from ghimera.models import (
 )
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.scoring import Scorer
+from ghimera.spend import RunSpend
 
 
 class FakeRoute(FetchRoute):
@@ -111,7 +111,7 @@ class KeywordScorer(Scorer):
     cost = 0
 
     async def rank(
-        self, goal: Goal, document: Extracted, budget: RunBudget, ledger: Ledger
+        self, goal: Goal, document: Extracted, spend: RunSpend, ledger: Ledger
     ) -> tuple[LinkCandidate, ...]:
         terms = tuple(goal.text.casefold().split())
         return tuple(

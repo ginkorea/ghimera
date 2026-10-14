@@ -14,9 +14,9 @@ import pytest
     (
         (
             "semantic_scoring",
-            "budget.reserve_encoding(size)",
-            "budget.check_time()",
-            "test_embedding_scoring.py::test_semantic_call_budget_reserves_before_spend_and_keeps_partial_ledger",
+            "spend.reserve_encoding(size)",
+            "spend.encoding_calls",
+            "test_embedding_scoring.py::test_semantic_calls_are_counted_without_a_call_ceiling",
         ),
         (
             "embedding",
@@ -68,8 +68,8 @@ import pytest
         ),
         (
             "search",
-            "budget.reserve_fetch()",
-            "budget.check_time()",
+            "spend.reserve_fetch()",
+            "spend.fetches",
             "test_search_conformance.py::test_search_cannot_override_template_or_spend_without_reservation",
         ),
         (
@@ -96,8 +96,8 @@ import pytest
         ),
         (
             "fetch",
-            "budget.reserve_fetch()\n        except GhimeraRefused:",
-            "budget.check_time()\n        except GhimeraRefused:",
+            "spend.reserve_fetch()\n        except GhimeraRefused:",
+            "spend.fetches\n        except GhimeraRefused:",
             "test_fetch_route_conformance.py::test_fetch_conformance",
         ),
         (

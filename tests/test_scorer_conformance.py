@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.doubles import KeywordScorer
 from ghimera.embedding import SelfHostedEncoder
 from ghimera.models import Extracted, Goal, LinkCandidate
 from ghimera.refusals import GhimeraRefused
 from ghimera.semantic_scoring import EmbeddingScorer
+from ghimera.spend import RunSpend
 from tests.test_embedding_scoring import endpoint as endpoint
 from tests.test_embedding_scoring import policy, references, run_config, service
 
@@ -20,8 +20,8 @@ class ReverseFixture(KeywordScorer):
     name = "reverse_fixture"
     cost = 1
 
-    async def rank(self, goal, document, budget, ledger):
-        return tuple(reversed(await super().rank(goal, document, budget, ledger)))
+    async def rank(self, goal, document, spend, ledger):
+        return tuple(reversed(await super().rank(goal, document, spend, ledger)))
 
 
 @pytest.mark.parametrize("scorer_type", (KeywordScorer, ReverseFixture, EmbeddingScorer))
@@ -35,7 +35,7 @@ def test_scorer_conformance(scorer_type, endpoint):
         scorer = EmbeddingScorer(scoring, SelfHostedEncoder(cfg), refs)
     else:
         scorer = scorer_type()
-    budget = RunBudget(config, lambda: 0.0)
+    spend = RunSpend(config, lambda: 0.0)
     document = Extracted(
         title="fixture",
         text="fixture",
@@ -46,15 +46,15 @@ def test_scorer_conformance(scorer_type, endpoint):
         ),
     )
     goal = Goal(text="ports", seeds=("https://example.org",))
-    result = asyncio.run(scorer.score(goal, document, budget))
+    result = asyncio.run(scorer.score(goal, document, spend))
     assert tuple(item.score for item in result) == (1.0, 0.0)
     assert {item.url for item in result} == {item.url for item in document.links}
-    assert budget.judge_calls == 0
+    assert spend.judge_calls == 0
 
 
 def test_a_scorer_cannot_invent_candidates_or_override_template():
     class Inventing(KeywordScorer):
-        async def rank(self, goal, document, budget, ledger):
+        async def rank(self, goal, document, spend, ledger):
             return (LinkCandidate(url="https://invented.example", score=1.0),)
 
     config = GhimeraConfig.from_toml(Path("examples/chimera.toml"))
@@ -63,7 +63,7 @@ def test_a_scorer_cannot_invent_candidates_or_override_template():
             Inventing().score(
                 Goal(text="ports", seeds=("https://example.org",)),
                 Extracted(title="x", text="x", language="en"),
-                RunBudget(config, lambda: 0.0),
+                RunSpend(config, lambda: 0.0),
             )
         )
     with pytest.raises(TypeError):

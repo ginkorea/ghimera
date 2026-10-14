@@ -18,9 +18,16 @@ from ghimera.models import Goal
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.source_work import SourceWorkFailure, SourceWorkStore, read_source_work
 from ghimera.source_work_types import SourceRequest
-from tests.test_c0 import config, scope
+from tests.test_c0 import config
+from tests.test_c0 import scope as c0_scope
 from tests.test_execution import LeafExtractor
 from tests.test_execution import policy as execution_policy
+
+
+def scope(**updates):
+    # Two pages, then the depth rule admits no further link: the mission's own
+    # scope keeps these runs short (there is no page ceiling).
+    return c0_scope(**{"max_depth": 1, **updates})
 
 
 def configured(tmp_path, **updates):
@@ -35,7 +42,6 @@ def configured(tmp_path, **updates):
     )
     policy.update(updates)
     return config(
-        page_budget=2,
         source_work=policy,
         journal=dict(
             schema="chimera.run-journal-config/1",
@@ -86,9 +92,8 @@ def test_completed_originals_and_results_survive_fresh_process_without_calls(tmp
     report = read_source_work(cfg, "complete")
     processed = tuple(item for item in report.operations if item.state == "processed")
     assert len(processed) == len(route.requests) == 2
-    # The next frontier candidate is durably refused before a third request.
-    assert len(report.operations) == 3
-    assert report.operations[-1].reason == "budget_exhausted"
+    # The depth rule ends the run: no third source operation is opened.
+    assert len(report.operations) == 2
     assert not report.writer_active and not report.unresolved
     assert tuple(item.result for item in processed) == result.documents
     for item in processed:
@@ -479,8 +484,7 @@ def test_inspection_command_has_safe_bounded_output_and_no_module_warning(tmp_pa
             for key, value in cfg.source_work.model_dump(mode="json").items()
         )
     )
-    # The effective collection recipe is also exact (the fixture page budget differs).
-    path.write_text(text.replace("page_budget = 400", "page_budget = 2"))
+    path.write_text(text)
     executed = subprocess.run(
         [sys.executable, "-m", "ghimera.source_work", "--config", str(path), "--run-id", "cli"],
         capture_output=True,
@@ -488,7 +492,7 @@ def test_inspection_command_has_safe_bounded_output_and_no_module_warning(tmp_pa
         timeout=15,
     )
     assert executed.returncode == 0, executed.stderr
-    assert executed.stdout == "run_id=cli operations=3 writer_active=False unresolved=0\n"
+    assert executed.stdout == "run_id=cli operations=2 writer_active=False unresolved=0\n"
     assert (
         executed.stderr == "" and "body" not in executed.stdout and "https" not in executed.stdout
     )

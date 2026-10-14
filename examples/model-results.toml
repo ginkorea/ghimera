@@ -4,4 +4,3 @@
 [model_work.results]
 schema = "ghimera.model-results/1"
 max_result_bytes = 262144
-max_total_result_bytes = 16777216

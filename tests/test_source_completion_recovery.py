@@ -68,7 +68,7 @@ def settings(
         max_frontier_bytes=1000000,
     )
     raw["research"]["max_pages_per_round"] = 1
-    raw["research"]["max_rounds"] = 1
+    raw["research"]["saturation_rounds"] = 1
     cfg = GhimeraConfig.model_validate(raw)
     # Graph roles/relations require the fixture's explicit array table encoding.
     text = "\n".join(
@@ -190,7 +190,7 @@ def test_fresh_exact_command_adopts_atomic_source_without_repeated_contact(
         result.harvest.receipt.encoding_calls
         == cut.snapshot.progress.harvest.receipt.encoding_calls
     )
-    assert len(result.rounds) == cfg.research.max_rounds == 1
+    assert len(result.rounds) == 1
     assert (
         result.harvest.receipt.elapsed_seconds
         >= cut.snapshot.progress.harvest.receipt.elapsed_seconds
@@ -321,7 +321,7 @@ def offline_settings(tmp_path, *, pages=1, references=False):
         ),
     )
     raw["research"]["max_pages_per_round"] = pages
-    raw["research"]["max_rounds"] = 1
+    raw["research"]["saturation_rounds"] = 1
     if references:
         raw["references"] = reference_policy()
     return GhimeraConfig.model_validate(raw)
@@ -439,22 +439,26 @@ def test_completed_none_or_merged_duplicate_preserves_frontier_references_and_or
     assert result.harvest.documents == cut.snapshot.progress.harvest.documents
     assert result.harvest.receipt.fetches == cut.snapshot.progress.harvest.receipt.fetches
     assert result.harvest.ledger[: len(cut.journal.rows)] == cut.journal.rows
-    assert len(result.rounds) == cfg.research.max_rounds
+    assert len(result.rounds) == 1
 
 
 def test_source_restart_accounts_original_downtime_without_new_contact(tmp_path, monkeypatch):
     cfg = offline_settings(tmp_path)
     cut = offline_cut(cfg, monkeypatch)
-    monkeypatch.setattr(
-        "ghimera.research.time.time", lambda: cut.snapshot.saved_at + cfg.wall_seconds + 1
-    )
+    downtime = 3600.0
+    monkeypatch.setattr("ghimera.research.time.time", lambda: cut.snapshot.saved_at + downtime)
     resumed, route, search, planner = offline_loop(cfg)
     result = asyncio.run(
         resumed.recover("cut", snapshot_sha256=cut.sha256, boundary="source_completion")
     )
-    assert result.stop_reason == "budget_exhausted"
+    # Downtime is accounted as elapsed spend; it is never a ceiling that ends the run.
+    assert result.stop_reason != "failed"
     assert not route.requests and not search.requests and not planner.requests
-    assert result.harvest.receipt.judge_calls == cut.snapshot.progress.harvest.receipt.judge_calls
+    assert result.harvest.receipt.judge_calls >= cut.snapshot.progress.harvest.receipt.judge_calls
+    assert (
+        result.harvest.receipt.elapsed_seconds
+        >= cut.snapshot.progress.harvest.receipt.elapsed_seconds + downtime
+    )
 
 
 def test_source_admission_rejects_changed_native_runtime(tmp_path, monkeypatch):

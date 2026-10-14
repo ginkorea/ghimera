@@ -30,7 +30,7 @@ def configured(tmp_path, **changes):
         max_records=1000,
     )
     journal.update(changes)
-    return config(page_budget=1, journal=journal)
+    return config(journal=journal)
 
 
 def collector(cfg, route=None):
@@ -208,7 +208,6 @@ def test_research_model_and_search_phases_share_the_same_durable_run(tmp_path):
 
     values = configured(tmp_path).model_dump(by_alias=True)
     values["research"] = policy()
-    values["page_budget"] = 30
     result, _, _ = research_run(cfg=GhimeraConfig.model_validate(values), run_id="research")
     report = read_journal(result.harvest.receipt.effective_config.journal, "research")
     assert report.state == "complete" and report.rows == result.harvest.ledger

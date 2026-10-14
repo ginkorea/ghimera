@@ -108,6 +108,7 @@ def test_thin_pages_and_profiled_hosts_go_to_the_richer_tier(tmp_path, monkeypat
 
     monkeypatch.setattr(PassiveWorker, "run", counted)
     shell = "<html><head><title>App</title></head><body><div id=app></div></body></html>"
+    # A shell with no readable text at all is the one page that is still refused.
     with pytest.raises(GhimeraRefused) as thin:
         asyncio.run(extractor(tmp_path, fast_reader=FAST).extract(page(shell)))
     assert calls and thin.value.code == RefusalCode.EXTRACTION_FAILED
@@ -118,9 +119,14 @@ def test_thin_pages_and_profiled_hosts_go_to_the_richer_tier(tmp_path, monkeypat
         profiles=[{"host": "example.org", "profile_id": "story", "body": "article#story"}],
     )
     calls.clear()
-    with pytest.raises(GhimeraRefused):
-        asyncio.run(profiled.extract(page()))
+    # A profiled page whose rich tier refuses is KEPT as plain body text.
+    kept = asyncio.run(profiled.extract(page()))
     assert calls, "an operator locator profile is always read by the richer tier"
+    evidence = kept.extraction
+    assert evidence is not None and evidence.tier == "fallback_plain"
+    assert evidence.fallback_refusal == RefusalCode.EXTRACTION_FAILED
+    assert evidence.fallback_detail == "fixture rich tier"
+    assert "infrastructure investment" in kept.text
 
 
 def test_text_beyond_the_cap_is_cut_and_counted(tmp_path):
@@ -160,22 +166,29 @@ def test_persistent_workers_import_once_and_match_per_page_output(tmp_path):
 def test_persistent_worker_deadline_kills_and_names_the_bound(tmp_path):
     reader = extractor(tmp_path, worker_mode="persistent", timeout_seconds=0.01)
     try:
-        with pytest.raises(GhimeraRefused) as refused:
-            asyncio.run(reader.extract(page()))
+        kept = asyncio.run(reader.extract(page()))
     finally:
         pool = reader._worker
         reader.close()
-    assert refused.value.code == RefusalCode.BUDGET_EXHAUSTED
-    assert "timeout_seconds=0.01" in refused.value.detail
+    # The reader's deadline is an input bound on that page; the page is kept as
+    # plain text and the evidence names the bound that the rich tier hit.
+    evidence = kept.extraction
+    assert evidence is not None and evidence.tier == "fallback_plain"
+    assert evidence.fallback_refusal == RefusalCode.BOUND_EXCEEDED
+    assert evidence.fallback_detail is not None
+    assert "not a spend limit" in evidence.fallback_detail
+    assert "timeout_seconds=0.01" in evidence.fallback_detail
     assert isinstance(pool, PersistentWorkerPool) and not pool._live
 
 
-def test_extraction_refusals_name_the_reader_and_page_size(tmp_path):
-    reader: HtmlExtractor = extractor(tmp_path, max_input_bytes=100)
-    with pytest.raises(GhimeraRefused) as large:
-        asyncio.run(reader.extract(page()))
-    assert large.value.detail.startswith("html page of ")
-    assert "exceeds max_input_bytes=100" in large.value.detail
+def test_a_page_over_max_input_bytes_is_cut_and_the_cut_is_counted(tmp_path):
+    bound = len(ARTICLE.encode()) - 120  # keeps the title and the first paragraphs
+    reader: HtmlExtractor = extractor(tmp_path, fast_reader=FAST, max_input_bytes=bound)
+    parsed = asyncio.run(reader.extract(page()))
+    evidence = parsed.extraction
+    assert evidence is not None and evidence.omitted_bytes == 120
+    assert evidence.source_sha256 == hashlib.sha256(page().body).hexdigest()
+    assert "infrastructure investment" in parsed.text
 
 
 def test_fast_reading_example_is_a_valid_policy(tmp_path):

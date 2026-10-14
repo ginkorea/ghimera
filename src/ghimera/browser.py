@@ -22,7 +22,7 @@ from ghimera.browser_types import (
 from ghimera.config import GhimeraConfig
 from ghimera.models import Page, Record, Scope
 from ghimera.passive_worker import private_directory, read_bounded
-from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.refusals import BoundExceeded, GhimeraRefused, RefusalCode
 from ghimera.response import REDIRECT_STATUSES, redirect_target
 from ghimera.worker_package import admit_package
 
@@ -104,7 +104,9 @@ class IsolatedBrowserRenderer:
         ):
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if len(page.body) > self.config.max_input_bytes:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BoundExceeded(
+                "browser.max_input_bytes", len(page.body), self.config.max_input_bytes
+            )
         request = (
             BrowserRequest(
                 config=self.config,
@@ -117,7 +119,9 @@ class IsolatedBrowserRenderer:
             + b"\n"
         )
         if len(request) > self.config.max_protocol_bytes:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BoundExceeded(
+                "browser.max_protocol_bytes", len(request), self.config.max_protocol_bytes
+            )
         try:
             async with (
                 asyncio.timeout(min(timeout_seconds, self.config.timeout_seconds)),
@@ -129,7 +133,11 @@ class IsolatedBrowserRenderer:
                 async with inventory.project(self.config.work_directory) as package_root:
                     return await self._run(request, page, scope, resources, package_root)
         except TimeoutError:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED) from None
+            raise GhimeraRefused(
+                RefusalCode.BOUND_EXCEEDED,
+                f"renderer passed browser.timeout_seconds={self.config.timeout_seconds:g} "
+                "without answering; an input bound, not a spend limit",
+            ) from None
         except (OSError, ValueError):
             raise GhimeraRefused(RefusalCode.FETCH_FAILED) from None
 
@@ -194,7 +202,11 @@ class IsolatedBrowserRenderer:
             elif page.content_type not in self.config.resource_content_types:
                 raise GhimeraRefused(RefusalCode.CONTENT_TYPE_UNWANTED)
             if len(page.body) > self.config.max_input_bytes:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                raise BoundExceeded(
+                    "browser.max_input_bytes (resource)",
+                    len(page.body),
+                    self.config.max_input_bytes,
+                )
             return RenderResource(
                 url=request.url,
                 method=request.method,
@@ -294,7 +306,9 @@ class IsolatedBrowserRenderer:
                 line = await process.stdout.readline()
                 total += len(line)
                 if total > self.config.max_protocol_bytes:
-                    raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                    raise BoundExceeded(
+                        "browser.max_protocol_bytes", total, self.config.max_protocol_bytes
+                    )
                 if not line:
                     raise GhimeraRefused(RefusalCode.FETCH_FAILED)
                 if diagnostic.done():
@@ -328,7 +342,9 @@ class IsolatedBrowserRenderer:
                 if requested.sequence != len(retained):
                     raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
                 if len(retained) >= self.config.max_resources:
-                    raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                    raise BoundExceeded(
+                        "browser.max_resources", len(retained) + 1, self.config.max_resources
+                    )
                 fetched = await self._resource(requested, scope, resources, retained)
                 retained.append(fetched)
                 response = (
@@ -342,7 +358,9 @@ class IsolatedBrowserRenderer:
                 )
                 total += len(response)
                 if total > self.config.max_protocol_bytes:
-                    raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                    raise BoundExceeded(
+                        "browser.max_protocol_bytes", total, self.config.max_protocol_bytes
+                    )
                 process.stdin.write(response)
                 await process.stdin.drain()
         finally:

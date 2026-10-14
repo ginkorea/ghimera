@@ -67,7 +67,7 @@ def test_policy_is_explicit_and_its_capture_scope_is_exact():
         {"target_id": ""},
         {"max_assistance_attempts": -1},
         {"timeout_seconds": float("inf")},
-        {"assistance_reasons": ["budget_exhausted"]},
+        {"assistance_reasons": ["not_an_assistance_reason"]},
         {"origins": [dict(origin="http://example.org", path_prefixes=["/"], allow_http=False)]},
         {"origins": [dict(origin="http://example.onion", path_prefixes=["/"], allow_http=True)]},
     ],
@@ -294,7 +294,7 @@ def test_capture_refuses_scope_and_oversize_without_using_unrelated_tab(tmp_path
             session = ChromiumHumanSession(selected, assistant=NoAssistance())
             with pytest.raises(GhimeraRefused, match="out_of_scope"):
                 await session.capture(origin + "/outside")
-            with pytest.raises(GhimeraRefused, match="budget_exhausted") as caught:
+            with pytest.raises(GhimeraRefused, match="bound_exceeded") as caught:
                 await session.capture(origin + "/research/large")
             assert caught.value.bytes_read == selected.max_dom_bytes
 

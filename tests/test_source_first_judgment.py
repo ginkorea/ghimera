@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.journal import read_journal
 from ghimera.judgment_layout import source_first_packet
@@ -22,6 +21,7 @@ from ghimera.model_client import SelfHostedModel
 from ghimera.model_work import FatalModelWorkFailure, ModelInvocation, port_input
 from ghimera.models import Verdict
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.spend import RunSpend
 from tests.test_judgment_context import (
     CONTRIBUTION_POLICY,
     POLICY,
@@ -244,7 +244,7 @@ def test_actual_source_first_input_bounds_refuse_before_contact(tmp_path, bound)
         model = SelfHostedModel(changed, changed.models.judge, http=transport)
         with pytest.raises(GhimeraRefused) as refused:
             asyncio.run(model.scored_document(goal, extracted, context, second_look=False))
-        assert refused.value.code == RefusalCode.BUDGET_EXHAUSTED
+        assert refused.value.code == RefusalCode.BOUND_EXCEEDED
         assert not transport.requests
     finally:
         ledger.close()
@@ -252,8 +252,8 @@ def test_actual_source_first_input_bounds_refuse_before_contact(tmp_path, bound)
 
 def test_source_first_original_ack_replay_is_local_exact_and_counted_once(tmp_path):
     cfg, goal, extracted, ledger, judge = prepared(tmp_path, judgment_policy=SOURCE_FIRST_POLICY)
-    budget = RunBudget(cfg, time.monotonic)
-    session = CollectionSession(goal, budget, ledger, None)
+    spend = RunSpend(cfg, time.monotonic)
+    session = CollectionSession(goal, spend, ledger, None)
     try:
         verdict, disposition = asyncio.run(
             loop_for(cfg, judge)._document_verdict(
@@ -266,11 +266,11 @@ def test_source_first_original_ack_replay_is_local_exact_and_counted_once(tmp_pa
         )
         evidence = ledger.snapshot()[-1].document_judgment
         assert verdict.decision == "reject" and disposition == "hold"
-        request = port_input(budget, goal, extracted, evidence.context, second_look=False)
+        request = port_input(spend, goal, extracted, evidence.context, second_look=False)
         ack = ledger.snapshot()[evidence.ack_sequence].model_ack
         assert Verdict.model_validate_json(ack.stored_output.body()) == verdict
         replay = ModelInvocation(
-            budget,
+            spend,
             ledger,
             phase="verdict",
             model=judge.model,
@@ -279,10 +279,10 @@ def test_source_first_original_ack_replay_is_local_exact_and_counted_once(tmp_pa
             replay_intent_sequence=evidence.intent_sequence,
         )
         assert replay.replay(lambda output: Verdict.model_validate_json(output.body())) == verdict
-        assert budget.judge_calls == len(judge._http.requests) == 1
+        assert spend.judge_calls == len(judge._http.requests) == 1
         with pytest.raises(FatalModelWorkFailure):
             ModelInvocation(
-                budget,
+                spend,
                 ledger,
                 phase="verdict",
                 model=judge.model,

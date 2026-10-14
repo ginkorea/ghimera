@@ -12,7 +12,6 @@ import time
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.fetch import FetchLadder
 from ghimera.http import CurlRoute
@@ -21,6 +20,7 @@ from ghimera.models import Page
 from ghimera.source_refresh import SourceRefreshFailure, SourceRefreshKey, SourceRefreshStore
 from ghimera.source_refresh_config import SourceRefreshConfig
 from ghimera.source_sessions import SourceCredentials
+from ghimera.spend import RunSpend
 from tests.test_http_fetch import ResolverFixture, site, state
 
 __all__ = ["site"]
@@ -43,8 +43,8 @@ def policy(tmp_path, url, **updates):
 
 
 def configured(tmp_path, site, **updates):
-    _, scope, budget, _, origin = state(site)
-    raw = budget.config.model_dump()
+    _, scope, spend, _, origin = state(site)
+    raw = spend.config.model_dump()
     raw.update(source_refresh=policy(tmp_path, origin + "/conditional"))
     raw.update(updates)
     return GhimeraConfig.model_validate(raw), scope, origin + "/conditional"
@@ -57,7 +57,7 @@ def native(cfg, *, clock=lambda: 100.0, credentials=None):
 
 
 def get(ladder, cfg, scope, url):
-    previous = RunBudget(cfg, time.monotonic)
+    previous = RunSpend(cfg, time.monotonic)
     ledger = Ledger()
     result = asyncio.run(ladder.fetch(url, scope, previous, ledger))
     return result, previous, ledger.snapshot()
@@ -68,17 +68,17 @@ def test_new_ladder_reuses_only_after_native_304_and_counts_actual_bytes(tmp_pat
     first, store = native(cfg)
     original, _, _ = get(first, cfg, scope, url)
     second, reopened = native(cfg, clock=lambda: 110.0)
-    reused, budget, rows = get(second, cfg, scope, url)
+    reused, spend, rows = get(second, cfg, scope, url)
     assert reused.body == original.body and reused.revalidated
     assert reused.source_refresh.source_sha256 == hashlib.sha256(original.body).hexdigest()
     assert reused.source_refresh.captured_at == 100.0
     assert reused.source_refresh.checked_at == 110.0
-    assert budget.fetches == 2
+    assert spend.fetches == 2
     assert [(r.status, r.bytes_read) for r in rows if r.event == "fetch"] == [
         (200, len(b"User-agent: *\nDisallow: /blocked\n")),
         (304, 0),
     ]
-    assert budget.bytes_read == sum(r.bytes_read for r in rows)
+    assert spend.bytes_read == sum(r.bytes_read for r in rows)
     assert rows[-1].source_refresh == reused.source_refresh
     assert len(asyncio.run(reopened.versions())) == len(asyncio.run(store.versions())) == 1
     assert Page.model_validate_json(reused.model_dump_json()) == reused

@@ -4,8 +4,6 @@
 # Add this table as [scoring] to the main Chimera config; it is not an implicit default.
 schema = "chimera.scoring/1"
 references_sha256 = "ed044ae9d3298484c1650836e8876fb72e009d162302a64083ad5e109f8645b1"
-encoding_call_budget = 100
-encoding_char_budget = 100000
 window_chars = 1000
 overlap_chars = 100
 max_windows = 8

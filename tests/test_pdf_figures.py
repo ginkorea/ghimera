@@ -154,12 +154,12 @@ def test_real_crop_ocr_uses_existing_visual_stage_and_citation_basis(tmp_path):
         visual.model_dump() | {"pdf_figures": figure_config, "min_height": 80}
     )
     stage = VisualStage(visual, ocr=TesseractOcr(visual), judge=FakeJudge())
-    budget, ledger = run_context()
+    spend, ledger = run_context()
     images = asyncio.run(
         stage.collect_pdf(
             goal=Goal(text="ports"),
             document=document,
-            budget=budget,
+            spend=spend,
             ledger=ledger,
             language_hint="en",
         )

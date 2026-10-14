@@ -44,12 +44,11 @@ class CitedSearch(GroundedSearch):
 def run(
     *, reference_updates=None, missing=False, research_updates=None, search=None, extractor=None
 ):
-    updates = dict(discover_cited_by=True, cited_by_query_budget=2, outside_scope="observed_public")
+    updates = dict(discover_cited_by=True, outside_scope="observed_public")
     updates.update(reference_updates or {})
     cfg = config(
         references=references(**updates),
         research=policy(**(research_updates or {})),
-        page_budget=30,
     )
     route, search = FakeRoute(), search or CitedSearch()
     collector = GoalLoop(
@@ -93,11 +92,14 @@ def test_cited_by_search_binds_native_parent_and_actual_provider_response():
     assert ResearchResult.model_validate_json(result.model_dump_json()) == result
 
 
-def test_query_budget_and_source_identity_survive_followup_rounds():
-    result, _, search = run(missing=True, reference_updates={"cited_by_query_budget": 1})
-    assert result.status == "partial"
-    assert len([item for item in search.requests if "cited by" in item.query.text]) == 1
-    assert len([row for row in result.harvest.ledger if row.reference_query]) == 1
+def test_each_parent_is_queried_once_and_identity_survives_followup_rounds():
+    result, _, search = run(missing=True)
+    # No query ceiling: research ends on saturation, and one parent is never re-queried.
+    assert result.status == "partial" and result.stop_reason == "saturated"
+    cited = [item for item in search.requests if "cited by" in item.query.text]
+    queries = [row.reference_query for row in result.harvest.ledger if row.reference_query]
+    assert len(cited) == len(queries) >= 1
+    assert len({query.source.sha256 for query in queries}) == len(queries)
     assert ResearchResult.model_validate_json(result.model_dump_json()) == result
 
 

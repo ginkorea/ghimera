@@ -116,10 +116,12 @@ intent and checks judge reservation ordinals against the run's original policy.
 
 Merge `examples/model-work.toml` into a recipe that also declares its private
 native journal. Paths, model services, stage concurrency and retention still
-belong to their existing configuration owners. `max_input_bytes` bounds the
-logical port argument snapshot or exact wire request, depending on the phase.
-`max_unanswered_calls` bounds unresolved reservations, including currently
-in-flight calls; select it to accommodate declared model concurrency. The only
+belong to their existing configuration owners. Since 0.4.12 there is no
+`max_input_bytes` (each model service's own `max_input_chars`/`max_request_bytes`
+bounds what is sent) and no `max_unanswered_calls` ceiling: unresolved
+reservations stay recorded and held for reconciliation, and model contact
+continues. `results.max_total_result_bytes` is gone too; `max_result_bytes`
+bounds one retained answer and the journal's own byte bounds hold the rest. The only
 uncertain policy currently supported is `hold`, not automatic retry.
 
 When the policy is absent, no new wire fields or invocation rows are emitted.

@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghimera.removed_ceilings import REMOVED_LOCAL_INPUT_CEILINGS, refuse_removed
+
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Positive = Annotated[int, Field(strict=True, gt=0)]
 DocumentMime = Literal[
@@ -37,9 +39,12 @@ class LocalDocumentSeed(InputRecord):
 class LocalInputConfig(InputRecord):
     schema_version: Literal["ghimera.local-inputs/1"] = Field(alias="schema")
     allowed_roots: Annotated[tuple[Path, ...], Field(min_length=1)]
-    max_files_per_run: Positive
     max_input_bytes: Positive
-    max_total_bytes: Positive
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_LOCAL_INPUT_CEILINGS, "local_inputs.")
 
     @model_validator(mode="after")
     def explicit(self) -> "LocalInputConfig":
@@ -48,8 +53,6 @@ class LocalInputConfig(InputRecord):
             for root in self.allowed_roots
         ) or len(set(self.allowed_roots)) != len(self.allowed_roots):
             raise ValueError("declare distinct, absolute, non-root input directories")
-        if self.max_input_bytes > self.max_total_bytes:
-            raise ValueError("the per-file allowance cannot exceed the total input allowance")
         return self
 
     def permits(self, path: Path) -> bool:

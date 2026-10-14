@@ -398,11 +398,7 @@ def read_journal(policy: JournalConfig, run_id: str) -> JournalReport:
         summary = None
         inputs = tuple(row for row in rows if row.event == "local_input")
         input_policy = header.config.local_inputs
-        if inputs and (
-            input_policy is None
-            or len(inputs) > input_policy.max_files_per_run
-            or sum(row.bytes_read for row in inputs) > input_policy.max_total_bytes
-        ):
+        if inputs and input_policy is None:
             raise _refuse()
         for row in inputs:
             if row.local_input is not None:

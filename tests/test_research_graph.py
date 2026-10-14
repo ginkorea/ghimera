@@ -187,7 +187,7 @@ def test_goal_loop_graph_before_fetch_and_disabled_no_writes(tmp_path):
             return await super().attempt(request)
 
     cfg = GhimeraConfig.from_toml(Path("examples/chimera.toml"))
-    cfg = cfg.model_copy(update={"graph": policy(tmp_path / "g"), "page_budget": 1})
+    cfg = cfg.model_copy(update={"graph": policy(tmp_path / "g")})
     goal = Goal(text="ports", seeds=("https://example.org/start",))
     scope = Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",))
     loop = GoalLoop(

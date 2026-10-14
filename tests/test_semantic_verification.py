@@ -7,7 +7,6 @@ import time
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.graph import MemoryGraphSink, ResearchGraph
 from ghimera.graph_planning import build_context, validate_context
@@ -16,6 +15,7 @@ from ghimera.model_client import SelfHostedModel
 from ghimera.model_http import ModelHttpResponse
 from ghimera.refusals import GhimeraRefused
 from ghimera.semantic_graph import SemanticStage, validate_rows
+from ghimera.spend import RunSpend
 from tests.test_semantic_graph import SemanticWire, configured, document
 from tests.test_served_models import service
 
@@ -40,9 +40,7 @@ def reviewed_config(tmp_path, **changes):
                 ),
             )
         ],
-        verification=dict(
-            schema="ghimera.semantic-verification/1", model_role="reviewer", max_calls_per_run=8
-        ),
+        verification=dict(schema="ghimera.semantic-verification/1", model_role="reviewer"),
     )
     raw["semantics"].update(changes)
     raw["models"]["reviewer"] = service(
@@ -115,7 +113,7 @@ class ReviewWire:
 
 
 def run_stage(cfg, extraction_wire, review_wire, docs):
-    budget, ledger = RunBudget(cfg, time.monotonic), Ledger()
+    spend, ledger = RunSpend(cfg, time.monotonic), Ledger()
     graph = ResearchGraph(cfg.graph, "reviewed-semantics", MemoryGraphSink())
     extractor = SelfHostedModel(cfg, cfg.models.analyst, http=extraction_wire)
     reviewer = SelfHostedModel(cfg, cfg.models.reviewer, http=review_wire)
@@ -125,18 +123,18 @@ def run_stage(cfg, extraction_wire, review_wire, docs):
         await graph.start("map the organization")
         for doc in docs:
             identity = await graph.document(doc.url, doc.raw, doc.extracted.text, "extractor@1")
-            await stage.extract("map the organization", doc, identity, graph, budget, ledger)
+            await stage.extract("map the organization", doc, identity, graph, spend, ledger)
 
     asyncio.run(run())
-    return graph, ledger.snapshot(), budget
+    return graph, ledger.snapshot(), spend
 
 
 def test_defined_ontology_and_independent_check_reach_the_wire_and_replay(tmp_path):
     cfg = reviewed_config(tmp_path)
     extraction_wire, review_wire = SemanticWire(cfg.models.analyst), ReviewWire(cfg.models.reviewer)
-    graph, rows, budget = run_stage(cfg, extraction_wire, review_wire, (document(),))
+    graph, rows, spend = run_stage(cfg, extraction_wire, review_wire, (document(),))
     assert [row.event for row in rows] == ["semantic_review", "semantic"]
-    assert budget.semantic_calls == budget.semantic_review_calls == 1 and budget.judge_calls == 2
+    assert spend.semantic_calls == spend.semantic_review_calls == 1 and spend.judge_calls == 2
     window = rows[-1].semantic_window
     assert window.schema_version == "ghimera.semantic-window/2"
     assert window.review.model_call.service == cfg.models.reviewer
@@ -305,10 +303,10 @@ def with_planning(cfg, **limits):
 
 def test_invalid_review_spend_is_recorded_separately_from_original_extraction(tmp_path):
     cfg = reviewed_config(tmp_path)
-    graph, ledger, budget, doc = (
+    graph, ledger, spend, doc = (
         ResearchGraph(cfg.graph, "failed-review", MemoryGraphSink()),
         Ledger(),
-        RunBudget(cfg, time.monotonic),
+        RunSpend(cfg, time.monotonic),
         document(),
     )
     stage = SemanticStage(
@@ -324,7 +322,7 @@ def test_invalid_review_spend_is_recorded_separately_from_original_extraction(tm
         identity = await graph.document(doc.url, doc.raw, doc.extracted.text, "extractor@1")
         before = graph.snapshot()
         with pytest.raises(GhimeraRefused):
-            await stage.extract("map the organization", doc, identity, graph, budget, ledger)
+            await stage.extract("map the organization", doc, identity, graph, spend, ledger)
         assert graph.snapshot() == before
 
     asyncio.run(run())
@@ -335,39 +333,8 @@ def test_invalid_review_spend_is_recorded_separately_from_original_extraction(tm
         extraction.model_call.task == "semantic_extract"
         and extraction.model_call.outcome == "success"
     )
-    assert budget.judge_calls == 2
+    assert spend.judge_calls == 2
     assert validate_rows(cfg, ledger.snapshot()) == (extraction,)
-
-
-def test_review_budget_cannot_spend_or_disguise_the_extractor_call(tmp_path):
-    cfg = reviewed_config(tmp_path)
-    cfg = GhimeraConfig.model_validate(dict(cfg.model_dump(), judge_budget=1))
-    wire = ReviewWire(cfg.models.reviewer)
-    graph, ledger, budget, doc = (
-        ResearchGraph(cfg.graph, "budget", MemoryGraphSink()),
-        Ledger(),
-        RunBudget(cfg, time.monotonic),
-        document(),
-    )
-    stage = SemanticStage(
-        cfg,
-        SelfHostedModel(cfg, cfg.models.analyst, http=SemanticWire(cfg.models.analyst)),
-        reviewer=SelfHostedModel(cfg, cfg.models.reviewer, http=wire),
-    )
-
-    async def run():
-        await graph.start("map the organization")
-        identity = await graph.document(doc.url, doc.raw, doc.extracted.text, "extractor@1")
-        with pytest.raises(GhimeraRefused):
-            await stage.extract("map the organization", doc, identity, graph, budget, ledger)
-
-    asyncio.run(run())
-    assert budget.semantic_calls == budget.judge_calls == 1
-    assert budget.semantic_review_calls == 0 and not wire.requests
-    assert [row.event for row in ledger.snapshot()] == ["semantic"]
-    assert (
-        ledger.snapshot()[0].refusal and ledger.snapshot()[0].model_call.task == "semantic_extract"
-    )
 
 
 def test_cancelled_independent_call_keeps_both_provenances_and_no_projection(tmp_path):
@@ -381,10 +348,10 @@ def test_cancelled_independent_call_keeps_both_provenances_and_no_projection(tmp
                 ready.set()
                 await asyncio.Event().wait()
 
-        graph, ledger, budget, doc = (
+        graph, ledger, spend, doc = (
             ResearchGraph(cfg.graph, "cancel-review", MemoryGraphSink()),
             Ledger(),
-            RunBudget(cfg, time.monotonic),
+            RunSpend(cfg, time.monotonic),
             document(),
         )
         await graph.start("map the organization")
@@ -398,7 +365,7 @@ def test_cancelled_independent_call_keeps_both_provenances_and_no_projection(tmp
             ),
         )
         task = asyncio.create_task(
-            stage.extract("map the organization", doc, identity, graph, budget, ledger)
+            stage.extract("map the organization", doc, identity, graph, spend, ledger)
         )
         await asyncio.wait_for(ready.wait(), timeout=5)
         task.cancel()
@@ -414,7 +381,7 @@ def test_cancelled_independent_call_keeps_both_provenances_and_no_projection(tmp
             rows[1].model_call.outcome == "success"
             and rows[1].model_call.task == "semantic_extract"
         )
-        assert budget.judge_calls == 2
+        assert spend.judge_calls == 2
         validate_rows(cfg, rows)
 
     asyncio.run(run())
@@ -467,9 +434,9 @@ def test_reviewed_loop_archive_and_journal_reconcile_and_restore_spend(tmp_path)
     assert Harvest.model_validate_json(harvest.model_dump_json()) == harvest
     assert read_journal(cfg.journal, "reviewed-loop").rows == harvest.ledger
     assert harvest.receipt.judge_calls == 3
-    budget = RunBudget(cfg, time.monotonic)
-    budget.restore(harvest.receipt, harvest.ledger, search_calls=0, downtime_seconds=0)
-    assert budget.semantic_calls == budget.semantic_review_calls == 1 and budget.judge_calls == 3
+    spend = RunSpend(cfg, time.monotonic)
+    spend.restore(harvest.receipt, harvest.ledger, search_calls=0, downtime_seconds=0)
+    assert spend.semantic_calls == spend.semantic_review_calls == 1 and spend.judge_calls == 3
     altered = harvest.model_dump()
     observed = next(row for row in altered["ledger"] if row["event"] == "semantic")
     observed["semantic_window"]["excluded_mentions"][0]["reason"] = "unknown_role"
@@ -581,8 +548,5 @@ def test_nonactive_verified_and_gap_examples_parse_explicit_limits():
             "graph_context"
         ]
     )
-    assert (
-        semantic.verification.model_role == "reviewer"
-        and semantic.verification.max_calls_per_run == 256
-    )
+    assert semantic.verification.model_role == "reviewer"
     assert planning.max_gaps == 8

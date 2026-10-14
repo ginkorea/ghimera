@@ -19,9 +19,7 @@ are examples, not active paths or recommended universal resource limits:
 [local_inputs]
 schema = "ghimera.local-inputs/1"
 allowed_roots = ["/absolute/chosen-volume/owned-documents"]
-max_files_per_run = 4
 max_input_bytes = 20000000
-max_total_bytes = 40000000
 ```
 
 Also configure `[document_extraction]` as described in

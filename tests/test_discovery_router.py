@@ -6,13 +6,12 @@ import time
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.collector import Collector
 from ghimera.config import GhimeraConfig
 from ghimera.discovery import DiscoveryProviders
 from ghimera.discovery_config import DiscoveryConfig, DiscoveryProgress, DiscoveryProvider
 from ghimera.ledger import Ledger
-from ghimera.refusals import FetchFailure, GhimeraRefused, RefusalCode
+from ghimera.refusals import FetchFailure, RefusalCode
 from ghimera.research_types import (
     ResearchResult,
     ResearchRound,
@@ -23,6 +22,7 @@ from ghimera.research_types import (
 from ghimera.result_archive import ResearchResultArchive
 from ghimera.search import GroundedSearch
 from ghimera.search_history import SearchHistory
+from ghimera.spend import RunSpend
 from tests.test_c0 import config
 from tests.test_collector import (
     assembled,
@@ -45,9 +45,6 @@ def provider(identifier, **updates):
         binding=recipe().model_dump(),
         query_disclosure="planned_query",
         use_contract="crawl_and_retain",
-        max_calls=4,
-        byte_budget=100000,
-        call_seconds_budget=10,
         max_response_bytes=10000,
         max_results=2,
         timeout_seconds=2,
@@ -99,10 +96,10 @@ class Adapter(GroundedSearch):
 
 def state(selected, adapters, *, ledger=None, observations=(), **updates):
     cfg = config(search=None, discovery=selected, research=policy(**updates))
-    budget = RunBudget(cfg, time.monotonic)
+    spend = RunSpend(cfg, time.monotonic)
     ledger = ledger if ledger is not None else Ledger()
     bound = DiscoveryProviders(selected, adapters)
-    return SearchHistory(bound, budget, ledger, restored=observations), budget, ledger
+    return SearchHistory(bound, spend, ledger, restored=observations), spend, ledger
 
 
 def query(text="find ports"):
@@ -125,23 +122,23 @@ def test_invalid_call_limits_refuse_before_reserving_or_contacting():
 
     adapter = Adapter()
     cfg = config(research=policy())
-    budget, ledger = RunBudget(cfg, time.monotonic), Ledger()
+    spend, ledger = RunSpend(cfg, time.monotonic), Ledger()
     limits = SearchCallLimits(max_bytes=10, limit=1, timeout_seconds=1).model_copy(
         update={"max_bytes": 0}
     )
     with pytest.raises(ValidationError):
-        asyncio.run(adapter.discover(query(), budget, ledger, limits=limits))
-    assert not adapter.calls and not ledger.snapshot() and budget.search_calls == 0
+        asyncio.run(adapter.discover(query(), spend, ledger, limits=limits))
+    assert not adapter.calls and not ledger.snapshot() and spend.search_calls == 0
 
 
 def test_empty_fallback_retains_each_actual_response_and_charges_each_call():
     first, second = Adapter(), Adapter(urls=("https://example.org/report",))
-    history, budget, ledger = state(discovery(), {"first": first, "second": second})
+    history, spend, ledger = state(discovery(), {"first": first, "second": second})
     observations = asyncio.run(history.discover_many(query()))
     assert [obs.provider for obs in observations] == ["binding:first", "binding:second"]
     assert observations[0].response.hits == ()
     assert observations[1].response.hits[0].url == "https://example.org/report"
-    assert budget.search_calls == budget.fetches == 2 and budget.bytes_read == 24
+    assert spend.search_calls == spend.fetches == 2 and spend.bytes_read == 24
     assert len(ledger.snapshot()) == len(history.observations) == 2
     assert all(
         obs.response.content_digest() == ledger.snapshot()[obs.sequence].search_response_sha256
@@ -150,8 +147,8 @@ def test_empty_fallback_retains_each_actual_response_and_charges_each_call():
     assert first.calls[0].max_bytes == 10000 and first.calls[0].limit == 2
 
 
-def test_provider_failure_circuit_and_call_quota_survive_reconstruction():
-    selected = discovery(provider("first"), provider("second", max_calls=1))
+def test_provider_failure_circuit_survives_reconstruction_with_no_call_quota():
+    selected = discovery(provider("first"), provider("second"))
     first, second = Adapter(failure=True), Adapter(urls=("https://example.org/one",))
     history, _, ledger = state(selected, {"first": first, "second": second})
     asyncio.run(history.discover_many(query()))
@@ -161,9 +158,10 @@ def test_provider_failure_circuit_and_call_quota_survive_reconstruction():
         ledger=Ledger(restored_rows=ledger.snapshot()),
         observations=history.observations,
     )
-    with pytest.raises(GhimeraRefused, match="search_unavailable"):
-        asyncio.run(restored.discover_many(query("another query")))
-    assert len(first.calls) == len(second.calls) == 1
+    # The open circuit holds the failed provider; the healthy one has no call quota.
+    observations = asyncio.run(restored.discover_many(query("another query")))
+    assert [obs.provider for obs in observations] == ["binding:second"]
+    assert len(first.calls) == 1 and len(second.calls) == 2
 
 
 def test_stagnation_rotation_uses_retained_round_progress_not_global_state():
@@ -193,15 +191,15 @@ def test_concurrent_fanout_retains_every_neighbor_on_failure_and_reserves_quotas
             Adapter(failure=True, pause=0.01),
             Adapter(urls=("https://example.org/one",), pause=0.02),
         )
-        history, budget, ledger = state(
+        history, spend, ledger = state(
             discovery(mode="fanout"), {"first": first, "second": second}
         )
         batches = await asyncio.gather(
             history.discover_many(query()), history.discover_many(query("other ports"))
         )
         assert all(batch for batch in batches)
-        assert budget.search_calls == len(first.calls) + len(second.calls)
-        assert budget.quiescent
+        assert spend.search_calls == len(first.calls) + len(second.calls)
+        assert spend.quiescent
         assert len(history.observations) == len(second.calls)
         for obs in history.observations:
             row = ledger.snapshot()[obs.sequence]
@@ -223,14 +221,14 @@ def test_onion_only_discovery_does_not_expand_to_clearnet_from_returned_hits():
 def test_cancelled_fanout_releases_all_run_and_provider_reservations():
     async def scenario():
         adapters = {"first": Adapter(pause=10), "second": Adapter(pause=10)}
-        history, budget, ledger = state(discovery(mode="fanout"), adapters)
+        history, spend, ledger = state(discovery(mode="fanout"), adapters)
         task = asyncio.create_task(history.discover_many(query()))
-        while budget.search_calls < 2:
+        while spend.search_calls < 2:
             await asyncio.sleep(0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert budget.quiescent and len(ledger.snapshot()) == 2
+        assert spend.quiescent and len(ledger.snapshot()) == 2
         assert all(row.refusal is not None for row in ledger.snapshot())
 
     asyncio.run(scenario())
@@ -312,7 +310,7 @@ def test_stagnant_real_research_rounds_resume_on_another_provider_without_fresh_
             base.model_dump(),
             discovery=selected,
             search=None,
-            research=policy(max_depth=0, max_pages_per_round=2, max_rounds=4, query_budget=10),
+            research=policy(max_depth=0, max_pages_per_round=2),
         )
     )
 
@@ -370,7 +368,7 @@ def test_citing_source_queries_bind_each_actual_fanout_provider(
             cfg.model_dump(),
             search=None,
             discovery=discovery(mode="fanout"),
-            references=references(discover_cited_by=True, cited_by_query_budget=2),
+            references=references(discover_cited_by=True),
         )
     )
     clients = {name: FixtureClient(envelope(url), echo_query=True) for name in ("first", "second")}
@@ -390,8 +388,8 @@ def test_citing_source_queries_bind_each_actual_fanout_provider(
 def test_provider_timeout_remains_a_failure_and_healthy_neighbor_is_retained():
     first, second = Adapter(pause=2), Adapter(urls=("https://example.org/one",))
     selected = discovery(provider("first", timeout_seconds=0.01), provider("second"), mode="fanout")
-    history, budget, ledger = state(selected, {"first": first, "second": second})
+    history, spend, ledger = state(selected, {"first": first, "second": second})
     observations = asyncio.run(history.discover_many(query()))
     assert len(observations) == 1 and observations[0].provider == "binding:second"
-    assert budget.quiescent and budget.search_calls == 2
+    assert spend.quiescent and spend.search_calls == 2
     assert any(row.refusal == RefusalCode.SEARCH_UNAVAILABLE for row in ledger.snapshot())

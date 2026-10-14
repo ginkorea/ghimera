@@ -20,13 +20,10 @@ def configured(tmp_path):
     raw = round_config(tmp_path).model_dump()
     raw["model_work"] = dict(
         schema="ghimera.model-work/1",
-        max_input_bytes=4000000,
-        max_unanswered_calls=4,
         uncertain_policy="hold",
         results=dict(
             schema="ghimera.model-results/1",
             max_result_bytes=16384,
-            max_total_result_bytes=131072,
         ),
     )
     raw["research_recovery"] = dict(
@@ -168,18 +165,19 @@ def test_phase_not_started_before_crash_is_invoked_once_from_original_state(tmp_
     assert len(planner.requests) == (1 if phase == "plan" else 0)
 
 
-def test_restart_downtime_never_grants_a_fresh_wall_budget(tmp_path, monkeypatch):
+def test_restart_downtime_is_accounted_and_never_ends_the_run(tmp_path, monkeypatch):
     cfg = configured(tmp_path)
     pin = killed_run(tmp_path, cfg, "plan", boundary="snapshot")
     saved = ResearchControlSnapshot.model_validate_json(
         (cfg.journal.directory / "research" / "research-control.json").read_bytes()
     )
-    monkeypatch.setattr("ghimera.research.time.time", lambda: saved.saved_at + cfg.wall_seconds + 1)
-    resumed, route, search, planner = assemble(cfg)
+    downtime = 3600.0
+    monkeypatch.setattr("ghimera.research.time.time", lambda: saved.saved_at + downtime)
+    resumed, _, _, _ = assemble(cfg)
     result = asyncio.run(resumed.recover("research", snapshot_sha256=pin))
-    assert result.stop_reason == "budget_exhausted"
-    assert not route.requests and not search.requests and not planner.requests
-    assert result.harvest.receipt.judge_calls == 0
+    # There is no wall-clock ceiling: downtime is spend on the receipt, not a stop.
+    assert result.stop_reason != "failed"
+    assert result.harvest.receipt.elapsed_seconds >= downtime
 
 
 def test_policy_requires_original_journal_and_retained_model_work(tmp_path):

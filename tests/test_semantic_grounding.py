@@ -19,7 +19,6 @@ def grounded_config(tmp_path, **updates):
     verification = dict(
         schema="ghimera.semantic-verification/3",
         model_role="reviewer",
-        max_calls_per_run=8,
         max_coverage_findings=2,
     )
     verification.update(updates)
@@ -150,7 +149,7 @@ def test_source_bound_omissions_are_retained_not_projected_as_new_entities(tmp_p
 def test_larger_review_schema_cannot_bypass_a_small_caller_input_allowance(tmp_path):
     cfg = with_planning(grounded_config(tmp_path))
     wire = GroundedWire(cfg.models.reviewer)
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="bound_exceeded"):
         run_stage(cfg, SemanticWire(cfg.models.analyst), wire, (document(),))
     assert wire.requests == []
 
@@ -320,17 +319,17 @@ def test_incomplete_without_a_witness_is_not_a_grounded_coverage_claim(tmp_path)
         GroundedSemanticReview.model_validate(raw)
 
 
-def test_grounded_loop_archive_journal_and_budget_restoration(tmp_path):
+def test_grounded_loop_archive_journal_and_spend_restoration(tmp_path):
     import asyncio
     import time
 
-    from ghimera.budget import RunBudget
     from ghimera.doubles import FakeJudge, FakeRoute, KeywordScorer
     from ghimera.fetch import FetchLadder
     from ghimera.journal import read_journal
     from ghimera.loop import GoalLoop
     from ghimera.model_client import SelfHostedModel
     from ghimera.models import Goal, Harvest, Scope
+    from ghimera.spend import RunSpend
     from tests.test_graph_planning import NativeFixture, with_journal
 
     cfg = with_journal(grounded_config(tmp_path), tmp_path)
@@ -359,9 +358,9 @@ def test_grounded_loop_archive_journal_and_budget_restoration(tmp_path):
     assert read_journal(cfg.journal, "grounded-loop").rows == harvest.ledger
     review = next(row.semantic_review for row in restored.ledger if row.event == "semantic_review")
     assert review.relations[0].checks.validity.assessment is None
-    budget = RunBudget(cfg, time.monotonic)
-    budget.restore(harvest.receipt, harvest.ledger, search_calls=0, downtime_seconds=0)
-    assert budget.semantic_calls == budget.semantic_review_calls == 1
+    spend = RunSpend(cfg, time.monotonic)
+    spend.restore(harvest.receipt, harvest.ledger, search_calls=0, downtime_seconds=0)
+    assert spend.semantic_calls == spend.semantic_review_calls == 1
 
 
 def test_grounded_example_is_explicit_and_old_policy_serialization_is_unchanged(tmp_path):
@@ -373,6 +372,4 @@ def test_grounded_example_is_explicit_and_old_policy_serialization_is_unchanged(
     assert policy.verification.schema_version == "ghimera.semantic-verification/3"
     assert policy.verification.max_coverage_findings == 8
     old = reviewed_config(tmp_path).semantics.verification.model_dump(by_alias=True)
-    assert old == dict(
-        schema="ghimera.semantic-verification/1", model_role="reviewer", max_calls_per_run=8
-    )
+    assert old == dict(schema="ghimera.semantic-verification/1", model_role="reviewer")

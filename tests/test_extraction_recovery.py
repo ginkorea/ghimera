@@ -89,9 +89,11 @@ def test_disabled_recovery_is_not_a_hidden_retry(tmp_path, monkeypatch):
         return await run(raw)
 
     monkeypatch.setattr(parser._worker, "run", record)
-    with pytest.raises(ExtractionFailure) as caught:
-        asyncio.run(parser.extract(page(REDESIGNED)))
-    assert len(calls) == len(caught.value.attempts) == 1
+    # No hidden retry: one rich attempt, then the page is kept as plain text.
+    parsed = asyncio.run(parser.extract(page(REDESIGNED)))
+    evidence = parsed.extraction
+    assert evidence is not None and evidence.tier == "fallback_plain"
+    assert len(calls) == len(evidence.fallback_attempts) == 1
 
 
 def test_generic_failure_is_terminal_after_two_attempts(tmp_path, monkeypatch):
@@ -121,20 +123,22 @@ def test_deadline_and_state_contract_failure_do_not_retry(tmp_path, monkeypatch)
         return b"not reached"
 
     monkeypatch.setattr(parser._worker, "run", slow)
-    with pytest.raises(ExtractionFailure) as caught:
-        asyncio.run(parser.extract(page()))
-    assert caught.value.code == RefusalCode.BUDGET_EXHAUSTED
+    # The deadline is never retried in the rich tier; the page is kept as plain text.
+    evidence = asyncio.run(parser.extract(page())).extraction
+    assert evidence is not None and evidence.tier == "fallback_plain"
+    assert evidence.fallback_refusal == RefusalCode.BOUND_EXCEEDED
+    assert "not a spend limit" in (evidence.fallback_detail or "")
     assert len(calls) == 1
-    assert caught.value.attempts[-1].refusal == RefusalCode.BUDGET_EXHAUSTED
+    assert evidence.fallback_attempts[-1].refusal == RefusalCode.BOUND_EXCEEDED
     parser = client(tmp_path / "another")
 
     async def bad_state(raw):
         raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
 
     monkeypatch.setattr(parser._worker, "run", bad_state)
-    with pytest.raises(ExtractionFailure) as caught:
-        asyncio.run(parser.extract(page()))
-    assert len(caught.value.attempts) == 1
+    evidence = asyncio.run(parser.extract(page())).extraction
+    assert evidence is not None and evidence.fallback_refusal == RefusalCode.ADAPTER_CONTRACT
+    assert len(evidence.fallback_attempts) == 1
 
 
 def test_external_cancellation_preserves_its_attempt_and_does_not_retry(tmp_path, monkeypatch):
@@ -169,7 +173,7 @@ def test_collection_records_failed_and_successful_parsing_and_replay_refuses_omi
 
     parser = client(tmp_path)
     settings = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
-    settings.update(page_budget=1, extraction=parser.config.model_dump(by_alias=True))
+    settings.update(extraction=parser.config.model_dump(by_alias=True))
     harvest = asyncio.run(
         GoalLoop(
             config=GhimeraConfig.model_validate(settings),
@@ -179,7 +183,7 @@ def test_collection_records_failed_and_successful_parsing_and_replay_refuses_omi
             judge=FakeJudge(),
         ).run(
             Goal(text="ports", seeds=(page().url,)),
-            Scope(allowed_hosts=("example.org",), max_depth=1, content_types=("text/html",)),
+            Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",)),
         )
     )
     observations = [r for r in harvest.ledger if r.event == "extraction_attempt"]
@@ -208,7 +212,7 @@ def test_terminal_failure_is_a_collection_ledger_chain_not_an_unhandled_error(tm
 
     parser = client(tmp_path)
     settings = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
-    settings.update(page_budget=1, extraction=parser.config.model_dump(by_alias=True))
+    settings.update(extraction=parser.config.model_dump(by_alias=True))
     harvest = asyncio.run(
         GoalLoop(
             config=GhimeraConfig.model_validate(settings),
@@ -231,14 +235,14 @@ def test_terminal_failure_is_a_collection_ledger_chain_not_an_unhandled_error(tm
     assert Harvest.model_validate_json(harvest.model_dump_json()) == harvest
 
 
-def test_collection_budget_timeout_keeps_asyncio_semantics_and_attempt_evidence(
+def test_reader_deadline_keeps_the_page_as_plain_text_and_the_run_ends_normally(
     tmp_path, monkeypatch
 ):
     class HtmlRoute(FakeRoute):
         async def attempt(self, request):
             return page()
 
-    parser = client(tmp_path, profiles=[], locator_drift=None)
+    parser = client(tmp_path, profiles=[], locator_drift=None, timeout_seconds=0.03)
 
     async def slow(raw):
         await asyncio.sleep(1)
@@ -246,9 +250,7 @@ def test_collection_budget_timeout_keeps_asyncio_semantics_and_attempt_evidence(
 
     monkeypatch.setattr(parser._worker, "run", slow)
     settings = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
-    settings.update(
-        page_budget=1, wall_seconds=0.03, extraction=parser.config.model_dump(by_alias=True)
-    )
+    settings.update(extraction=parser.config.model_dump(by_alias=True))
     harvest = asyncio.run(
         GoalLoop(
             config=GhimeraConfig.model_validate(settings),
@@ -258,21 +260,33 @@ def test_collection_budget_timeout_keeps_asyncio_semantics_and_attempt_evidence(
             judge=FakeJudge(),
         ).run(
             Goal(text="ports", seeds=(page().url,)),
-            Scope(allowed_hosts=("example.org",), max_depth=1, content_types=("text/html",)),
+            Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",)),
         )
     )
-    assert harvest.receipt.stop_reason == "budget_exhausted"
-    observations = [r.extraction_attempt for r in harvest.ledger if r.event == "extraction_attempt"]
-    assert len(observations) == 1 and observations[0].outcome == "cancelled"
+    # A reader past its own deadline never ends the run and never drops the page:
+    # the page is kept as plain text naming the refused rich tier.
+    assert harvest.receipt.stop_reason == "frontier_empty"
+    assert len(harvest.documents) == 1
+    evidence = harvest.documents[0].extracted.extraction
+    assert evidence is not None and evidence.tier == "fallback_plain"
+    assert evidence.fallback_refusal == RefusalCode.BOUND_EXCEEDED
+    assert any(r.reason == "extraction_fallback_plain" for r in harvest.ledger)
 
 
-def test_input_limits_do_not_launch_a_retry_worker(tmp_path, monkeypatch):
-    parser = client(tmp_path, max_input_bytes=1)
+def test_a_page_over_the_input_bound_is_cut_before_the_reader_sees_it(tmp_path, monkeypatch):
+    bound = 64
+    parser = client(tmp_path, max_input_bytes=bound)
+    seen = []
 
-    async def forbidden(raw):
-        pytest.fail("input refusal must occur before any parser attempt")
+    async def record(raw):
+        seen.append(ExtractionRequest.model_validate_json(raw).page.body)
+        raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED, "fixture reader refuses")
 
-    monkeypatch.setattr(parser._worker, "run", forbidden)
-    with pytest.raises(GhimeraRefused) as caught:
-        asyncio.run(parser.extract(page()))
-    assert caught.value.code == RefusalCode.EXTRACTION_FAILED
+    monkeypatch.setattr(parser._worker, "run", record)
+    source = page()
+    assert len(source.body) > bound
+    evidence = asyncio.run(parser.extract(source)).extraction
+    assert seen and all(body == source.body[:bound] for body in seen)
+    # The kept reading names the whole page and the bytes it did not read.
+    assert evidence is not None and evidence.omitted_bytes == len(source.body) - bound
+    assert evidence.source_sha256 == hashlib.sha256(source.body).hexdigest()

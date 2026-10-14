@@ -79,7 +79,7 @@ async def preflight_semantic_review(
 
     Existing configuration, source, proposal and service checks remain in force.
     An oversized later partition refuses the complete preflight, even if earlier
-    requests fit. No budget is spent, model call recorded, credential discovered,
+    requests fit. Nothing is spent, model call recorded, credential discovered,
     network contacted or graph projected. Sizes are characters/bytes, not a
     tokenizer measurement or proof of model context capacity or factual quality.
     """

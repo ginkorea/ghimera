@@ -447,7 +447,7 @@ def test_oversized_intent_and_poisoned_request_refuse_before_plan_or_storage(
 ):
     cfg, _ = assembled(tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint)
     collector = Collector(cfg, source_resolver=ResolverFixture())
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="bound_exceeded"):
         asyncio.run(collector.run("ports" * 100))
     with pytest.raises(ValidationError):
         asyncio.run(

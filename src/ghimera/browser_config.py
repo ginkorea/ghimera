@@ -62,7 +62,7 @@ class BrowserConfig(BaseModel):
         if self.settle_seconds >= self.timeout_seconds:
             raise ValueError("settle time must fit within the render deadline")
         if self.max_protocol_bytes < 2 * max(self.max_input_bytes, self.max_rendered_bytes):
-            raise ValueError("protocol budget must hold encoded input and rendered output")
+            raise ValueError("protocol bound must hold encoded input and rendered output")
         return self
 
     def content_digest(self) -> str:

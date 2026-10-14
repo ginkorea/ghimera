@@ -31,7 +31,7 @@ class BrowserNavigationConfig(BaseModel):
 
 
 class BrowserNavigationAdmission(Protocol):
-    """The run owner checks scope, robots, cadence and budget before continuation.
+    """The run owner checks scope, robots, cadence and bounds before continuation.
 
     Raises the existing GhimeraRefused vocabulary on denial. The implementation
     must not navigate the borrowed page or recursively use this interception

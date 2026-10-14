@@ -6,13 +6,13 @@ import hashlib
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.ledger import Ledger
 from ghimera.models import ModelIdentity
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_types import ResearchPlan, ResearchResult, SearchQuery
 from ghimera.result_archive import ResearchResultArchive
 from ghimera.search_history import SearchHistory
+from ghimera.spend import RunSpend
 from tests.test_c0 import config
 from tests.test_intent_research import PlannerFixture, SearchFixture, policy, run
 
@@ -110,8 +110,8 @@ def test_delayed_completion_failure_and_concurrent_runs_keep_owned_history():
     async def scenario():
         cfg, provider = config(research=policy()), Delayed()
         first_ledger, second_ledger = Ledger(), Ledger()
-        first = SearchHistory(provider, RunBudget(cfg, lambda: 0.0), first_ledger)
-        second = SearchHistory(provider, RunBudget(cfg, lambda: 0.0), second_ledger)
+        first = SearchHistory(provider, RunSpend(cfg, lambda: 0.0), first_ledger)
+        second = SearchHistory(provider, RunSpend(cfg, lambda: 0.0), second_ledger)
         calls = ((first, "first"), (first, "second"), (first, "failed"), (second, "separate"))
         values = await asyncio.gather(
             *(

@@ -10,7 +10,6 @@ from weakref import WeakKeyDictionary
 
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.embedding_types import (
     EmbeddingReferences,
@@ -26,12 +25,19 @@ from ghimera.ledger import Ledger
 from ghimera.model_retry import retry_transient
 from ghimera.models import Extracted, Goal, LedgerRow, LinkCandidate
 from ghimera.ports import EvidenceEncoder
-from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused, RefusalCode
+from ghimera.refusals import (
+    BoundExceeded,
+    EncodingCancelled,
+    EncodingFailure,
+    GhimeraRefused,
+    RefusalCode,
+)
 from ghimera.run_encoding import BatchPlan, RunEncodingWork, encoding_batches
 from ghimera.run_encoding_types import RunEncodingDecision, RunEncodingScope
 from ghimera.scoring import Scorer
 from ghimera.scoring_config import ScoringConfig
 from ghimera.scoring_types import LinkSimilarity, SimilarityEvidence, WindowSimilarity
+from ghimera.spend import RunSpend
 
 
 def keyword_score(goal: Goal, link: LinkCandidate) -> float:
@@ -92,7 +98,7 @@ def covered_chars(spans: tuple[tuple[int, int], ...]) -> int:
 
 @dataclass
 class _IntentSession:
-    """Weakly budget-keyed state; no references can cross runs or original intents."""
+    """Weakly spend-keyed state; no references can cross runs or original intents."""
 
     goal_sha256: str
     ledger: Ledger
@@ -152,7 +158,7 @@ class EmbeddingScorer(Scorer):
             raise ValueError("explicit vector replay requires scoring/3 run encoding recovery")
         self._encoding_decisions = encoding_decisions
         self._retained_reading_sequence: int | None = None
-        self._sessions: WeakKeyDictionary[RunBudget, _IntentSession] = WeakKeyDictionary()
+        self._sessions: WeakKeyDictionary[RunSpend, _IntentSession] = WeakKeyDictionary()
 
     def validate_config(self, config: GhimeraConfig) -> None:
         if config.scoring != self._policy:
@@ -162,14 +168,14 @@ class EmbeddingScorer(Scorer):
         self,
         goal: Goal,
         document: Extracted,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         *,
         original_start: int,
     ) -> tuple[LinkCandidate, ...]:
         """Consume only the explicit saved source transaction's original schedule."""
         policy = self._policy
-        if policy.run_encoding_recovery is None or not ledger.has_replay_binding(budget.config):
+        if policy.run_encoding_recovery is None or not ledger.has_replay_binding(spend.config):
             raise ValueError("score adoption requires the original RUN journal")
         rows = ledger.snapshot()
         if type(original_start) is not int or not 0 <= original_start <= len(rows):
@@ -236,7 +242,7 @@ class EmbeddingScorer(Scorer):
             if len(readings) != 1:
                 raise ValueError("saved score requires one original native reading")
             replay._retained_reading_sequence = readings[0]
-        return await replay.score(goal, document, budget, ledger)
+        return await replay.score(goal, document, spend, ledger)
 
     def _cosine(
         self, vector: tuple[float, ...], references: tuple[tuple[float, ...], ...]
@@ -258,21 +264,21 @@ class EmbeddingScorer(Scorer):
         return similarities[index], index
 
     async def _references_for(
-        self, goal: Goal, budget: RunBudget, ledger: Ledger, work: RunEncodingWork | None = None
+        self, goal: Goal, spend: RunSpend, ledger: Ledger, work: RunEncodingWork | None = None
     ) -> EmbeddingReferences:
         if self._references is not None:
             return self._references
         goal_hash = hashlib.sha256(goal.text.encode()).hexdigest()
-        session = self._sessions.get(budget)
+        session = self._sessions.get(spend)
         if session is None:
             session = _IntentSession(goal_hash, ledger)
-            self._sessions[budget] = session
+            self._sessions[spend] = session
         if session.goal_sha256 != goal_hash or session.ledger is not ledger:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         async with session.lock:
             if session.references is not None:
                 return session.references
-            # A resumed budget has a new object identity, but its original intent
+            # A resumed spend has a new object identity, but its original intent
             # vectors remain acknowledged native observations, not another call.
             retained = tuple(
                 row.intent_reference
@@ -294,7 +300,7 @@ class EmbeddingScorer(Scorer):
                 return session.references
             vectors = await self._encode(
                 (goal.text,),
-                budget,
+                spend,
                 ledger,
                 None,
                 encoder=self._query_encoder,
@@ -349,7 +355,7 @@ class EmbeddingScorer(Scorer):
     async def _encode(
         self,
         texts: tuple[str, ...],
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         url: str | None,
         *,
@@ -389,13 +395,13 @@ class EmbeddingScorer(Scorer):
         ) -> tuple[tuple[float, ...], ...]:
             # A transient refusal (service reloading) is retried; each try is charged.
             return await retry_transient(
-                budget.config.model_retry, lambda: attempt(batch_texts, expected_hashes, chars)
+                spend.config.model_retry, lambda: attempt(batch_texts, expected_hashes, chars)
             )
 
         async def attempt(
             batch_texts: tuple[str, ...], expected_hashes: tuple[str, ...], size: int
         ) -> tuple[tuple[float, ...], ...]:
-            budget.reserve_encoding(size)
+            spend.reserve_encoding(size)
             started = asyncio.get_running_loop().time()
             call: EncodingCall | None = None
             refusal, detail = None, None
@@ -415,7 +421,7 @@ class EmbeddingScorer(Scorer):
                 call, refusal, detail = exc.call, exc.code, exc.detail
                 raise
             except EncodingCancelled as exc:
-                call, refusal = exc.call, RefusalCode.BUDGET_EXHAUSTED
+                call, refusal = exc.call, RefusalCode.BOUND_EXCEEDED
                 raise
             except ValidationError:
                 refusal = RefusalCode.ADAPTER_CONTRACT
@@ -466,10 +472,11 @@ class EmbeddingScorer(Scorer):
         for text in texts:
             chars = len(text) + len(service.text_prefix)
             if chars > service.max_text_chars or chars > service.max_input_chars:
-                raise GhimeraRefused(
-                    RefusalCode.BUDGET_EXHAUSTED,
-                    f"one encoder text of {chars} chars exceeds max_text_chars="
-                    f"{service.max_text_chars}",
+                raise BoundExceeded(
+                    "encoder max_text_chars/max_input_chars",
+                    chars,
+                    min(service.max_text_chars, service.max_input_chars),
+                    "link texts are cut before this; a window is bounded by the recipe",
                 )
             if len(pending) >= service.max_batch_texts or size + chars > service.max_input_chars:
                 flush()
@@ -493,22 +500,22 @@ class EmbeddingScorer(Scorer):
         return tuple(output)
 
     async def rank(
-        self, goal: Goal, document: Extracted, budget: RunBudget, ledger: Ledger
+        self, goal: Goal, document: Extracted, spend: RunSpend, ledger: Ledger
     ) -> tuple[LinkCandidate, ...]:
         # Only opted-in score transactions serialize their ordered durable
         # decisions. Legacy scoring and all other collection/model stages keep
         # their existing concurrency. Cancellation releases this run-owned lock.
         if self._policy.run_encoding_recovery is not None:
-            async with budget.encoding_score_lock:
-                return await self._rank(goal, document, budget, ledger)
-        return await self._rank(goal, document, budget, ledger)
+            async with spend.encoding_score_lock:
+                return await self._rank(goal, document, spend, ledger)
+        return await self._rank(goal, document, spend, ledger)
 
     async def _rank(
-        self, goal: Goal, document: Extracted, budget: RunBudget, ledger: Ledger
+        self, goal: Goal, document: Extracted, spend: RunSpend, ledger: Ledger
     ) -> tuple[LinkCandidate, ...]:
-        self.validate_config(budget.config)
+        self.validate_config(spend.config)
         policy = self._policy
-        config = budget.config
+        config = spend.config
         if policy.run_encoding_recovery is not None:
             if ledger.run_header(config).goal != goal:
                 raise ValueError("run encoding requires the exact original journal goal")
@@ -600,11 +607,11 @@ class EmbeddingScorer(Scorer):
                 ("source", policy.encoder, batch, start)
                 for start, batch in encoding_batches(policy.encoder, windows + link_texts)
             )
-            work = RunEncodingWork(budget, ledger, scope, tuple(plan), self._encoding_decisions)
-        references = await self._references_for(goal, budget, ledger, work)
+            work = RunEncodingWork(spend, ledger, scope, tuple(plan), self._encoding_decisions)
+        references = await self._references_for(goal, spend, ledger, work)
         reference_vectors = tuple(unit_vector(chunk.vector) for chunk in references.chunks)
         vectors = await self._encode(
-            windows + link_texts, budget, ledger, document.canonical_url, work=work
+            windows + link_texts, spend, ledger, document.canonical_url, work=work
         )
         if work is not None and work.position != len(work.plan):
             raise ValueError("run encoding did not consume its exact admitted decision schedule")

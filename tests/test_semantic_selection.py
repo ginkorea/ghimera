@@ -8,7 +8,6 @@ import time
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.doubles import FakeJudge
 from ghimera.embedding import SelfHostedEncoder
@@ -33,6 +32,7 @@ from ghimera.semantic_scoring import EmbeddingScorer
 from ghimera.semantic_selection import make_selection
 from ghimera.semantic_selection_types import SemanticSelectionRef
 from ghimera.semantic_types import SemanticProposal
+from ghimera.spend import RunSpend
 from tests.test_embedding_scoring import intent_policy, service
 from tests.test_html_extraction import policy as extraction_policy
 from tests.test_intent_research import policy as research_policy
@@ -59,7 +59,7 @@ def selection_config(tmp_path, *, durable=False, research=False, **changes):
     raw["semantics"]["window_selection"].update(changes)
     raw["extraction"] = extraction_policy(tmp_path)
     raw["scoring"] = intent_policy(
-        service(8999), window_chars=30, overlap_chars=10, max_windows=100, encoding_call_budget=100
+        service(8999), window_chars=30, overlap_chars=10, max_windows=100
     )
     if research:
         raw["research"] = research_policy(
@@ -88,13 +88,10 @@ def selection_config(tmp_path, *, durable=False, research=False, **changes):
         )
         raw["model_work"] = dict(
             schema="ghimera.model-work/1",
-            max_input_bytes=1000000,
-            max_unanswered_calls=4,
             uncertain_policy="hold",
             results=dict(
                 schema="ghimera.model-results/1",
                 max_result_bytes=200000,
-                max_total_result_bytes=1000000,
             ),
         )
     return GhimeraConfig.model_validate(raw)
@@ -174,7 +171,7 @@ def exercise_selection(
 ):
     doc, goal = native_document(cfg, text=text), Goal(text=GOAL)
     sink = DirectoryLedgerSink(cfg, "selected", goal, FakeJudge().model) if cfg.journal else None
-    ledger, budget = Ledger(sink=sink), RunBudget(cfg, time.monotonic)
+    ledger, spend = Ledger(sink=sink), RunSpend(cfg, time.monotonic)
     wire = SemanticWire(cfg.models.analyst, wrong_surface=failed)
     model = SelfHostedModel(cfg, cfg.models.analyst, http=wire)
     review_wire = reviewer_factory(cfg.models.reviewer) if reviewer_factory is not None else None
@@ -196,17 +193,17 @@ def exercise_selection(
                 reason="controlled_native_parser",
             )
         )
-        await scorer.rank(goal, doc.extracted, budget, ledger)
+        await scorer.rank(goal, doc.extracted, spend, ledger)
         if failed:
             with pytest.raises(GhimeraRefused):
-                await stage.extract(GOAL, doc, identity, graph, budget, ledger)
+                await stage.extract(GOAL, doc, identity, graph, spend, ledger)
         else:
-            await stage.extract(GOAL, doc, identity, graph, budget, ledger)
+            await stage.extract(GOAL, doc, identity, graph, spend, ledger)
         if repeat:
-            count, calls = len(ledger.snapshot()), budget.judge_calls
+            count, calls = len(ledger.snapshot()), spend.judge_calls
             with pytest.raises(GhimeraRefused):
-                await stage.extract(GOAL, doc, identity, graph, budget, ledger)
-            assert (len(ledger.snapshot()), budget.judge_calls) == (count, calls)
+                await stage.extract(GOAL, doc, identity, graph, spend, ledger)
+            assert (len(ledger.snapshot()), spend.judge_calls) == (count, calls)
         if replay:
             attempt_row = next(row for row in ledger.snapshot() if row.semantic_window)
             observation = attempt_row.semantic_window
@@ -215,7 +212,7 @@ def exercise_selection(
             )
             original = next(row for row in ledger.snapshot() if row.model_intent)
             bound = port_input(
-                budget,
+                spend,
                 doc,
                 cfg.semantics,
                 plan,
@@ -225,29 +222,29 @@ def exercise_selection(
                 end=observation.end,
             )
             invocation = ModelInvocation(
-                budget,
+                spend,
                 ledger,
                 phase="semantic_extract",
                 model=model.model,
                 url=doc.url,
                 request=bound,
-                reserve=budget.reserve_semantic,
+                reserve=spend.reserve_semantic,
                 replay_intent_sequence=original.sequence,
             )
             recovered = invocation.replay(
                 lambda output: SemanticProposal.model_validate_json(output.body())
             )
             assert recovered == observation.proposal
-            assert budget.judge_calls == 1 and len(wire.requests) == 1
+            assert spend.judge_calls == 1 and len(wire.requests) == 1
             with pytest.raises(FatalModelWorkFailure):
                 ModelInvocation(
-                    budget,
+                    spend,
                     ledger,
                     phase="semantic_extract",
                     model=model.model,
                     url=doc.url,
                     request=bound + b"changed",
-                    reserve=budget.reserve_semantic,
+                    reserve=spend.reserve_semantic,
                     replay_intent_sequence=original.sequence,
                 )
         return graph.snapshot()
@@ -261,9 +258,9 @@ def exercise_selection(
         receipt = Receipt(
             fetches=0,
             bytes_read=0,
-            judge_calls=budget.judge_calls,
-            encoding_calls=budget.encoding_calls,
-            encoding_chars=budget.encoding_chars,
+            judge_calls=spend.judge_calls,
+            encoding_calls=spend.encoding_calls,
+            encoding_chars=spend.encoding_chars,
             accepted_documents=1,
             elapsed_seconds=0.0,
             stop_reason="frontier_empty",
@@ -331,7 +328,7 @@ def test_unknown_selected_invocation_remains_charged_and_cannot_restart(tmp_path
     cfg = selection_config(tmp_path, durable=True)
     doc, goal = native_document(cfg), Goal(text=GOAL)
     sink = DirectoryLedgerSink(cfg, "unknown", goal, FakeJudge().model)
-    ledger, budget = Ledger(sink=sink), RunBudget(cfg, time.monotonic)
+    ledger, spend = Ledger(sink=sink), RunSpend(cfg, time.monotonic)
 
     class CancelledWire(SemanticWire):
         async def post(self, body):
@@ -358,14 +355,14 @@ def test_unknown_selected_invocation_remains_charged_and_cannot_restart(tmp_path
                 reason="controlled_native_parser",
             )
         )
-        await scorer.rank(goal, doc.extracted, budget, ledger)
+        await scorer.rank(goal, doc.extracted, spend, ledger)
         with pytest.raises(asyncio.CancelledError):
-            await stage.extract(GOAL, doc, identity, graph, budget, ledger)
+            await stage.extract(GOAL, doc, identity, graph, spend, ledger)
         plan = next(row.semantic_selection for row in ledger.snapshot() if row.semantic_selection)
         window = plan.context.windows[0]
         reference = SemanticSelectionRef(selection_sha256=plan.content_digest(), window_index=0)
         bound = port_input(
-            budget,
+            spend,
             doc,
             cfg.semantics,
             plan,
@@ -374,25 +371,25 @@ def test_unknown_selected_invocation_remains_charged_and_cannot_restart(tmp_path
             start=window.start,
             end=window.end,
         )
-        prefix, calls = ledger.snapshot(), budget.judge_calls
+        prefix, calls = ledger.snapshot(), spend.judge_calls
         assert calls == 1 and len(uncertain_model_sequences(prefix)) == 1
         failed = next(row.semantic_refusal for row in prefix if row.semantic_refusal)
         assert failed.selection == reference and not failed.continued
         with pytest.raises(GhimeraRefused):
-            await stage.extract(GOAL, doc, identity, graph, budget, ledger)
+            await stage.extract(GOAL, doc, identity, graph, spend, ledger)
         assert (
-            ledger.snapshot() == prefix and budget.judge_calls == calls and len(wire.requests) == 1
+            ledger.snapshot() == prefix and spend.judge_calls == calls and len(wire.requests) == 1
         )
         original = next(row.sequence for row in prefix if row.model_intent)
         with pytest.raises(FatalModelWorkFailure):
             ModelInvocation(
-                budget,
+                spend,
                 ledger,
                 phase="semantic_extract",
                 model=model.model,
                 url=doc.url,
                 request=bound,
-                reserve=budget.reserve_semantic,
+                reserve=spend.reserve_semantic,
                 replay_intent_sequence=original,
             )
 

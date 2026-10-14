@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig, NetworkPolicy
 from ghimera.fetch import FetchLadder
 from ghimera.http import CurlRoute, NetworkGuard
@@ -20,6 +19,7 @@ from ghimera.ledger import Ledger
 from ghimera.models import Scope
 from ghimera.politeness import Politeness
 from ghimera.refusals import GhimeraRefused
+from ghimera.spend import RunSpend
 
 
 class ResolverFixture:
@@ -131,7 +131,6 @@ def state(site, **updates):
     port = site[0]
     raw = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     raw.update(
-        page_budget=40,
         per_host_delay_seconds=0.01,
         global_requests_per_second=1000.0,
         per_host_concurrency=2,
@@ -167,16 +166,16 @@ def state(site, **updates):
     return (
         FetchLadder((route,)),
         scope,
-        RunBudget(cfg, time.monotonic),
+        RunSpend(cfg, time.monotonic),
         Ledger(),
         f"http://fixture.example:{port}",
     )
 
 
 def fetch(site, path, **updates):
-    ladder, scope, budget, ledger, origin = state(site, **updates)
-    page = asyncio.run(ladder.fetch(origin + path, scope, budget, ledger))
-    return page, budget, ledger
+    ladder, scope, spend, ledger, origin = state(site, **updates)
+    page = asyncio.run(ladder.fetch(origin + path, scope, spend, ledger))
+    return page, spend, ledger
 
 
 def pacing_state(site, **updates):
@@ -196,35 +195,35 @@ def pacing_state(site, **updates):
 
 
 def test_real_http_throttle_retries_after_server_wait_with_exact_spend(site):
-    ladder, scope, budget, ledger, origin = pacing_state(site)
-    result = asyncio.run(ladder.fetch(origin + "/limited", scope, budget, ledger))
+    ladder, scope, spend, ledger, origin = pacing_state(site)
+    result = asyncio.run(ladder.fetch(origin + "/limited", scope, spend, ledger))
     assert result.status == 200
     starts = [stamp for path, stamp in site[2] if path == "/limited"]
     assert len(starts) == 2
     assert starts[1] - starts[0] >= 0.99
-    assert budget.fetches == 3
-    assert sum(row.bytes_read for row in ledger.snapshot()) == budget.bytes_read
+    assert spend.fetches == 3
+    assert sum(row.bytes_read for row in ledger.snapshot()) == spend.bytes_read
     assert [row.status for row in ledger.snapshot() if row.event == "fetch"] == [200, 429, 200]
 
 
 def test_real_http_exhausted_throttle_does_not_fall_back_to_another_route(site):
     from ghimera.doubles import FakeRoute
 
-    original, scope, budget, ledger, origin = pacing_state(site, retry_budget=0)
+    original, scope, spend, ledger, origin = pacing_state(site, retry_budget=0)
     fallback = FakeRoute()
     ladder = FetchLadder(original._routes + (fallback,))
     with pytest.raises(GhimeraRefused, match="fetch_failed"):
-        asyncio.run(ladder.fetch(origin + "/always-limited", scope, budget, ledger))
+        asyncio.run(ladder.fetch(origin + "/always-limited", scope, spend, ledger))
     assert site[1]["/always-limited"] == 1
     assert not fallback.requests
     assert ledger.snapshot()[-1].status == 429
 
 
 def test_real_http_robots_and_every_request_counted(site):
-    page, budget, ledger = fetch(site, "/plain")
+    page, spend, ledger = fetch(site, "/plain")
     assert page.body.startswith(b"<article>")
-    assert budget.fetches == site[1]["/robots.txt"] + site[1]["/plain"] == 2
-    assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
+    assert spend.fetches == site[1]["/robots.txt"] + site[1]["/plain"] == 2
+    assert spend.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
     assert all(row.route == "curl_cffi" for row in ledger.snapshot())
     assert all(headers["User-Agent"].startswith("Chimera/") for _, headers in site[3])
     assert all("Cookie" not in headers and "Authorization" not in headers for _, headers in site[3])
@@ -238,9 +237,9 @@ def test_robots_disallow_prevents_target_request(site):
 
 
 def test_redirects_checked_before_network_io_and_accounted(site):
-    page, budget, ledger = fetch(site, "/redirect")
+    page, spend, ledger = fetch(site, "/redirect")
     assert page.final_url.endswith("/plain")
-    assert budget.fetches == 3
+    assert spend.fetches == 3
     assert any(row.event == "fallback" and row.reason == "redirect" for row in ledger.snapshot())
     with pytest.raises(GhimeraRefused, match="out_of_scope"):
         fetch(site, "/offscope")
@@ -254,8 +253,8 @@ def test_redirect_loop_is_bounded(site):
 
 
 def test_only_transient_errors_retry_and_all_attempts_count(site):
-    _, budget, _ = fetch(site, "/flaky")
-    assert budget.fetches == 3
+    _, spend, _ = fetch(site, "/flaky")
+    assert spend.fetches == 3
     assert site[1]["/flaky"] == 2
     with pytest.raises(GhimeraRefused, match="fetch_failed"):
         fetch(site, "/forbidden")
@@ -277,20 +276,20 @@ def test_interstitials_refuse_without_retry_or_escalation(site, path, code):
 
 
 def test_decoded_stream_is_bounded_not_just_compressed_body(site):
-    ladder, scope, budget, ledger, origin = state(site, byte_budget=4000)
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
-        asyncio.run(ladder.fetch(origin + "/oversized", scope, budget, ledger))
-    assert budget.bytes_read <= 4000
-    assert sum(row.bytes_read for row in ledger.snapshot()) == budget.bytes_read
+    ladder, scope, spend, ledger, origin = state(site)
+    with pytest.raises(GhimeraRefused, match="bound_exceeded"):
+        asyncio.run(ladder.fetch(origin + "/oversized", scope, spend, ledger))
+    assert spend.bytes_read <= 4000
+    assert sum(row.bytes_read for row in ledger.snapshot()) == spend.bytes_read
     assert site[1]["/oversized"] == 1
 
 
 def test_conditional_304_uses_exact_prior_bytes_and_accounts_only_new_bytes(site):
-    ladder, scope, budget, ledger, origin = state(site)
+    ladder, scope, spend, ledger, origin = state(site)
 
     async def run():
-        first = await ladder.fetch(origin + "/conditional", scope, budget, ledger)
-        second = await ladder.fetch(origin + "/conditional", scope, budget, ledger)
+        first = await ladder.fetch(origin + "/conditional", scope, spend, ledger)
+        second = await ladder.fetch(origin + "/conditional", scope, spend, ledger)
         assert first.body == second.body
         assert second.revalidated is True
 
@@ -302,7 +301,7 @@ def test_conditional_304_uses_exact_prior_bytes_and_accounts_only_new_bytes(site
 
 
 def test_global_and_host_limits_allow_parallel_work_with_delay(site, monkeypatch):
-    ladder, scope, budget, ledger, origin = state(site)
+    ladder, scope, spend, ledger, origin = state(site)
     admitted = []
     original_slot = Politeness.slot
 
@@ -317,7 +316,7 @@ def test_global_and_host_limits_allow_parallel_work_with_delay(site, monkeypatch
     async def run():
         began = time.monotonic()
         await asyncio.gather(
-            *(ladder.fetch(origin + "/slow", scope, budget, ledger) for _ in range(4))
+            *(ladder.fetch(origin + "/slow", scope, spend, ledger) for _ in range(4))
         )
         return time.monotonic() - began
 
@@ -328,14 +327,8 @@ def test_global_and_host_limits_allow_parallel_work_with_delay(site, monkeypatch
     starts = [stamp for url, stamp in admitted if url == origin + "/slow"]
     assert len(starts) == 4
     assert all(right - left >= 0.009 for left, right in zip(starts, starts[1:], strict=False))
-    assert budget.fetches == 5
-    assert sum(row.bytes_read for row in ledger.snapshot()) == budget.bytes_read
-
-
-def test_page_budget_includes_robots_and_stops_before_target(site):
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
-        fetch(site, "/plain", page_budget=1)
-    assert site[1]["/plain"] == 0
+    assert spend.fetches == 5
+    assert sum(row.bytes_read for row in ledger.snapshot()) == spend.bytes_read
 
 
 def test_public_network_refuses_private_and_mixed_dns_answers_before_io():
@@ -359,8 +352,8 @@ def test_fixture_policy_cannot_permit_private_nonloopback_addresses():
 
 
 def test_robots_toggle_requires_decision_and_records_scoped_override(site):
-    _, scope, budget, ledger, origin = state(site)
-    raw = budget.config.model_dump(by_alias=True)
+    _, scope, spend, ledger, origin = state(site)
+    raw = spend.config.model_dump(by_alias=True)
     raw["http"]["robots"] = {
         "schema": "chimera.robots/1",
         "mode": "recorded_override",
@@ -374,8 +367,8 @@ def test_robots_toggle_requires_decision_and_records_scoped_override(site):
     }
     cfg = GhimeraConfig.model_validate(raw)
     ladder = FetchLadder((CurlRoute(cfg, resolver=ResolverFixture()),))
-    budget = RunBudget(cfg, time.monotonic)
-    page = asyncio.run(ladder.fetch(origin + "/blocked", scope, budget, ledger))
+    spend = RunSpend(cfg, time.monotonic)
+    page = asyncio.run(ladder.fetch(origin + "/blocked", scope, spend, ledger))
     assert page.status == 200
     assert site[1]["/robots.txt"] == 0
     assert site[1]["/blocked"] == 1
@@ -396,9 +389,9 @@ def test_robots_wildcards_and_more_specific_allow_are_obeyed(site):
 
 
 def test_robots_override_never_leaks_to_other_hosts_or_changed_config(site):
-    ladder, scope, budget, ledger, origin = state(site)
-    asyncio.run(ladder.fetch(origin + "/plain", scope, budget, ledger))
-    changed = budget.config.model_dump(by_alias=True)
+    ladder, scope, spend, ledger, origin = state(site)
+    asyncio.run(ladder.fetch(origin + "/plain", scope, spend, ledger))
+    changed = spend.config.model_dump(by_alias=True)
     changed["http"]["robots"] = {
         "schema": "chimera.robots/1",
         "mode": "recorded_override",
@@ -412,27 +405,25 @@ def test_robots_override_never_leaks_to_other_hosts_or_changed_config(site):
     }
     cfg = GhimeraConfig.model_validate(changed)
     with pytest.raises(GhimeraRefused, match="adapter_contract"):
-        asyncio.run(
-            ladder.fetch(origin + "/blocked", scope, RunBudget(cfg, time.monotonic), ledger)
-        )
+        asyncio.run(ladder.fetch(origin + "/blocked", scope, RunSpend(cfg, time.monotonic), ledger))
     new_ladder = FetchLadder((CurlRoute(cfg, resolver=ResolverFixture()),))
     with pytest.raises(GhimeraRefused, match="robots_disallowed"):
         asyncio.run(
-            new_ladder.fetch(origin + "/blocked", scope, RunBudget(cfg, time.monotonic), Ledger())
+            new_ladder.fetch(origin + "/blocked", scope, RunSpend(cfg, time.monotonic), Ledger())
         )
     assert site[1]["/blocked"] == 0
 
 
 def test_route_cannot_use_fixture_network_under_a_public_run_config(site):
-    ladder, scope, budget, ledger, origin = state(site)
-    raw = budget.config.model_dump(by_alias=True)
+    ladder, scope, spend, ledger, origin = state(site)
+    raw = spend.config.model_dump(by_alias=True)
     raw["http"]["network"] = {"schema": "chimera.network/1", "mode": "public"}
     with pytest.raises(GhimeraRefused, match="adapter_contract"):
         asyncio.run(
             ladder.fetch(
                 origin + "/plain",
                 scope,
-                RunBudget(GhimeraConfig.model_validate(raw), time.monotonic),
+                RunSpend(GhimeraConfig.model_validate(raw), time.monotonic),
                 ledger,
             )
         )
@@ -449,30 +440,28 @@ def test_ambient_proxy_is_not_used_and_dns_is_pinned(site, monkeypatch):
 
 
 def test_cancelled_fetch_releases_reservations_and_records_attempt(site):
-    ladder, scope, budget, ledger, origin = state(site)
+    ladder, scope, spend, ledger, origin = state(site)
 
     async def run():
-        task = asyncio.create_task(ladder.fetch(origin + "/slow", scope, budget, ledger))
+        task = asyncio.create_task(ladder.fetch(origin + "/slow", scope, spend, ledger))
         while site[1]["/slow"] == 0:
             await asyncio.sleep(0.002)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        page = await ladder.fetch(origin + "/plain", scope, budget, ledger)
+        page = await ladder.fetch(origin + "/plain", scope, spend, ledger)
         assert page.status == 200
 
     asyncio.run(run())
-    assert budget.fetches == sum(row.event == "fetch" for row in ledger.snapshot())
+    assert spend.fetches == sum(row.event == "fetch" for row in ledger.snapshot())
     assert any(row.reason == "request_cancelled" for row in ledger.snapshot())
 
 
 def test_partial_transfer_timeout_keeps_byte_spend_and_attempt_rows(site):
-    ladder, scope, budget, ledger, origin = state(
-        site, request_timeout_seconds=0.09, retry_budget=0
-    )
+    ladder, scope, spend, ledger, origin = state(site, request_timeout_seconds=0.09, retry_budget=0)
     with pytest.raises((GhimeraRefused, TimeoutError)):
-        asyncio.run(ladder.fetch(origin + "/partial", scope, budget, ledger))
+        asyncio.run(ladder.fetch(origin + "/partial", scope, spend, ledger))
     assert site[1]["/partial"] == 1
-    assert budget.fetches == sum(row.event == "fetch" for row in ledger.snapshot())
+    assert spend.fetches == sum(row.event == "fetch" for row in ledger.snapshot())
     assert ledger.snapshot()[-1].bytes_read == len(b"partial")
-    assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
+    assert spend.bytes_read == sum(row.bytes_read for row in ledger.snapshot())

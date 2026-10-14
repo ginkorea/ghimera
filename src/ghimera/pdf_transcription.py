@@ -1,17 +1,17 @@
-"""Reviewed PDF extraction integrated with the collector's own budgets and evidence."""
+"""Reviewed PDF extraction integrated with the collector's own spend and evidence."""
 
 import asyncio
 import hashlib
 from typing import Literal, Protocol
 
-from ghimera.budget import RunBudget
 from ghimera.ledger import Ledger
 from ghimera.models import Extracted, LedgerRow, Page, PdfTranscriptionEvidence
 from ghimera.page_transcriber import PageTranscriber
 from ghimera.page_transcription_config import PageRenderConfig, PdfTranscriptionConfig
 from ghimera.page_transcription_types import RenderedPdf
 from ghimera.ports import Extractor
-from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.refusals import BoundExceeded, GhimeraRefused, RefusalCode
+from ghimera.spend import RunSpend
 
 
 class PdfRenderer(Protocol):
@@ -34,7 +34,7 @@ class PdfTranscriptionStage:
         self.config, self._renderer, self._transcriber = config, renderer, transcriber
 
     async def extract(
-        self, page: Page, *, native: Extractor, budget: RunBudget, ledger: Ledger
+        self, page: Page, *, native: Extractor, spend: RunSpend, ledger: Ledger
     ) -> Extracted:
         if page.content_type.split(";", 1)[0].strip().lower() != "application/pdf":
             return await native.extract(page)
@@ -79,7 +79,7 @@ class PdfTranscriptionStage:
                     pixels,
                     language_hint=self.config.language_hint,
                     source_url=page.final_url,
-                    budget=budget,
+                    spend=spend,
                     ledger=ledger,
                 )
             )
@@ -94,10 +94,14 @@ class PdfTranscriptionStage:
             await asyncio.gather(*tasks, return_exceptions=True)
         if any(not item.accepted for item in pages):
             raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED)
-        if len("\n\n".join(item.proposal.text for item in pages)) > (
-            self.config.max_document_text_chars
-        ):
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        text_chars = len("\n\n".join(item.proposal.text for item in pages))
+        if text_chars > self.config.max_document_text_chars:
+            # Transcription evidence binds every reviewed page; it is refused, not cut.
+            raise BoundExceeded(
+                "pdf_transcription.max_document_text_chars",
+                text_chars,
+                self.config.max_document_text_chars,
+            )
         try:
             evidence = PdfTranscriptionEvidence(
                 schema="ghimera.pdf-transcription-evidence/1",

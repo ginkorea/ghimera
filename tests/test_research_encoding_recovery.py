@@ -20,11 +20,11 @@ def test_retained_query_ack_is_reconciled_without_new_contact_or_reset(tmp_path)
             reader = CorpusEvidenceReader(reader_policy(store), store)
             policy = reuse_policy(reader)
             first = RetainedResearchSession(policy, reader, "find ports")
-            await first.query("find ports", remaining_seconds=30)
+            await first.query("find ports")
             original = first.report
             calls = store.encoding_recovery_state().reserved_calls
             second = RetainedResearchSession(policy, reader, "find ports")
-            await second.query("find ports", remaining_seconds=30)
+            await second.query("find ports")
             reused = second.report
             assert reused.documents == original.documents == material.source_documents
             assert len(reused.observations) == 1  # Still charges run-local query allowance.
@@ -43,7 +43,7 @@ def test_retained_query_ack_is_reconciled_without_new_contact_or_reset(tmp_path)
             assert store.encoding_recovery_state().reserved_calls == calls
             assert ResearchRetrievalReport.model_validate_json(reused.model_dump_json()) == reused
             restored = RetainedResearchSession(policy, reader, "find ports", restored=reused)
-            await restored.query("find ports", remaining_seconds=30)
+            await restored.query("find ports")
             assert restored.report == reused
             loop, route, search = assemble(configured(reader), reader)
             result = await loop.run(ResearchRequest(intent="find ports"))

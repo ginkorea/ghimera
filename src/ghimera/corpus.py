@@ -378,7 +378,7 @@ class EvidenceCorpus:
         for passage in passages:
             chars = len(service.text_prefix) + len(passage.text)
             if chars > service.max_input_chars:
-                raise ValueError("native passage exceeds the encoder batch budget")
+                raise ValueError("native passage exceeds the encoder batch bound")
             if pending and (
                 len(pending) == service.max_batch_texts or size + chars > service.max_input_chars
             ):

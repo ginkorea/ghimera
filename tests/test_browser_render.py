@@ -185,7 +185,7 @@ def test_missing_or_unpinned_executable_refuses_before_launch(tmp_path):
 
 def test_render_timeout_cleans_its_own_process_tree_and_next_call_runs(tmp_path):
     started = time.monotonic()
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="bound_exceeded"):
         render(tmp_path, "<article>Never ready</article>", timeout_seconds=0.8)
     assert time.monotonic() - started < 10
     assert not list((tmp_path / "browser").iterdir())
@@ -210,10 +210,10 @@ def test_ladder_renders_only_js_required_and_budgets_real_subresources(tmp_path)
     from test_http_fetch import ResolverFixture, state
     from test_http_fetch import site as fixture_site
 
-    from ghimera.budget import RunBudget
     from ghimera.fetch import FetchLadder
     from ghimera.http import CurlRoute
     from ghimera.ledger import Ledger
+    from ghimera.spend import RunSpend
 
     # Reuse the real C1 server and exact loopback-network exception, not a second
     # HTTP implementation or a browser profile that can reach localhost directly.
@@ -235,13 +235,13 @@ def test_ladder_renders_only_js_required_and_budgets_real_subresources(tmp_path)
         config = GhimeraConfig.model_validate(cfg)
         route = CurlRoute(config, resolver=ResolverFixture())
         ladder = FetchLadder((route,), renderer=IsolatedBrowserRenderer(config))
-        budget, ledger = RunBudget(config, time.monotonic), Ledger()
-        page = asyncio.run(ladder.fetch(origin + "/plain", scope, budget, ledger))
+        spend, ledger = RunSpend(config, time.monotonic), Ledger()
+        page = asyncio.run(ladder.fetch(origin + "/plain", scope, spend, ledger))
         assert page.body == site[4]["/plain"]
         assert page.rendered is not None
         assert page.rendered.resources[0].url == origin + "/robots.txt"
-        assert budget.fetches == 3  # robots + initial HTML + one browser subsidiary request
-        assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
+        assert spend.fetches == 3  # robots + initial HTML + one browser subsidiary request
+        assert spend.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
         assert site[1]["/plain"] == 1
         assert site[1]["/robots.txt"] == 2
         assert ledger.snapshot()[-1].event == "render"
@@ -256,10 +256,10 @@ def test_browser_open_web_and_onion_subresources_follow_tor_without_local_dns(tm
     from test_http_fetch import state
     from test_tor_transport import NoLocalDNS, onion, policy, socks_server
 
-    from ghimera.budget import RunBudget
     from ghimera.fetch import FetchLadder
     from ghimera.http import CurlRoute
     from ghimera.ledger import Ledger
+    from ghimera.spend import RunSpend
 
     fixture = fixture_site.__wrapped__()
     site = next(fixture)
@@ -293,14 +293,14 @@ def test_browser_open_web_and_onion_subresources_follow_tor_without_local_dns(tm
                 (CurlRoute(config, resolver=NoLocalDNS()),),
                 renderer=IsolatedBrowserRenderer(config),
             )
-            budget, ledger = RunBudget(config, time.monotonic), Ledger()
-            page = await ladder.fetch(f"http://{host}:{site[0]}/plain", scope, budget, ledger)
+            spend, ledger = RunSpend(config, time.monotonic), Ledger()
+            page = await ladder.fetch(f"http://{host}:{site[0]}/plain", scope, spend, ledger)
             assert page.transport.mode == "tor"
             assert page.rendered.resources[0].transport.mode == "tor"
             assert page.rendered.resources[0].transport.network_class == (
                 "onion" if dark else "open_web"
             )
-            assert budget.fetches == 3
+            assert spend.fetches == 3
             assert all(
                 row.transport.mode == "tor" for row in ledger.snapshot() if row.event == "fetch"
             )
@@ -331,7 +331,6 @@ def test_rendered_html_extraction_and_harvest_bind_raw_dom_and_resources(tmp_pat
     data = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
     data["browser"] = browser_policy(tmp_path).model_dump(by_alias=True)
     data["extraction"] = extraction_policy(tmp_path / "parse").model_dump(by_alias=True)
-    data.update(page_budget=1)
     config = GhimeraConfig.model_validate(data)
 
     class JsRequired(FakeRoute):
@@ -399,11 +398,11 @@ def test_source_csp_is_preserved(tmp_path):
 
 
 def test_js_created_login_wall_is_terminal_after_render(tmp_path):
-    from ghimera.budget import RunBudget
     from ghimera.doubles import FakeRoute
     from ghimera.fetch import FetchLadder
     from ghimera.http import page_barrier
     from ghimera.ledger import Ledger
+    from ghimera.spend import RunSpend
 
     html = """<article data-ready='yes'></article><noscript>enable javascript</noscript><script>
     const input=document.createElement('input');input.type='pass'+'word';
@@ -430,7 +429,7 @@ def test_js_created_login_wall_is_terminal_after_render(tmp_path):
             ladder.fetch(
                 "https://example.org/story",
                 Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",)),
-                RunBudget(config, time.monotonic),
+                RunSpend(config, time.monotonic),
                 ledger,
             )
         )
@@ -447,7 +446,7 @@ def test_resource_limit_terminates_instead_of_reporting_partial_render_complete(
         body=b"{}",
     )
     resources = Resources((data,))
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="bound_exceeded"):
         render(
             tmp_path,
             """<article data-ready='yes'>Report</article><script>

@@ -1,12 +1,11 @@
 # NON-ACTIVE [semantics] block, appended to a complete caller-owned recipe.
 # Requires distinct pinned extractor/reviewer services and a compatible graph.
-# This does not start services, allocate GPUs, or increase global judge budgets.
+# This does not start services, allocate GPUs, or add any run ceiling.
 schema = "ghimera.semantics/4"
 prompt_profile = "defined_ontology"
 model_role = "analyst"
 window_chars = 1500
 max_windows_per_document = 64
-max_calls_per_run = 256
 max_mentions_per_window = 32
 max_relations_per_window = 32
 entity_roles = ["person", "organization", "position"]
@@ -36,7 +35,6 @@ definition = "The source explicitly identifies membership of this source person 
 [verification]
 schema = "ghimera.semantic-verification/4"
 model_role = "reviewer"
-max_calls_per_run = 256
 max_mentions_per_call = 4
 max_relations_per_call = 2
 max_coverage_findings = 4
@@ -44,5 +42,5 @@ max_coverage_findings = 4
 # With these bounds a full 32-mention/32-relation proposal needs 25 review calls:
 # 8 mention calls, 16 relation calls, and one independent coverage call.
 # Every call includes the original full source context and unchanged proposal.
-# Set caller-owned generation/context/judge budgets coherently before activation.
-# Insufficient remaining review/judge budget refuses BEFORE any partition call.
+# Set caller-owned generation/context bounds coherently before activation.
+# A partition set over semantics.verification.max_calls_per_run refuses BEFORE any call.

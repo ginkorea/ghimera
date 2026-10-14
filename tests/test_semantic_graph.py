@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.graph import MemoryGraphSink, ResearchGraph
 from ghimera.ledger import Ledger
@@ -20,6 +19,7 @@ from ghimera.models import Document, Extracted, Verdict
 from ghimera.refusals import GhimeraRefused
 from ghimera.semantic_graph import SemanticStage, validate_rows
 from ghimera.semantic_types import SemanticConfig
+from ghimera.spend import RunSpend
 from tests.test_c0 import config
 from tests.test_served_models import service
 
@@ -42,7 +42,6 @@ def configured(tmp_path, **updates):
         model_role="analyst",
         window_chars=1000,
         max_windows_per_document=3,
-        max_calls_per_run=8,
         max_mentions_per_window=8,
         max_relations_per_window=8,
         entity_roles=["entity"],
@@ -50,7 +49,7 @@ def configured(tmp_path, **updates):
         mention_rule="mentions",
     )
     semantics.update(updates)
-    raw = config(judge_budget=30).model_dump()
+    raw = config().model_dump()
     raw.update(
         graph=graph,
         semantics=semantics,
@@ -138,7 +137,7 @@ class SemanticWire:
 
 
 def exercise(cfg, wire, docs):
-    ledger, budget = Ledger(), RunBudget(cfg, time.monotonic)
+    ledger, spend = Ledger(), RunSpend(cfg, time.monotonic)
     client = SelfHostedModel(cfg, cfg.models.analyst, http=wire)
     stage = SemanticStage(cfg, client)
 
@@ -147,8 +146,8 @@ def exercise(cfg, wire, docs):
         await graph.start("map the organization")
         for doc in docs:
             identity = await graph.document(doc.url, doc.raw, doc.extracted.text, "extractor@1")
-            await stage.extract("map the organization", doc, identity, graph, budget, ledger)
-        return graph.snapshot(), ledger.snapshot(), budget
+            await stage.extract("map the organization", doc, identity, graph, spend, ledger)
+        return graph.snapshot(), ledger.snapshot(), spend
 
     return asyncio.run(run())
 
@@ -158,14 +157,14 @@ def test_automatic_semantics_are_source_bound_assertions_not_name_based_identity
     wire = SemanticWire(cfg.models.analyst)
     first = document()
     second = document(url="https://example.org/independent")
-    snapshot, rows, budget = exercise(cfg, wire, (first, second))
+    snapshot, rows, spend = exercise(cfg, wire, (first, second))
     entities = [node for node in snapshot.nodes if node.role == "entity"]
     assert len(entities) == 4 and len({node.id for node in entities}) == 4
     claims = [edge for edge in snapshot.edges if edge.rule == "reports_to"]
     assert len(claims) == 2
     assert all(edge.claim_status == "model_asserted" for edge in claims)
     assert all(edge.model_request_sha256 for edge in claims)
-    assert len(rows) == budget.semantic_calls == budget.judge_calls == 2
+    assert len(rows) == spend.semantic_calls == spend.judge_calls == 2
     for row in rows:
         assert row.event == "semantic" and row.model_call.task == "semantic_extract"
         assert row.semantic_window.omitted_chars == 0
@@ -284,7 +283,7 @@ def test_hallucinated_entities_and_citations_refuse_before_semantic_graph_write(
         stage = SemanticStage(cfg, SelfHostedModel(cfg, cfg.models.analyst, http=wire))
         with pytest.raises(GhimeraRefused, match="semantic_extraction_failed"):
             await stage.extract(
-                "map the organization", doc, identity, graph, RunBudget(cfg, time.monotonic), ledger
+                "map the organization", doc, identity, graph, RunSpend(cfg, time.monotonic), ledger
             )
         assert graph.snapshot() == before
         assert len(ledger.snapshot()) == 1 and ledger.snapshot()[0].refusal
@@ -372,16 +371,16 @@ def test_cancelling_a_model_call_retains_spend_without_semantic_graph_writes(tmp
         identity = await graph.document(doc.url, doc.raw, doc.extracted.text, "extractor@1")
         before = graph.snapshot()
         stage = SemanticStage(cfg, SelfHostedModel(cfg, cfg.models.analyst, http=wire))
-        budget = RunBudget(cfg, time.monotonic)
+        spend = RunSpend(cfg, time.monotonic)
         task = asyncio.create_task(
-            stage.extract("map the organization", doc, identity, graph, budget, ledger)
+            stage.extract("map the organization", doc, identity, graph, spend, ledger)
         )
         await ready.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         assert graph.snapshot() == before
-        assert budget.semantic_calls == budget.judge_calls == 1
+        assert spend.semantic_calls == spend.judge_calls == 1
         row = ledger.snapshot()[0]
         assert row.refusal and row.model_call.outcome == "cancelled"
         assert row.model_call.request_sha256 != hashlib.sha256(b"").hexdigest()
@@ -408,17 +407,16 @@ def test_schema_and_unknown_ontology_are_rejected_before_model_calls(tmp_path):
         SemanticConfig.model_validate(dict(schema="ghimera.semantics/99"))
 
 
-def test_window_limits_record_omitted_text_and_share_the_run_model_budget(tmp_path):
+def test_window_limits_record_omitted_text_and_count_model_spend(tmp_path):
     cfg = configured(tmp_path, window_chars=16, max_windows_per_document=1)
     doc = document("甲委員會隸屬乙委員會。" + "後文" * 100)
-    _, rows, budget = exercise(cfg, SemanticWire(cfg.models.analyst), (doc,))
+    _, rows, spend = exercise(cfg, SemanticWire(cfg.models.analyst), (doc,))
     assert rows[0].semantic_window.omitted_chars == len(doc.extracted.text) - 16
-    assert budget.judge_calls == 1 and budget.semantic_calls == 1
-    limited = configured(tmp_path, max_calls_per_run=1)
-    wire = SemanticWire(limited.models.analyst)
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
-        exercise(limited, wire, (document(), document(url="https://example.org/b")))
-    assert len(wire.requests) == 1
+    assert spend.judge_calls == 1 and spend.semantic_calls == 1
+    # No per-run call cap: a second document is another counted call, never a refusal.
+    wire = SemanticWire(cfg.models.analyst)
+    _, _, spend = exercise(cfg, wire, (document(), document(url="https://example.org/b")))
+    assert len(wire.requests) == 2 and spend.semantic_calls == 2
 
 
 def test_cancellation_during_graph_ack_retains_the_acknowledged_projection(tmp_path):
@@ -445,7 +443,7 @@ def test_cancellation_during_graph_ack_retains_the_acknowledged_projection(tmp_p
                 doc,
                 identity,
                 graph,
-                RunBudget(cfg, time.monotonic),
+                RunSpend(cfg, time.monotonic),
                 ledger,
             )
         )

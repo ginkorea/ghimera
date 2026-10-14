@@ -9,7 +9,8 @@ answer. See the non-active [recipe block](../examples/semantics-batched.toml).
 ## Configuration and owning boundaries
 
 `SemanticVerificationConfig` requires explicit `max_mentions_per_call`,
-`max_relations_per_call`, `max_coverage_findings`, and `max_calls_per_run`.
+`max_relations_per_call` and `max_coverage_findings` (0.4.12 removed the
+per-run `max_calls_per_run`; a recipe naming it is refused).
 Older profiles refuse the new fields and retain their serialization and prompt
 behavior. The configured `SelfHostedModel` exposes a narrow partitioned-review
 port; `SemanticStage` owns scheduling, spend reservation, ledger observations,

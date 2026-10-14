@@ -1,8 +1,4 @@
 schema = "chimera.config/1"
-page_budget = 400
-byte_budget = 2147483648
-wall_seconds = 3600.0
-judge_budget = 500
 grade_interval = 20
 grade_threshold = 0.9
 saturation_window = 20

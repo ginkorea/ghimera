@@ -5,13 +5,13 @@ import os
 
 import pytest
 
-from ghimera.budget import RunBudget
 from ghimera.identifiers import valid_run_id
 from ghimera.journal import DirectoryLedgerSink, read_journal
 from ghimera.ledger import Ledger
 from ghimera.models import Extracted, Goal, LedgerRow, LinkCandidate, ModelIdentity
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.semantic_scoring import EmbeddingScorer, link_input, selected_windows
+from ghimera.spend import RunSpend
 from tests.test_embedding_scoring import endpoint as endpoint  # noqa: F401 - fixture
 from tests.test_embedding_scoring import policy, references, run_config, service
 from tests.test_run_journal import configured
@@ -91,7 +91,7 @@ def test_overlong_link_scores_the_page_with_cut_recorded(endpoint):  # noqa: F81
     service_cfg = service(endpoint[0], max_text_chars=120)
     refs = references(service_cfg)
     scoring = policy(service_cfg, refs, max_windows=1)
-    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(run_config(scoring), lambda: 0.0), Ledger()
     long = "https://example.org/ports/" + "p" * 300
     document = Extracted(
         title="native",
@@ -101,7 +101,7 @@ def test_overlong_link_scores_the_page_with_cut_recorded(endpoint):  # noqa: F81
     )
     ranked = asyncio.run(
         EmbeddingScorer(scoring, _encoder(service_cfg), refs).score(
-            Goal(text="ports"), document, budget, ledger
+            Goal(text="ports"), document, spend, ledger
         )
     )
     assert [link.url for link in ranked] == [long]

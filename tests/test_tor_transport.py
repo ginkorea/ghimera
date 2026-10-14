@@ -10,13 +10,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.fetch import FetchLadder
 from ghimera.http import CurlRoute
 from ghimera.ledger import Ledger
 from ghimera.models import Scope
 from ghimera.refusals import GhimeraRefused
+from ghimera.spend import RunSpend
 from ghimera.transport import is_onion_v3
 from ghimera.transport_types import TransportConfig
 from tests.test_http_fetch import site as site
@@ -166,7 +166,7 @@ def test_curl_uses_proxy_for_robots_and_body_without_local_dns(site, monkeypatch
             page = await ladder.fetch(
                 f"http://{host}:{site[0]}/plain",
                 scope,
-                RunBudget(cfg, asyncio.get_running_loop().time),
+                RunSpend(cfg, asyncio.get_running_loop().time),
                 ledger,
             )
             assert page.body.startswith(b"<article>")
@@ -300,7 +300,7 @@ def test_tor_request_closes_private_tunnel_and_accounts_partial_bytes(site):
                 raw["transport"]["tor"]["bridge_directory"] = root
                 cfg = GhimeraConfig.model_validate(raw)
                 route = CurlRoute(cfg, resolver=NoLocalDNS())
-                with pytest.raises(FetchFailure, match="budget_exhausted") as failure:
+                with pytest.raises(FetchFailure, match="bound_exceeded") as failure:
                     await route.execute(
                         FetchRequest(
                             url=f"http://fixture.example:{site[0]}/oversized",
@@ -369,7 +369,7 @@ def test_failed_tor_attempt_keeps_selected_route_in_ledger(site):
                 await ladder.fetch(
                     f"http://fixture.example:{site[0]}/plain",
                     state(site)[1],
-                    RunBudget(cfg, asyncio.get_running_loop().time),
+                    RunSpend(cfg, asyncio.get_running_loop().time),
                     ledger,
                 )
             failed = [row for row in ledger.snapshot() if row.event == "fetch" and row.refusal]

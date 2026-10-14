@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.collector import Collector
 from ghimera.config import GhimeraConfig
 from ghimera.corpus_evidence import CorpusEvidenceReader
@@ -31,6 +30,7 @@ from ghimera.research_reranking_types import RerankDecision, ResearchRerankingCo
 from ghimera.research_reuse import ResearchRetrievalReport, RetainedResearchSession
 from ghimera.research_types import ResearchRequest, ResearchResult
 from ghimera.search_history import SearchHistory
+from ghimera.spend import RunSpend
 from tests.test_c0 import config
 from tests.test_corpus_evidence import policy as reader_policy
 from tests.test_corpus_search import binding, request
@@ -46,7 +46,6 @@ def run_policy(**updates):
     return ResearchRerankingConfig.model_validate(
         dict(
             schema="ghimera.research-reranking/1",
-            max_calls=6,
             max_pairs=30,
             max_input_chars=30000,
             uncertain_policy="hold",
@@ -68,7 +67,6 @@ def decision(key="query-1", *, original=None):
 def run_config(tmp_path, store, *, retained=False, reranking=None, **updates):
     reader = CorpusEvidenceReader(reader_policy(store, retrieval=hybrid_policy()), store)
     return config(
-        judge_budget=40,
         search=None
         if retained
         else binding(store, retrieval=hybrid_policy(), max_response_bytes=1000000),
@@ -87,13 +85,10 @@ def run_config(tmp_path, store, *, retained=False, reranking=None, **updates):
         ),
         model_work=dict(
             schema="ghimera.model-work/1",
-            max_input_bytes=2000000,
-            max_unanswered_calls=4,
             uncertain_policy="hold",
             results=dict(
                 schema="ghimera.model-results/1",
                 max_result_bytes=1000000,
-                max_total_result_bytes=10000000,
             ),
         ),
         **updates,
@@ -104,7 +99,7 @@ def opened(cfg, *, run_id="reranking", rows=None):
     sink = DirectoryLedgerSink(
         cfg, run_id, Goal(text="find ports"), FakeJudge().model, resume_rows=rows
     )
-    return RunBudget(cfg, time.monotonic), Ledger(sink=sink, restored_rows=rows or ())
+    return RunSpend(cfg, time.monotonic), Ledger(sink=sink, restored_rows=rows or ())
 
 
 async def prepared(tmp_path, *, port_type=ScoresPort):
@@ -134,7 +129,7 @@ def test_versioned_operator_policy_is_inert_and_legacy_bytes_stay_omitted():
         tomllib.loads(Path("examples/research-reranking.toml").read_text())
     )
     assert parsed.uncertain_policy == "hold"
-    for updates in (dict(max_calls=0), dict(uncertain_policy="retry"), dict(max_pairs=True)):
+    for updates in (dict(max_calls=6), dict(uncertain_policy="retry"), dict(max_pairs=True)):
         with pytest.raises(ValidationError):
             run_policy(**updates)
     with pytest.raises(ValidationError):
@@ -154,7 +149,7 @@ def test_native_run_consumers_ack_before_admitting_scores_and_replay_without_con
     async def operation():
         store, port, encoding = await prepared(tmp_path)
         cfg = run_config(tmp_path, store, retained=channel == "retained")
-        budget, ledger = opened(cfg)
+        spend, ledger = opened(cfg)
         original_score = port.score
 
         async def inspected(native):
@@ -162,9 +157,9 @@ def test_native_run_consumers_ack_before_admitting_scores_and_replay_without_con
             last = observed.rows[-1]
             assert last.model_intent.phase == "reranking"
             assert last.rerank_reservation.request == native
-            assert last.model_intent.judge_reservation == budget.judge_calls == 1
+            assert last.model_intent.judge_reservation == spend.judge_calls == 1
             assert observed.uncertain_model_calls == (last.sequence,)
-            assert validate_rerank_rows(cfg, observed.rows)[0] == budget.rerank_calls == 1
+            assert validate_rerank_rows(cfg, observed.rows)[0] == spend.rerank_calls == 1
             return await original_score(native)
 
         port.score = inspected
@@ -172,7 +167,7 @@ def test_native_run_consumers_ack_before_admitting_scores_and_replay_without_con
             if channel == "discovery":
                 provider = CorpusLeadSearch(cfg.search, store, run_policy=cfg.research.reranking)
                 response = await provider.discover(
-                    request().query, budget, ledger, rerank_decision=decision()
+                    request().query, spend, ledger, rerank_decision=decision()
                 )
                 native = CorpusSearchWire.model_validate_json(response.raw).query
             else:
@@ -181,10 +176,10 @@ def test_native_run_consumers_ack_before_admitting_scores_and_replay_without_con
                     cfg.research.retained_evidence,
                     reader,
                     "find ports",
-                    budget=budget,
+                    spend=spend,
                     ledger=ledger,
                 )
-                await session.query("ports", remaining_seconds=10.0, rerank_decision=decision())
+                await session.query("ports", rerank_decision=decision())
                 native = session.report.snapshots[0].query
                 session.report.validate_run(cfg, ledger.snapshot())
             proof = native.reranking_run
@@ -193,23 +188,22 @@ def test_native_run_consumers_ack_before_admitting_scores_and_replay_without_con
             if channel == "discovery":
                 returned = await provider.discover(
                     request().query,
-                    budget,
+                    spend,
                     ledger,
                     rerank_decision=decision(original=proof.intent_sequence),
                 )
                 replay = CorpusSearchWire.model_validate_json(returned.raw).query
-                assert budget.search_calls == budget.fetches == 2
+                assert spend.search_calls == spend.fetches == 2
             else:
                 await session.query(
                     "ports",
-                    remaining_seconds=10.0,
                     rerank_decision=decision(original=proof.intent_sequence),
                 )
                 replay = session.report.snapshots[-1].query
                 assert session.report.schema_version == "ghimera.research-retrieval/2"
                 session.report.validate_run(cfg, ledger.snapshot())
             assert (encoding.calls, len(port.requests), port.prepared) == before
-            assert budget.judge_calls == budget.rerank_calls == 1
+            assert spend.judge_calls == spend.rerank_calls == 1
             assert replay.reranking == native.reranking
             assert replay.reranking_run.replay_sequence is not None
             validate_run_evidence(
@@ -226,7 +220,7 @@ def test_native_run_consumers_ack_before_admitting_scores_and_replay_without_con
                     top_k=2,
                     retrieval=hybrid_policy(),
                     rerank_invoker=RunBoundReranker(
-                        budget, ledger, channel=channel, decision=decision()
+                        spend, ledger, channel=channel, decision=decision()
                     ),
                 )
             assert len(port.requests) == 1
@@ -302,7 +296,7 @@ def test_unknown_is_charged_and_neither_fresh_key_nor_replay_can_retry(tmp_path,
     async def operation():
         store, port, encoder = await prepared(tmp_path, port_type=FailedPort)
         cfg = run_config(tmp_path, store)
-        budget, ledger = opened(cfg)
+        spend, ledger = opened(cfg)
         try:
             with pytest.raises((asyncio.CancelledError, ValueError)):
                 await store.search(
@@ -310,15 +304,15 @@ def test_unknown_is_charged_and_neither_fresh_key_nor_replay_can_retry(tmp_path,
                     top_k=2,
                     retrieval=hybrid_policy(),
                     rerank_invoker=RunBoundReranker(
-                        budget, ledger, channel="discovery", decision=decision()
+                        spend, ledger, channel="discovery", decision=decision()
                     ),
                 )
             rows = ledger.snapshot()
             sequence = rows[0].sequence
             assert uncertain_model_sequences(rows) == (sequence,)
-            assert budget.judge_calls == budget.rerank_calls == 1
-            assert budget.rerank_pairs == 1 and budget.rerank_chars > 0
-            assert validate_rerank_rows(cfg, rows) == (1, budget.rerank_pairs, budget.rerank_chars)
+            assert spend.judge_calls == spend.rerank_calls == 1
+            assert spend.rerank_pairs == 1 and spend.rerank_chars > 0
+            assert validate_rerank_rows(cfg, rows) == (1, spend.rerank_pairs, spend.rerank_chars)
             before = len(port.requests), encoder.calls
             for selected in (
                 decision(),
@@ -331,7 +325,7 @@ def test_unknown_is_charged_and_neither_fresh_key_nor_replay_can_retry(tmp_path,
                         top_k=2,
                         retrieval=hybrid_policy(),
                         rerank_invoker=RunBoundReranker(
-                            budget, ledger, channel="discovery", decision=selected
+                            spend, ledger, channel="discovery", decision=selected
                         ),
                     )
             assert (len(port.requests), encoder.calls) == before
@@ -349,14 +343,14 @@ def test_replay_refuses_drift_before_encoding_or_score_contact(tmp_path, drift):
     async def operation():
         store, port, encoder = await prepared(tmp_path)
         cfg = run_config(tmp_path, store)
-        budget, ledger = opened(cfg)
+        spend, ledger = opened(cfg)
         try:
             native = await store.search(
                 "ports",
                 top_k=2,
                 retrieval=hybrid_policy(),
                 rerank_invoker=RunBoundReranker(
-                    budget, ledger, channel="discovery", decision=decision()
+                    spend, ledger, channel="discovery", decision=decision()
                 ),
             )
             if drift == "generation":
@@ -374,7 +368,7 @@ def test_replay_refuses_drift_before_encoding_or_score_contact(tmp_path, drift):
                     top_k=2,
                     retrieval=hybrid_policy(),
                     rerank_invoker=RunBoundReranker(
-                        budget, ledger, channel="discovery", decision=selected
+                        spend, ledger, channel="discovery", decision=selected
                     ),
                 )
             assert (len(port.requests), encoder.calls) == before
@@ -385,40 +379,44 @@ def test_replay_refuses_drift_before_encoding_or_score_contact(tmp_path, drift):
     asyncio.run(operation())
 
 
-@pytest.mark.parametrize("quota", ["calls", "pairs", "chars", "shared_judge"])
-def test_exhausted_allowance_refuses_before_score_contact(tmp_path, quota):
+@pytest.mark.parametrize("quota", ["pairs", "chars"])
+def test_per_call_bound_refuses_only_that_call_and_run_totals_are_unlimited(tmp_path, quota):
     async def operation():
         store, port, _ = await prepared(tmp_path)
         selected = run_policy(
-            max_calls=1 if quota == "calls" else 6,
             max_pairs=1 if quota == "pairs" else 30,
             max_input_chars=20 if quota == "chars" else 30000,
         )
         cfg = run_config(tmp_path, store, reranking=selected)
-        budget, ledger = opened(cfg)
+        spend, ledger = opened(cfg)
         try:
             await store.search(
                 "ports",
                 top_k=2,
                 retrieval=hybrid_policy(),
                 rerank_invoker=RunBoundReranker(
-                    budget, ledger, channel="discovery", decision=decision()
+                    spend, ledger, channel="discovery", decision=decision()
                 ),
             )
-            # The shared allowance is additionally checked before any contact.
-            if quota == "shared_judge":
-                budget.judge_calls = cfg.judge_budget
+            # The run's rerank totals are counted, never compared with a limit.
+            await store.search(
+                "ports",
+                top_k=2,
+                retrieval=hybrid_policy(),
+                rerank_invoker=RunBoundReranker(
+                    spend, ledger, channel="discovery", decision=decision("next-explicit")
+                ),
+            )
+            assert len(port.requests) == spend.rerank_calls == 2
+            # One call over the per-call bound is refused before any contact.
             with pytest.raises(GhimeraRefused) as refusal:
-                await store.search(
-                    "ports",
-                    top_k=2,
-                    retrieval=hybrid_policy(),
-                    rerank_invoker=RunBoundReranker(
-                        budget, ledger, channel="discovery", decision=decision("next-explicit")
-                    ),
+                spend.reserve_rerank(
+                    selected.max_pairs + 1 if quota == "pairs" else 1,
+                    selected.max_input_chars + 1 if quota == "chars" else 1,
                 )
-            assert refusal.value.code == RefusalCode.BUDGET_EXHAUSTED
-            assert len(port.requests) == budget.rerank_calls == 1
+            assert refusal.value.code == RefusalCode.BOUND_EXCEEDED
+            assert "reranking.max_" in refusal.value.detail
+            assert len(port.requests) == spend.rerank_calls == 2
         finally:
             ledger.close()
             store.close()
@@ -435,7 +433,7 @@ def test_missing_required_owners_refuse_without_encoding_or_score(tmp_path, miss
             cfg = GhimeraConfig.model_validate(dict(cfg.model_dump(), research=policy()))
         if missing == "encoding_owner":
             store.config = store.config.model_copy(update={"encoding_recovery": None})
-        budget, ledger = opened(cfg)
+        spend, ledger = opened(cfg)
         bare = Ledger() if missing == "sink" else ledger
         before = encoder.calls
         try:
@@ -443,7 +441,7 @@ def test_missing_required_owners_refuse_without_encoding_or_score(tmp_path, miss
                 with pytest.raises(GhimeraRefused):
                     await CorpusLeadSearch(
                         cfg.search, store, run_policy=cfg.research.reranking
-                    ).discover(request().query, budget, bare)
+                    ).discover(request().query, spend, bare)
                 with pytest.raises(GhimeraRefused):
                     await CorpusLeadSearch(
                         cfg.search, store, run_policy=cfg.research.reranking
@@ -455,7 +453,7 @@ def test_missing_required_owners_refuse_without_encoding_or_score(tmp_path, miss
                         top_k=2,
                         retrieval=hybrid_policy(),
                         rerank_invoker=RunBoundReranker(
-                            budget, bare, channel="discovery", decision=decision()
+                            spend, bare, channel="discovery", decision=decision()
                         ),
                     )
             assert not port.requests and encoder.calls == before
@@ -470,14 +468,14 @@ def test_restoration_preserves_original_counters_and_archive_mutations_refuse(tm
     async def operation():
         store, port, encoder = await prepared(tmp_path)
         cfg = run_config(tmp_path, store)
-        budget, ledger = opened(cfg)
+        spend, ledger = opened(cfg)
         try:
             native = await store.search(
                 "ports",
                 top_k=2,
                 retrieval=hybrid_policy(),
                 rerank_invoker=RunBoundReranker(
-                    budget, ledger, channel="discovery", decision=decision()
+                    spend, ledger, channel="discovery", decision=decision()
                 ),
             )
             rows = ledger.snapshot()
@@ -496,8 +494,8 @@ def test_restoration_preserves_original_counters_and_archive_mutations_refuse(tm
             restored.restore(receipt, rows, 0, 0.2)
             assert restored.judge_calls == restored.rerank_calls == 1
             assert (
-                restored.rerank_pairs == budget.rerank_pairs
-                and restored.rerank_chars == budget.rerank_chars
+                restored.rerank_pairs == spend.rerank_pairs
+                and restored.rerank_chars == spend.rerank_chars
             )
             before = encoder.calls, len(port.requests)
             replayed = await store.search(
@@ -569,9 +567,6 @@ def test_actual_collector_federated_assembly_forwards_run_owner_and_filters_once
                     binding=original.search,
                     query_disclosure="planned_query",
                     use_contract="crawl_and_retain",
-                    max_calls=4,
-                    byte_budget=4000000,
-                    call_seconds_budget=30.0,
                     max_response_bytes=1000000,
                     max_results=3,
                     timeout_seconds=10.0,
@@ -593,7 +588,6 @@ def test_actual_collector_federated_assembly_forwards_run_owner_and_filters_once
             research=original.research,
             search=None,
             discovery=discovery,
-            judge_budget=original.judge_budget,
             journal=original.journal,
             model_work=original.model_work,
         )
@@ -602,13 +596,13 @@ def test_actual_collector_federated_assembly_forwards_run_owner_and_filters_once
             # Real public facade assembles native bound adapters. No source or served
             # model request is sent: only its resulting corpus discovery is exercised.
             collector = Collector(cfg, discovery_corpora={"retained": store})
-            budget, ledger = opened(cfg)
+            spend, ledger = opened(cfg)
             try:
-                history = SearchHistory(collector._research._search, budget, ledger)
+                history = SearchHistory(collector._research._search, spend, ledger)
                 observed = await history.discover_many(request().query)
                 assert len(observed) == 1 and observed[0].response.hits
                 assert observed[0].provider == "binding:retained"
-                assert budget.search_calls == budget.fetches == budget.judge_calls == 1
+                assert spend.search_calls == spend.fetches == spend.judge_calls == 1
                 assert len(port.requests) == 1
                 assert [row.event for row in ledger.snapshot()] == [
                     "model_intent",
@@ -651,7 +645,7 @@ def test_concurrent_owned_calls_are_not_orphan_unknown_and_share_reservations(tm
     async def operation():
         store, port, _ = await prepared(tmp_path, port_type=ConcurrentPort)
         cfg = run_config(tmp_path, store)
-        budget, ledger = opened(cfg)
+        spend, ledger = opened(cfg)
         try:
             returned = await asyncio.gather(
                 *(
@@ -660,26 +654,22 @@ def test_concurrent_owned_calls_are_not_orphan_unknown_and_share_reservations(tm
                         top_k=2,
                         retrieval=hybrid_policy(),
                         rerank_invoker=RunBoundReranker(
-                            budget, ledger, channel="discovery", decision=decision(key)
+                            spend, ledger, channel="discovery", decision=decision(key)
                         ),
                     )
                     for key, text in (("first", "ports"), ("second", "report"))
                 )
             )
             assert (
-                len(returned)
-                == len(port.requests)
-                == budget.judge_calls
-                == budget.rerank_calls
-                == 2
+                len(returned) == len(port.requests) == spend.judge_calls == spend.rerank_calls == 2
             )
-            assert not budget.active_rerank_sequences and not uncertain_model_sequences(
+            assert not spend.active_rerank_sequences and not uncertain_model_sequences(
                 ledger.snapshot()
             )
             assert validate_rerank_rows(cfg, ledger.snapshot()) == (
                 2,
-                budget.rerank_pairs,
-                budget.rerank_chars,
+                spend.rerank_pairs,
+                spend.rerank_chars,
             )
         finally:
             ledger.close()

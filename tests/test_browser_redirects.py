@@ -70,24 +70,24 @@ def redirect_site():
 
 
 def setup(site, tmp_path, *, ready=True, max_redirects=3):
-    _, scope, budget, ledger, origin = state(site)
-    data = budget.config.model_dump(by_alias=True)
+    _, scope, spend, ledger, origin = state(site)
+    data = spend.config.model_dump(by_alias=True)
     data["http"]["max_redirects"] = max_redirects
     data["browser"] = browser_policy(
         tmp_path, ready_selector="article[data-ready]" if ready else None, settle_seconds=0.2
     ).model_dump(by_alias=True)
     config = GhimeraConfig.model_validate(data)
-    budget = type(budget)(config, budget.clock)
+    spend = type(spend)(config, spend.clock)
     ladder = FetchLadder(
         (CurlRoute(config, resolver=ResolverFixture()),), renderer=IsolatedBrowserRenderer(config)
     )
-    return ladder, scope, budget, ledger, origin
+    return ladder, scope, spend, ledger, origin
 
 
 def test_redirected_script_and_json_keep_final_url_and_every_hop(tmp_path):
     with redirect_site() as site:
-        ladder, scope, budget, ledger, origin = setup(site, tmp_path)
-        page = asyncio.run(ladder.fetch(origin + "/plain", scope, budget, ledger))
+        ladder, scope, spend, ledger, origin = setup(site, tmp_path)
+        page = asyncio.run(ladder.fetch(origin + "/plain", scope, spend, ledger))
         resources = [item for item in page.rendered.resources if item.refusal is None]
         assert b"Native port evidence" in page.rendered.html
         assert (origin + "/final.json").encode() in page.rendered.html
@@ -103,11 +103,11 @@ def test_redirected_script_and_json_keep_final_url_and_every_hop(tmp_path):
         assert all(
             item.source_sha256 == hashlib.sha256(item.body).hexdigest() for item in resources
         )
-        assert budget.fetches == sum(site[1].values()) == 6
-        assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
+        assert spend.fetches == sum(site[1].values()) == 6
+        assert spend.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
         assert page.body == site[2]["/plain"][2]
         with pytest.raises(ValueError, match="HTTP policy"):
-            page.rendered.validate_policy(budget.config.browser, max_redirects=0)
+            page.rendered.validate_policy(spend.config.browser, max_redirects=0)
         changed = page.rendered.model_dump(mode="json", by_alias=True)
         changed["resources"][1]["redirected_from"] = 1
         with pytest.raises(ValueError, match="earlier resource"):
@@ -121,21 +121,21 @@ def test_redirected_script_and_json_keep_final_url_and_every_hop(tmp_path):
 def test_denied_redirect_destination_is_not_fetched(tmp_path, target, refusal):
     with redirect_site() as site:
         site[2]["/script"] = (302, "text/html", b"redirect", {"Location": target})
-        ladder, scope, budget, ledger, origin = setup(site, tmp_path, ready=False)
-        page = asyncio.run(ladder.fetch(origin + "/plain", scope, budget, ledger))
+        ladder, scope, spend, ledger, origin = setup(site, tmp_path, ready=False)
+        page = asyncio.run(ladder.fetch(origin + "/plain", scope, spend, ledger))
         assert any(
             item.refusal is not None and item.refusal.value == refusal
             for item in page.rendered.resources
         )
         assert site[1][target] == 0
-        assert budget.fetches == sum(site[1].values())
+        assert spend.fetches == sum(site[1].values())
 
 
 def test_redirect_cap_prevents_later_network_request(tmp_path):
     with redirect_site() as site:
         site[2]["/final.js"] = (302, "text/html", b"again", {"Location": "/third.js"})
-        ladder, scope, budget, ledger, origin = setup(site, tmp_path, ready=False, max_redirects=1)
-        page = asyncio.run(ladder.fetch(origin + "/plain", scope, budget, ledger))
+        ladder, scope, spend, ledger, origin = setup(site, tmp_path, ready=False, max_redirects=1)
+        page = asyncio.run(ladder.fetch(origin + "/plain", scope, spend, ledger))
         assert any(
             item.url == origin + "/third.js" and item.refusal.value == "fetch_failed"
             for item in page.rendered.resources
@@ -143,7 +143,7 @@ def test_redirect_cap_prevents_later_network_request(tmp_path):
         )
         assert site[1]["/third.js"] == 0
         assert site[1]["/script"] == site[1]["/final.js"] == 1
-        assert budget.fetches == sum(site[1].values())
+        assert spend.fetches == sum(site[1].values())
 
 
 def test_redirected_module_import_uses_the_final_directory(tmp_path):
@@ -170,8 +170,8 @@ def test_redirected_module_import_uses_the_final_directory(tmp_path):
             b"export const text='Relative maritime module';",
             {},
         )
-        ladder, scope, budget, ledger, origin = setup(site, tmp_path)
-        page = asyncio.run(ladder.fetch(origin + "/plain", scope, budget, ledger))
+        ladder, scope, spend, ledger, origin = setup(site, tmp_path)
+        page = asyncio.run(ladder.fetch(origin + "/plain", scope, spend, ledger))
         assert b">Relative maritime module</article>" in page.rendered.html
         assert site[1]["/assets/dep.js"] == 1
         assert site[1]["/dep.js"] == 0
@@ -189,23 +189,23 @@ def test_cross_origin_redirect_preserves_browser_cors(tmp_path, allow_cors):
             body,
             {"Access-Control-Allow-Origin": "*"} if allow_cors else {},
         )
-        ladder, scope, budget, ledger, origin = setup(site, tmp_path, ready=allow_cors)
+        ladder, scope, spend, ledger, origin = setup(site, tmp_path, ready=allow_cors)
         scope = scope.model_copy(update={"allowed_hosts": ("fixture.example", "other.example")})
-        page = asyncio.run(ladder.fetch(origin + "/plain", scope, budget, ledger))
+        page = asyncio.run(ladder.fetch(origin + "/plain", scope, spend, ledger))
         assert site[1]["/final.json"] == 1
         if allow_cors:
             assert ("Native port evidence " + target).encode() in page.rendered.html
         else:
             assert b"<article></article>" in page.rendered.html
         assert any(item.url == target and item.status == 200 for item in page.rendered.resources)
-        assert budget.fetches == sum(site[1].values())
+        assert spend.fetches == sum(site[1].values())
 
 
 def test_redirect_loop_stops_before_refetching_same_resource(tmp_path):
     with redirect_site() as site:
         site[2]["/script"] = (303, "text/html", b"loop", {"Location": "/script"})
-        ladder, scope, budget, ledger, origin = setup(site, tmp_path, ready=False)
-        page = asyncio.run(ladder.fetch(origin + "/plain", scope, budget, ledger))
+        ladder, scope, spend, ledger, origin = setup(site, tmp_path, ready=False)
+        page = asyncio.run(ladder.fetch(origin + "/plain", scope, spend, ledger))
         assert site[1]["/script"] == 1
         assert any(
             item.refusal is not None and item.refusal.value == "fetch_failed"
@@ -232,14 +232,14 @@ def test_all_browser_redirect_hops_use_tor_without_local_dns(tmp_path, dark):
                 host = onion() if dark else "fixture.example"
                 scope = scope.model_copy(update={"allowed_hosts": (host,)})
                 origin = f"http://{host}:{site[0]}"
-                budget = type(initial_budget)(config, initial_budget.clock)
+                spend = type(initial_budget)(config, initial_budget.clock)
                 ladder = FetchLadder(
                     (CurlRoute(config, resolver=NoLocalDNS()),),
                     renderer=IsolatedBrowserRenderer(config),
                 )
-                page = await ladder.fetch(origin + "/plain", scope, budget, ledger)
+                page = await ladder.fetch(origin + "/plain", scope, spend, ledger)
                 assert b"Native port evidence" in page.rendered.html
-                assert budget.fetches == sum(site[1].values()) == 6
+                assert spend.fetches == sum(site[1].values()) == 6
                 assert all(
                     item.transport.mode == "tor"
                     for item in page.rendered.resources
@@ -265,8 +265,8 @@ def test_real_http_preserves_csp_before_browser_script_execution(tmp_path):
             b"document.querySelector('article').textContent='Should not execute';</script>",
             {"Content-Security-Policy": "script-src 'none'"},
         )
-        ladder, scope, budget, ledger, origin = setup(site, tmp_path)
-        page = asyncio.run(ladder.fetch(origin + "/plain", scope, budget, ledger))
+        ladder, scope, spend, ledger, origin = setup(site, tmp_path)
+        page = asyncio.run(ladder.fetch(origin + "/plain", scope, spend, ledger))
         assert b">Original</article>" in page.rendered.html
         assert page.header("content-security-policy") == "script-src 'none'"
 

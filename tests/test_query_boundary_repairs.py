@@ -6,7 +6,6 @@ import time
 
 import pytest
 
-from ghimera.budget import RunBudget
 from ghimera.corpus_search import CorpusLeadSearch
 from ghimera.corpus_search_wire import CorpusSearchWire
 from ghimera.doubles import FakeJudge
@@ -16,6 +15,7 @@ from ghimera.models import Goal, LedgerRow
 from ghimera.query_work import QueryWork, validate_query_rows
 from ghimera.query_work_types import QueryAcknowledgement, QueryCursor
 from ghimera.research_types import SearchResponse
+from ghimera.spend import RunSpend
 from tests.test_c0 import config
 from tests.test_corpus_search import binding
 from tests.test_discovery_router import Adapter, discovery, provider, query, state
@@ -53,13 +53,10 @@ def test_native_non_reranked_ack_rehashed_tamper_preserves_original_encoding_but
         ),
         model_work=dict(
             schema="ghimera.model-work/1",
-            max_input_bytes=2000000,
-            max_unanswered_calls=4,
             uncertain_policy="hold",
             results=dict(
                 schema="ghimera.model-results/1",
                 max_result_bytes=65536,
-                max_total_result_bytes=524288,
             ),
         ),
         research_recovery=dict(
@@ -70,12 +67,12 @@ def test_native_non_reranked_ack_rehashed_tamper_preserves_original_encoding_but
             query_control="serial_acknowledged",
         ),
     )
-    budget = RunBudget(cfg, time.monotonic)
+    spend = RunSpend(cfg, time.monotonic)
     ledger = Ledger(
         sink=DirectoryLedgerSink(cfg, "original-query", Goal(text="ports"), FakeJudge().model)
     )
     work = QueryWork(
-        budget,
+        spend,
         ledger,
         QueryCursor(stage="discovery", round_number=1, query_index=0),
         lambda reservation: None,
@@ -84,7 +81,7 @@ def test_native_non_reranked_ack_rehashed_tamper_preserves_original_encoding_but
 
     async def operation():
         await store.append(await harvest(("en", "ports report")))
-        return await adapter.discover(query("ports"), budget, ledger, query_work=work)
+        return await adapter.discover(query("ports"), spend, ledger, query_work=work)
 
     try:
         response = asyncio.run(operation())
@@ -95,7 +92,7 @@ def test_native_non_reranked_ack_rehashed_tamper_preserves_original_encoding_but
         wire = CorpusSearchWire.model_validate_json(response.raw)
         assert wire.query.reranking is None and wire.query.reranking_run is None
         adapter.admit_query(reservation, response)
-        before = len(endpoint[1]), budget.search_calls, budget.fetches, budget.bytes_read
+        before = len(endpoint[1]), spend.search_calls, spend.fetches, spend.bytes_read
         for field, value in (
             ("generation", 2),
             ("corpus_id", "0" * 32),
@@ -163,7 +160,7 @@ def test_native_non_reranked_ack_rehashed_tamper_preserves_original_encoding_but
             store.admit_query(
                 reservation, "ports", pending=False, sources=wire.sources, query=false_encoding
             )
-        assert before == (len(endpoint[1]), budget.search_calls, budget.fetches, budget.bytes_read)
+        assert before == (len(endpoint[1]), spend.search_calls, spend.fetches, spend.bytes_read)
         assert ledger.snapshot() == rows
     finally:
         ledger.close()
@@ -177,25 +174,25 @@ def test_original_four_argument_override_dispatch_and_accounting(configured_bind
             super().__init__(urls=("https://example.org/report", "http://example.onion/report"))
             self.overrides = 0
 
-        async def request_for_run(self, request, budget, ledger, rerank_decision):
+        async def request_for_run(self, request, spend, ledger, rerank_decision):
             self.overrides += 1
-            assert budget.search_calls == budget.fetches == 1
+            assert spend.search_calls == spend.fetches == 1
             assert ledger.snapshot() == () and rerank_decision is None
             return await self.request(request)
 
     adapter = OriginalSignature()
     if configured_binding:
-        history, budget, ledger = state(discovery(provider("original")), {"original": adapter})
+        history, spend, ledger = state(discovery(provider("original")), {"original": adapter})
         observations = asyncio.run(history.discover_many(query()))
         response = observations[0].response
         assert [hit.url for hit in response.hits] == ["https://example.org/report"]
         assert ledger.snapshot()[0].route == "search:" + "@".join(provider("original").identity)
     else:
         cfg = config(research=policy())
-        budget, ledger = RunBudget(cfg, time.monotonic), Ledger()
-        response = asyncio.run(adapter.discover(query(), budget, ledger))
+        spend, ledger = RunSpend(cfg, time.monotonic), Ledger()
+        response = asyncio.run(adapter.discover(query(), spend, ledger))
         assert len(response.hits) == 2
     assert adapter.overrides == len(adapter.calls) == 1
-    assert budget.search_calls == budget.fetches == len(ledger.snapshot()) == 1
-    assert budget.bytes_read == ledger.snapshot()[0].bytes_read == len(response.raw)
+    assert spend.search_calls == spend.fetches == len(ledger.snapshot()) == 1
+    assert spend.bytes_read == ledger.snapshot()[0].bytes_read == len(response.raw)
     assert ledger.snapshot()[0].search_response_sha256 == response.content_digest()

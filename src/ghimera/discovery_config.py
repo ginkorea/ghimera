@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ghimera.ahmia_config import AhmiaConfig
 from ghimera.corpus_search_config import CorpusSearchConfig
 from ghimera.mcp_lead_config import McpLeadConfig
+from ghimera.removed_ceilings import REMOVED_PROVIDER_CEILINGS, refuse_removed
 from ghimera.search_config import SearxConfig
 
 Positive = Annotated[int, Field(strict=True, gt=0)]
@@ -35,13 +36,15 @@ class DiscoveryProvider(BaseModel):
     # An operator must approve disclosure and retention separately from fetch scope.
     query_disclosure: Literal["planned_query"]
     use_contract: Literal["crawl_and_retain"]
-    max_calls: Positive
-    byte_budget: Positive
-    call_seconds_budget: Seconds
     max_response_bytes: Positive
     max_results: Positive
     timeout_seconds: Seconds
     consecutive_failure_limit: Positive
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_PROVIDER_CEILINGS, "discovery provider ")
 
     @model_validator(mode="after")
     def coherent(self) -> "DiscoveryProvider":
@@ -49,10 +52,6 @@ class DiscoveryProvider(BaseModel):
             raise ValueError("Ahmia bindings support onion discovery only")
         if len(set(self.domains)) != len(self.domains):
             raise ValueError("provider domains must be unique")
-        if self.max_response_bytes > self.byte_budget:
-            raise ValueError("provider response cap exceeds its byte budget")
-        if self.timeout_seconds > self.call_seconds_budget:
-            raise ValueError("provider timeout exceeds its service-call seconds budget")
         return self
 
     @property

@@ -66,7 +66,7 @@ async def original(tmp_path, endpoint, *, pdf=False, **updates):
         cfg = configured(tmp_path, reader, **updates)
         intent = "unrelated" if pdf else "find ports"
         reuse = RetainedResearchSession(cfg.research.retained_evidence, reader, intent)
-        await reuse.query(intent, remaining_seconds=30)
+        await reuse.query(intent)
         (item,) = reuse.report.graph_originals
         return cfg, item
     finally:

@@ -149,8 +149,8 @@ archive readback. This is source conformance evidence, not real-model accuracy;
 the complete candidate gate and real independent quality acceptance remain open.
 
 Accepted documents pass through sequential bounded native-text windows. Calls
-consume both `max_calls_per_run` and the existing shared judge/model-call
-allowance and deadline. A document window limit records the unread native tail
+are counted as semantic and judge spend; since 0.4.12 there is no per-run call
+ceiling (`max_calls_per_run` is refused by name). A document window limit records the unread native tail
 in `omitted_chars`; this is not complete extraction of that tail. Current
 windows are nonoverlapping, so boundary-crossing relations need subsequent
 context/coverage work. An empty text has no extractable window.

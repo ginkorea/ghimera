@@ -64,10 +64,7 @@ class ReferenceBook:
             policy is None
             or not policy.discover_cited_by
             or key in self._queries
-            or (
-                len(self._queries) >= policy.cited_by_query_budget
-                or (key not in self._parents and len(self._parents) >= policy.max_parents)
-            )
+            or (key not in self._parents and len(self._parents) >= policy.max_parents)
         ):
             return False
         self._queries.add(key)
@@ -326,7 +323,6 @@ def validate_reference_ledger(harvest: Harvest) -> None:
     if policy is not None and (
         len(queued) > policy.max_queued_per_run
         or len(parents) > policy.max_parents
-        or len(queries) > policy.cited_by_query_budget
         or any(count > policy.max_candidates_per_parent for count in queued_by_parent.values())
     ):
-        raise ValueError("reference ledger exceeds its shared run budget")
+        raise ValueError("reference ledger exceeds its declared reference policy")

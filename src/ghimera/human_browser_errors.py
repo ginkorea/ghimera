@@ -6,10 +6,14 @@ from ghimera.refusals import FetchCancelled, FetchFailure, RefusalCode
 
 class HumanCaptureFailure(FetchFailure):
     def __init__(
-        self, code: RefusalCode, bytes_read: int, observations: tuple[AssistanceObservation, ...]
+        self,
+        code: RefusalCode,
+        bytes_read: int,
+        observations: tuple[AssistanceObservation, ...],
+        detail: str | None = None,
     ) -> None:
         self.assistance = observations
-        super().__init__(code, bytes_read)
+        super().__init__(code, bytes_read, detail)
 
 
 class HumanCaptureCancelled(FetchCancelled):

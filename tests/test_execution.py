@@ -1,13 +1,13 @@
 """Configured concurrency preserves run ownership and bounded spend."""
 
 import asyncio
+import time
 import tomllib
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
 from ghimera.execution import StageSlots
 from ghimera.execution_config import ExecutionConfig
@@ -15,6 +15,7 @@ from ghimera.fetch import FetchLadder
 from ghimera.loop import GoalLoop
 from ghimera.models import Extracted, Goal
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.spend import RunSpend
 from tests.test_c0 import config, scope
 from tests.test_http_fetch import site as site
 from tests.test_http_fetch import state
@@ -105,7 +106,7 @@ def test_slow_extraction_does_not_block_another_source_and_checkpoints_refuse_in
             await loop.collect(session, scope(), ())
         stop = await asyncio.wait_for(task, timeout=2)
         assert observed[0].endswith("/b")
-        assert session.budget.quiescent
+        assert session.spend.quiescent
         session.checkpoint_state()
         harvest = loop.finish(session, stop)
         assert len(harvest.documents) == harvest.receipt.fetches == 2
@@ -147,12 +148,12 @@ def test_stage_backpressure_does_not_reserve_model_calls_and_cancellation_drains
         await entered.wait()
         await asyncio.sleep(0)
         assert len(route.requests) == 2  # fetch ran ahead of the bounded parser
-        assert session.budget.judge_calls == 0
+        assert session.spend.judge_calls == 0
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         assert active == 0 and high == 1
-        assert session.budget.quiescent
+        assert session.spend.quiescent
         session.checkpoint_state()
         assert (
             sum(row.reason == "source_processing_cancelled" for row in session.ledger.snapshot())
@@ -162,30 +163,25 @@ def test_stage_backpressure_does_not_reserve_model_calls_and_cancellation_drains
     asyncio.run(run())
 
 
-def test_inflight_bytes_wait_instead_of_false_exhaustion():
+def test_inflight_bytes_are_tracked_for_quiescence_and_never_limited():
+    spend = RunSpend(config(), time.monotonic)
+    first = spend.reserve_bytes(10)
+    second = spend.reserve_bytes(10**9)
+    assert (first, second) == (10, 10**9)
+    assert not spend.quiescent
+    spend.record_bytes(4)
+    spend.release_bytes(first)
+    spend.record_bytes(6)
+    spend.release_bytes(second)
+    assert spend.quiescent and spend.bytes_read == 10
+    with pytest.raises(GhimeraRefused):
+        spend.release_bytes(1)
+
+
+def test_stage_waiters_never_leak_a_slot_when_their_caller_times_out():
     async def run():
-        budget = RunBudget(config(byte_budget=10), asyncio.get_running_loop().time)
-        first = await budget.wait_bytes(10)
-        second = asyncio.create_task(budget.wait_bytes(10))
-        await asyncio.sleep(0)
-        assert not second.done()
-        budget.record_bytes(4)
-        budget.release_bytes(first)
-        allowance = await asyncio.wait_for(second, timeout=1)
-        assert allowance == 6
-        budget.record_bytes(6)
-        budget.release_bytes(allowance)
-        assert budget.quiescent
-        with pytest.raises(GhimeraRefused):
-            await budget.wait_bytes(1)
-
-    asyncio.run(run())
-
-
-def test_stage_waiters_respect_wall_budget_without_leaking_a_slot():
-    async def run():
-        budget = RunBudget(config(wall_seconds=0.02), asyncio.get_running_loop().time)
-        slots = StageSlots(policy(extraction_workers=1), budget)
+        spend = RunSpend(config(), asyncio.get_running_loop().time)
+        slots = StageSlots(policy(extraction_workers=1), spend)
         async with slots.slot("extraction"):
 
             async def waiter():
@@ -193,30 +189,31 @@ def test_stage_waiters_respect_wall_budget_without_leaking_a_slot():
                     pytest.fail("must not acquire the occupied slot")
 
             with pytest.raises(TimeoutError):
-                await waiter()
-        # Fresh budget on the same owner verifies the semaphore was not leaked.
-        budget.started = asyncio.get_running_loop().time()
+                async with asyncio.timeout(0.02):
+                    await waiter()
+        # The same owner can acquire again: the semaphore was not leaked.
         async with slots.slot("extraction"):
             pass
 
     asyncio.run(run())
 
 
-def test_parallel_sources_preserve_page_and_round_budgets_and_unique_dispatch():
+def test_parallel_sources_preserve_round_quantum_and_unique_dispatch():
     async def run():
         route = FakeRoute()
-        loop = loop_for(configured(page_budget=2), LeafExtractor(), route=route)
+        loop = loop_for(configured(), LeafExtractor(), route=route)
         seeds = tuple(f"https://example.org/{n}" for n in range(5))
         session = await loop.open(Goal(text="ports", seeds=seeds))
         stop = await loop.collect(session, scope(), seeds + seeds, fetch_limit=1, allow_grade=False)
         assert stop == "round_limit"
-        assert len(route.requests) == session.budget.fetches == 1
+        assert len(route.requests) == session.spend.fetches == 1
         assert len(session.documents) == 1
         stop = await loop.collect(session, scope(), (), allow_grade=False)
-        assert stop == "budget_exhausted"
-        assert len(route.requests) == session.budget.fetches == 2
-        assert len({request.url for request in route.requests}) == 2
-        assert len(session.documents) == 2
+        # No run ceiling: the rest of the frontier is drained, each URL once.
+        assert stop == "frontier_empty"
+        assert len(route.requests) == session.spend.fetches == 5
+        assert len({request.url for request in route.requests}) == 5
+        assert len(session.documents) == 5
 
     asyncio.run(run())
 
@@ -282,14 +279,14 @@ def test_real_curl_source_flow_keeps_fast_response_ahead_of_slow_response(site):
             observed.append(document.title)
             return await super().document(goal, document, second_look=second_look)
 
-    fetcher, scoped, budget, _, origin = state(
+    fetcher, scoped, spend, _, origin = state(
         site,
         execution=policy().model_dump(by_alias=True),
         grade_interval=100,
         saturation_window=100,
     )
     loop = GoalLoop(
-        config=budget.config,
+        config=spend.config,
         fetcher=fetcher,
         extractor=LeafExtractor(),
         scorer=KeywordScorer(),
@@ -340,11 +337,10 @@ def test_goal_satisfaction_cannot_hide_concurrent_graph_storage_failure():
     asyncio.run(run())
 
 
-def test_final_fast_sources_are_graded_even_when_the_page_budget_is_spent():
+def test_final_fast_sources_are_graded_when_the_frontier_drains():
     loop = loop_for(
         config(
             execution=policy().model_dump(by_alias=True),
-            page_budget=2,
             grade_interval=2,
             saturation_window=100,
         ),
@@ -359,28 +355,3 @@ def test_final_fast_sources_are_graded_even_when_the_page_budget_is_spent():
     assert len(result.documents) == 2
     assert result.receipt.stop_reason == "goal_satisfied"
     assert result.receipt.judge_calls == 3
-
-
-def test_grade_budget_refusal_stops_without_repeated_reservation_attempts():
-    async def run():
-        loop = loop_for(
-            config(
-                execution=policy().model_dump(by_alias=True),
-                judge_budget=2,
-                grade_interval=2,
-                saturation_window=100,
-            ),
-            LeafExtractor(),
-        )
-        result = await asyncio.wait_for(
-            loop.run(
-                Goal(text="ports", seeds=("https://example.org/a", "https://example.org/b")),
-                scope(),
-            ),
-            timeout=1,
-        )
-        assert result.receipt.stop_reason == "budget_exhausted"
-        assert result.receipt.judge_calls == 2
-        assert sum(row.event == "verdict" for row in result.ledger) == 2
-
-    asyncio.run(run())

@@ -171,7 +171,7 @@ def test_timeout_releases_worker_slot(tmp_path):
     client = DocumentExtractor(config(tmp_path, timeout_seconds=0.001, max_workers=1))
     with pytest.raises(GhimeraRefused) as exc:
         asyncio.run(client.extract(page()))
-    assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED
+    assert exc.value.code == RefusalCode.BOUND_EXCEEDED
 
 
 def native_pdf():

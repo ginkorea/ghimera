@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ghimera.removed_ceilings import REMOVED_REFERENCE_CEILINGS, refuse_removed
+
 Positive = Annotated[int, Field(strict=True, gt=0)]
 
 
@@ -21,9 +23,13 @@ class ReferenceConfig(BaseModel):
     max_candidates_per_parent: Positive
     max_queued_per_run: Positive
     max_extra_hosts: Positive
-    cited_by_query_budget: Annotated[int, Field(strict=True, ge=0)]
     cited_by_query_template: Annotated[str, Field(min_length=1)]
     max_query_title_chars: Positive
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_REFERENCE_CEILINGS, "references.")
 
     @model_validator(mode="after")
     def coherent(self) -> "ReferenceConfig":
@@ -49,6 +55,4 @@ class ReferenceConfig(BaseModel):
             for _, key, spec, conversion in fields
         ) or not {"title", "url"} <= {key for _, key, _, _ in fields}:
             raise ValueError("cited-by template must use only plain {title} and {url} fields")
-        if self.discover_cited_by and not self.cited_by_query_budget:
-            raise ValueError("cited-by discovery requires a query budget")
         return self

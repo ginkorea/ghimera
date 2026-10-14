@@ -57,22 +57,18 @@ def test_versioned_config_fails_closed_and_is_immutable():
     assert cfg.schema_version == "chimera.config/1"
     with pytest.raises(ValidationError):
         config(schema="chimera.config/2")
-    with pytest.raises(ValidationError):
-        config(page_budget=-1)
-    with pytest.raises(ValidationError):
-        config(page_budget="100")
-    # 0.4.12: zero, null or "unbounded" is an explicit absence of a run ceiling.
-    assert config(page_budget=0).page_budget is None
-    assert config(page_budget="unbounded").page_budget is None
+    # 0.4.12: run ceilings are gone; a recipe that still names one is refused.
+    with pytest.raises(ValidationError, match="no longer has run ceilings"):
+        config(page_budget=100)
     with pytest.raises(ValidationError):
         config(unknown_operator_value=1)
     with pytest.raises(ValidationError):
-        cfg.page_budget = 10
+        cfg.saturation_window = 10
 
 
-def test_goal_loop_stops_before_page_budget_and_records_every_attempt():
-    result, route = run(config(page_budget=3, saturation_window=10))
-    assert result.receipt.stop_reason == "budget_exhausted"
+def test_goal_loop_ends_on_an_empty_frontier_and_records_every_attempt():
+    result, route = run(config(saturation_window=10), scoped=scope(max_depth=2))
+    assert result.receipt.stop_reason == "frontier_empty"
     assert result.receipt.fetches == len(route.requests) == 3
     assert sum(row.event == "fetch" for row in result.ledger) == 3
     assert len(result.documents) == 3
@@ -81,7 +77,7 @@ def test_goal_loop_stops_before_page_budget_and_records_every_attempt():
 
 def test_saturation_counts_unique_accepted_documents_not_duplicates():
     result, _ = run(
-        config(page_budget=20, saturation_window=3),
+        config(saturation_window=3),
         route=FakeRoute(same_content=True),
         scoped=scope(max_depth=10),
     )
@@ -91,38 +87,24 @@ def test_saturation_counts_unique_accepted_documents_not_duplicates():
     assert any(row.event == "duplicate" for row in result.ledger)
 
 
-def test_goal_grade_and_judge_budget_are_real_stop_rules():
-    result, _ = run(config(grade_interval=2, page_budget=10), judge=FakeJudge(satisfied=True))
+def test_goal_grade_is_a_real_stop_rule():
+    result, _ = run(config(grade_interval=2), judge=FakeJudge(satisfied=True))
     assert result.receipt.stop_reason == "goal_satisfied"
     assert result.receipt.fetches == 2
     assert result.receipt.judge_calls == 3
-    exhausted, _ = run(config(judge_budget=1, page_budget=10))
-    assert exhausted.receipt.stop_reason == "budget_exhausted"
-    assert exhausted.receipt.judge_calls == 1
-    assert len(exhausted.documents) == 1
 
 
-def test_byte_and_time_budget_stop_before_another_attempt():
-    result, route = run(config(byte_budget=12, page_budget=20))
-    assert result.receipt.bytes_read == 12
-    assert len(route.requests) == 1
-    ticks = iter((0.0, 2.0, 2.0, 2.0))
-    loop = GoalLoop(
-        config=config(wall_seconds=1.0),
-        fetcher=FetchLadder((FakeRoute(),)),
-        extractor=FakeExtractor(),
-        scorer=KeywordScorer(),
-        judge=FakeJudge(),
-        clock=lambda: next(ticks),
-    )
-    timed = asyncio.run(loop.run(Goal(text="ports", seeds=("https://example.org/start",)), scope()))
-    assert timed.receipt.stop_reason == "budget_exhausted"
-    assert timed.receipt.fetches == 0
+def test_spend_is_counted_without_a_ceiling():
+    result, route = run(config(), scoped=scope(max_depth=0))
+    assert result.receipt.stop_reason == "frontier_empty"
+    assert result.receipt.bytes_read == len(b"body https://example.org/start")
+    assert len(route.requests) == result.receipt.fetches == 1
+    assert result.receipt.judge_calls == 1
 
 
 def test_out_of_scope_and_blocked_pages_are_recorded_not_followed():
     result, route = run(
-        config(page_budget=5),
+        config(),
         route=FakeRoute(),
         scoped=scope(max_depth=1),
     )
@@ -135,7 +117,7 @@ def test_out_of_scope_and_blocked_pages_are_recorded_not_followed():
 
 
 def test_hold_gets_one_more_model_pass_and_never_a_person():
-    result, _ = run(config(page_budget=1), judge=FakeJudge(hold_first=True))
+    result, _ = run(config(), judge=FakeJudge(hold_first=True), scoped=scope(max_depth=0))
     assert result.receipt.judge_calls == 2
     assert result.documents[0].verdict.decision == "accept"
     assert sum(row.event == "verdict" for row in result.ledger) == 2
@@ -144,15 +126,15 @@ def test_hold_gets_one_more_model_pass_and_never_a_person():
 def test_instances_do_not_share_visited_state():
     fetcher = FetchLadder((FakeRoute(),))
     loop = GoalLoop(
-        config=config(page_budget=1),
+        config=config(),
         fetcher=fetcher,
         extractor=FakeExtractor(),
         scorer=KeywordScorer(),
         judge=FakeJudge(),
     )
     goal = Goal(text="ports", seeds=("https://example.org/start",))
-    first = asyncio.run(loop.run(goal, scope()))
-    second = asyncio.run(loop.run(goal, scope()))
+    first = asyncio.run(loop.run(goal, scope(max_depth=0)))
+    second = asyncio.run(loop.run(goal, scope(max_depth=0)))
     assert first.receipt.fetches == second.receipt.fetches == 1
 
 

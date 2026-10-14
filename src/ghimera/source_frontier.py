@@ -19,7 +19,7 @@ def _coordinates(request: SourceCoordinates | LocalSourceRequest) -> Coordinates
 
 
 class SourceFrontier:
-    """The source-work owner supplies the private database and total free payload budget."""
+    """The source-work owner supplies the private database and total free payload bound."""
 
     def __init__(
         self,

@@ -43,7 +43,7 @@ from ghimera.human_browser_types import (
     HumanBrowserConfig,
     HumanBrowserEvidence,
 )
-from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.refusals import BoundExceeded, GhimeraRefused, RefusalCode
 
 if TYPE_CHECKING:
     from patchright.async_api import Browser, Download, Page, Playwright
@@ -117,7 +117,7 @@ class CaptureWork:
 
 
 class HumanBrowserSession(ABC):
-    """Shared capture ordering, scope, budgets, assistance and cancellation."""
+    """Shared capture ordering, scope, bounds, assistance and cancellation."""
 
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
@@ -172,12 +172,19 @@ class HumanBrowserSession(ABC):
             maximum += self.config.tor_verification.max_probe_bytes
         if max_bytes is not None:
             if type(max_bytes) is not int or max_bytes <= 0:
-                raise HumanCaptureFailure(RefusalCode.BUDGET_EXHAUSTED, 0, ())
+                raise HumanCaptureFailure(
+                    RefusalCode.ADAPTER_CONTRACT, 0, (), "a capture needs a positive byte bound"
+                )
             maximum = min(maximum, max_bytes)
         timeout = self.config.timeout_seconds
         if timeout_seconds is not None:
             if timeout_seconds <= 0 or not math.isfinite(timeout_seconds):
-                raise HumanCaptureFailure(RefusalCode.BUDGET_EXHAUSTED, 0, ())
+                raise HumanCaptureFailure(
+                    RefusalCode.ADAPTER_CONTRACT,
+                    0,
+                    (),
+                    "a capture needs a positive finite deadline",
+                )
             timeout = min(timeout, timeout_seconds)
         work = CaptureWork(maximum, scope, asyncio.get_running_loop().time() + timeout, operation)
         try:
@@ -383,7 +390,9 @@ class HumanBrowserSession(ABC):
                 body = base64.b64decode(reply.dom_base64, validate=True)
                 spend.bytes_read += len(body)
                 if not reply.complete or len(body) > maximum:
-                    raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                    raise BoundExceeded(
+                        "tor_verification.max_probe_bytes", len(body), maximum, "probe incomplete"
+                    )
                 if reply.url != policy.probe_url or guard is None:
                     raise GhimeraRefused(RefusalCode.TOR_UNAVAILABLE)
                 navigation = await guard.settled_evidence(page.url)
@@ -515,7 +524,7 @@ class HumanBrowserSession(ABC):
         dom_spend = work.bytes_read
         try:
             if work.max_bytes - work.bytes_read <= 1:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                raise BoundExceeded("human_browser capture bytes", work.bytes_read, work.max_bytes)
             # Register before the action. A refused/cancelled capture is never
             # retried automatically through another session or by another click.
             if selector is not None:
@@ -755,7 +764,7 @@ class HumanBrowserSession(ABC):
             raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
         allowance = min(self.config.max_dom_bytes, spend.max_bytes - spend.bytes_read)
         if allowance <= 0:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BoundExceeded("human_browser capture bytes", spend.bytes_read, spend.max_bytes)
         reply = DomReply.model_validate(
             await page.evaluate(
                 """cap => {
@@ -783,7 +792,9 @@ class HumanBrowserSession(ABC):
         if len(dom) > allowance:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if not reply.complete:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BoundExceeded(
+                "human_browser.max_dom_bytes", len(dom), allowance, "the DOM did not fit"
+            )
         if reply.content_type == "text/html":
             content_type: Literal["text/html", "application/xhtml+xml"] = "text/html"
         elif reply.content_type == "application/xhtml+xml":
@@ -819,7 +830,11 @@ class HumanBrowserSession(ABC):
             work.deadline - asyncio.get_running_loop().time(),
         )
         if timeout <= 0:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise GhimeraRefused(
+                RefusalCode.BOUND_EXCEEDED,
+                "human browser capture deadline passed before assistance; "
+                "an input bound, not a spend limit",
+            )
         if (
             reason not in self.config.assistance_reasons
             or len(work.assistance) >= self.config.max_assistance_attempts

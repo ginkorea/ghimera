@@ -1,11 +1,9 @@
 # Non-active schema example: use as the main configuration's [scoring] block.
 # Replace the private service declaration with your authorized real deployment.
 # The original intent is embedded once per run and recorded, not supplied as a
-# fake/pinned fixture digest. Both reference and document calls spend this budget.
+# fake/pinned fixture digest. Both reference and document calls are counted as encoder spend.
 schema = "chimera.scoring/1"
 reference_source = "intent"
-encoding_call_budget = 100
-encoding_char_budget = 100000
 window_chars = 1000
 overlap_chars = 100
 max_windows = 8

@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Literal, TypeVar
 
 from pydantic import BaseModel
 
-from ghimera.ceilings import exceeds
 from ghimera.ledger import Ledger
 from ghimera.model_reconciliation_types import (
     ModelAttemptAuthorization,
@@ -33,12 +32,12 @@ from ghimera.model_work_types import (
     ModelWorkConfig,
 )
 from ghimera.models import LedgerRow, ModelIdentity
-from ghimera.refusals import GhimeraRefused, ModelFailure, RefusalCode
+from ghimera.refusals import BoundExceeded, GhimeraRefused, ModelFailure, RefusalCode
 from ghimera.research_reranking_types import RerankReservation
 
 if TYPE_CHECKING:
-    from ghimera.budget import RunBudget
     from ghimera.model_http import ModelHttpResponse
+    from ghimera.spend import RunSpend
 
 T = TypeVar("T")
 
@@ -47,9 +46,9 @@ class FatalModelWorkFailure(RuntimeError):
     """Do not reinterpret lost durable accounting as a recoverable model refusal."""
 
 
-def port_input(budget: "RunBudget", *records: BaseModel, **values: object) -> bytes:
+def port_input(spend: "RunSpend", *records: BaseModel, **values: object) -> bytes:
     """Exact logical port arguments, distinct from a provider's selected wire prompt."""
-    if budget.config.model_work is None:
+    if spend.config.model_work is None:
         return b""
     return json.dumps(
         {"records": [record.model_dump(mode="json") for record in records], "values": values},
@@ -146,11 +145,8 @@ def uncertain_model_sequences(rows: tuple[LedgerRow, ...]) -> tuple[int, ...]:
     )
 
 
-def validate_model_rows(
-    policy: ModelWorkConfig | None, judge_budget: int | None, rows: tuple[LedgerRow, ...]
-) -> int:
+def validate_model_rows(policy: ModelWorkConfig | None, rows: tuple[LedgerRow, ...]) -> int:
     """Validate original accounting and retention before restore, replay or new contact."""
-    uncertain = uncertain_model_sequences(rows)
     intents = tuple(row.model_intent for row in rows if row.model_intent is not None)
     if policy is None:
         if intents:
@@ -158,10 +154,6 @@ def validate_model_rows(
         return 0
     if tuple(intent.judge_reservation for intent in intents) != tuple(range(1, len(intents) + 1)):
         raise ValueError("model reservations must retain every call in order")
-    if exceeds(len(intents), judge_budget) or any(
-        i.input_bytes > policy.max_input_bytes for i in intents
-    ):
-        raise ValueError("model intents exceed their declared run/input budgets")
     used = 0
     for row in rows:
         ack = row.model_ack
@@ -175,13 +167,6 @@ def validate_model_rows(
             if stored is None or len(stored.body()) > policy.results.max_result_bytes:
                 raise ValueError("acknowledged return must retain its bounded original answer")
             used += len(stored.body())
-    if len(uncertain) > policy.max_unanswered_calls:
-        raise ValueError("model reservations exceed their unanswered-call bound")
-    if policy.results is not None and (
-        used + len(uncertain) * policy.results.max_result_bytes
-        > policy.results.max_total_result_bytes
-    ):
-        raise ValueError("retained model answers exceed their total storage budget")
     return len(intents)
 
 
@@ -195,7 +180,7 @@ class ModelInvocation:
 
     def __init__(
         self,
-        budget: "RunBudget",
+        spend: "RunSpend",
         ledger: Ledger,
         *,
         phase: ModelPhase,
@@ -210,7 +195,7 @@ class ModelInvocation:
         rerank_reservation: RerankReservation | None = None,
     ) -> None:
         self._ledger, self._model, self._scope, self._url = ledger, model, scope, url
-        self._budget = budget
+        self._spend = spend
         if (phase == "reranking") != (rerank_reservation is not None):
             raise FatalModelWorkFailure("reranking requires its exact native reservation")
         self._rerank_reservation = rerank_reservation
@@ -218,22 +203,22 @@ class ModelInvocation:
         self._invoked = False
         self._replay: tuple[LedgerRow, LedgerRow] | None = None
         self._authorization: ModelAttemptAuthorization | None = None
-        policy = budget.config.model_work
+        policy = spend.config.model_work
         self._results = policy.results if policy is not None else None
         reservation: Callable[[], None]
         if rerank_reservation is not None:
             if reserve is not None:
-                raise FatalModelWorkFailure("CPU reranking uses the original native budget owner")
+                raise FatalModelWorkFailure("CPU reranking uses the original native spend owner")
             native_reservation = rerank_reservation
 
             def reserve_native() -> None:
-                budget.reserve_rerank(
+                spend.reserve_rerank(
                     len(native_reservation.request.candidates), native_reservation.input_chars
                 )
 
             reservation = reserve_native
         else:
-            reservation = reserve or budget.reserve_judge
+            reservation = reserve or spend.reserve_judge
         if policy is None:
             if replay_intent_sequence is not None:
                 raise FatalModelWorkFailure("replay requires the original result-retention policy")
@@ -241,33 +226,31 @@ class ModelInvocation:
             return
         if model.location == "external":
             raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
-        if len(request) > policy.max_input_bytes:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
-        if not ledger.has_durable_binding(budget.config):
+        if not ledger.has_durable_binding(spend.config):
             raise FatalModelWorkFailure("configured model work requires the run's durable sink")
         rows = ledger.snapshot()
         from ghimera.model_reconciliation import authorization, validate_decisions, validate_policy
         from ghimera.research_reranking import validate_rerank_rows
 
         try:
-            validate_policy(budget.config, rows)
-            usage = validate_rerank_rows(budget.config, rows)
-            if usage != (budget.rerank_calls, budget.rerank_pairs, budget.rerank_chars):
-                raise ValueError("budget does not preserve original rerank reservations")
-            if validate_model_rows(policy, budget.config.judge_budget, rows) != budget.judge_calls:
-                raise ValueError("budget does not preserve original model reservations")
+            validate_policy(spend.config, rows)
+            usage = validate_rerank_rows(spend.config, rows)
+            if usage != (spend.rerank_calls, spend.rerank_pairs, spend.rerank_chars):
+                raise ValueError("spend does not preserve original rerank reservations")
+            if validate_model_rows(policy, rows) != spend.judge_calls:
+                raise ValueError("spend does not preserve original model reservations")
         except ValueError as exc:
             raise FatalModelWorkFailure("original model reservations are inconsistent") from exc
         if replay_intent_sequence is not None:
             if decision is not None or attempt is not None:
                 raise FatalModelWorkFailure("replay cannot authorize another model contact")
-            self._bind_replay(budget, rows, phase, request, replay_intent_sequence)
+            self._bind_replay(spend, rows, phase, request, replay_intent_sequence)
             return
         if attempt is not None:
             if (
                 decision is not None
                 or attempt not in validate_decisions(rows)
-                or not ledger.has_replay_binding(budget.config)
+                or not ledger.has_replay_binding(spend.config)
             ):
                 raise FatalModelWorkFailure(
                     "attempt requires its owning exact committed authorization"
@@ -291,7 +274,7 @@ class ModelInvocation:
             self._sequence, self._authorization = row.sequence, attempt
             return
         if decision is not None:
-            recovery = budget.config.research_recovery
+            recovery = spend.config.research_recovery
             reconciliation = recovery.model_reconciliation if recovery is not None else None
             if (
                 reconciliation is None
@@ -302,18 +285,6 @@ class ModelInvocation:
                 raise FatalModelWorkFailure(
                     "decision is stale or exceeds original reconciliation policy"
                 )
-        uncertain = uncertain_model_sequences(rows)
-        if len(uncertain) >= policy.max_unanswered_calls:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
-        if self._results is not None:
-            used = sum(
-                len(row.model_ack.stored_output.body())
-                for row in rows
-                if row.model_ack is not None and row.model_ack.stored_output is not None
-            )
-            reserved = (len(uncertain) + 1) * self._results.max_result_bytes
-            if used + reserved > self._results.max_total_result_bytes:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         try:
             self._sequence = ledger.next_sequence
             candidate = LedgerRow(
@@ -330,33 +301,33 @@ class ModelInvocation:
                     input_scope=scope,
                     input_sha256=hashlib.sha256(request).hexdigest(),
                     input_bytes=len(request),
-                    judge_reservation=budget.judge_calls + 1,
+                    judge_reservation=spend.judge_calls + 1,
                 ),
                 model_decision=decision,
                 rerank_reservation=rerank_reservation,
             )
             if decision is not None:
-                validate_policy(budget.config, rows + (candidate,))
-            validate_rerank_rows(budget.config, rows + (candidate,))
+                validate_policy(spend.config, rows + (candidate,))
+            validate_rerank_rows(spend.config, rows + (candidate,))
         except ValueError as exc:
             raise FatalModelWorkFailure("model decision is not admissible") from exc
         reservation()
         try:
             if (
                 candidate.model_intent is None
-                or candidate.model_intent.judge_reservation != budget.judge_calls
+                or candidate.model_intent.judge_reservation != spend.judge_calls
             ):
                 raise ValueError("model reservation changed its native accounting")
             ledger.append(candidate)
             if decision is not None:
-                validate_policy(budget.config, ledger.snapshot())
+                validate_policy(spend.config, ledger.snapshot())
                 self._authorization = authorization(ledger.snapshot()[-1])
         except (GhimeraRefused, ValueError, OSError) as exc:
             raise FatalModelWorkFailure("model intent was not durably acknowledged") from exc
 
     def _bind_replay(
         self,
-        budget: "RunBudget",
+        spend: "RunSpend",
         rows: tuple[LedgerRow, ...],
         phase: ModelPhase,
         request: bytes,
@@ -366,7 +337,7 @@ class ModelInvocation:
             self._results is None
             or type(sequence) is not int
             or not 0 <= sequence < len(rows)
-            or not self._ledger.has_replay_binding(budget.config)
+            or not self._ledger.has_replay_binding(spend.config)
         ):
             raise FatalModelWorkFailure("replay requires its original run's committed prefix")
         original = rows[sequence]
@@ -443,13 +414,12 @@ class ModelInvocation:
             raise FatalModelWorkFailure("a model invocation cannot be reused or retried")
         self._invoked = True
         if self._authorization is not None:
-            self._budget.check_time()
             from ghimera.model_reconciliation import validate_policy
 
             rows = self._ledger.snapshot()
-            validate_policy(self._budget.config, rows)
+            validate_policy(self._spend.config, rows)
             if (
-                not self._ledger.has_replay_binding(self._budget.config)
+                not self._ledger.has_replay_binding(self._spend.config)
                 or self._ledger.next_sequence != self._authorization.attempt_intent_sequence + 1
                 or any(
                     row.model_attempt is not None
@@ -488,7 +458,11 @@ class ModelInvocation:
             )
             if self._results is not None:
                 if len(observed) > self._results.max_result_bytes:
-                    raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                    raise BoundExceeded(
+                        "model_work.results.max_result_bytes",
+                        len(observed),
+                        self._results.max_result_bytes,
+                    )
                 wire = observation.wire if isinstance(observation, ModelObservation) else None
                 if (self._scope == "wire_request") != (wire is not None):
                     raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)

@@ -5,7 +5,6 @@ import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Literal
 
-from ghimera.ceilings import exceeds, headroom
 from ghimera.query_work_types import (
     QueryAcknowledgement,
     QueryCorpusBinding,
@@ -13,12 +12,13 @@ from ghimera.query_work_types import (
     QueryReservation,
 )
 from ghimera.research_reranking_types import RerankDecision
+from ghimera.spend import NO_TRANSFER_BOUND
 
 if TYPE_CHECKING:
-    from ghimera.budget import RunBudget
     from ghimera.config import GhimeraConfig
     from ghimera.ledger import Ledger
     from ghimera.models import LedgerRow
+    from ghimera.spend import RunSpend
 
 
 class QueryWork:
@@ -26,7 +26,7 @@ class QueryWork:
 
     def __init__(
         self,
-        budget: "RunBudget",
+        spend: "RunSpend",
         ledger: "Ledger",
         cursor: QueryCursor,
         before: Callable[[QueryReservation], None],
@@ -37,7 +37,7 @@ class QueryWork:
         acknowledgement_sequence: int | None = None,
         rerank_sequence: int | None = None,
     ) -> None:
-        self.budget, self.ledger, self.cursor, self._before = budget, ledger, cursor, before
+        self.spend, self.ledger, self.cursor, self._before = spend, ledger, cursor, before
         self.original, self.sequence = original, original_sequence
         self.ack, self.ack_sequence = acknowledgement, acknowledgement_sequence
         self.rerank_sequence = rerank_sequence
@@ -58,7 +58,7 @@ class QueryWork:
     ) -> QueryReservation:
         if self._prepared is not None:
             raise ValueError("one query work cannot prepare twice")
-        if not self.ledger.has_replay_binding(self.budget.config):
+        if not self.ledger.has_replay_binding(self.spend.config):
             raise ValueError("query work requires its exact owning native committed journal")
         if self.original is not None:
             original = self.original
@@ -84,8 +84,8 @@ class QueryWork:
                 provider_revision=provider[1],
                 request_json=request,
                 request_sha256=hashlib.sha256(request).hexdigest(),
-                search_reservation=self.budget.search_calls + 1 if channel == "discovery" else None,
-                fetch_reservation=self.budget.fetches + 1 if channel == "discovery" else None,
+                search_reservation=self.spend.search_calls + 1 if channel == "discovery" else None,
+                fetch_reservation=self.spend.fetches + 1 if channel == "discovery" else None,
                 retained_reservation=retained_reservation,
                 input_chars=input_chars,
                 corpus=corpus,
@@ -206,15 +206,13 @@ def validate_query_rows(config: "GhimeraConfig", rows: tuple["LedgerRow", ...]) 
                     raise ValueError("query reservation changed its original fetch/search debit")
                 if (
                     config.research is None
-                    or exceeds(searches, config.research.query_budget)
                     or len(request.query.text) > config.research.max_query_chars
                     or request.limit > config.research.results_per_query
                     or request.max_bytes
-                    > min(
-                        headroom(config.byte_budget, 0),
+                    > (
                         config.http.max_response_bytes
                         if config.http is not None
-                        else headroom(config.byte_budget, 0),
+                        else NO_TRANSFER_BOUND
                     )
                     or request.timeout_seconds > config.request_timeout_seconds
                 ):
@@ -230,27 +228,10 @@ def validate_query_rows(config: "GhimeraConfig", rows: tuple["LedgerRow", ...]) 
                     )
                     if provider is None:
                         raise ValueError("query reservation lost its original provider recipe")
-                    prior = tuple(
-                        previous
-                        for previous in rows[: row.sequence]
-                        if previous.event == "fetch"
-                        and previous.route
-                        == f"search:{reservation.provider}@{reservation.provider_revision}"
-                    )
                     if (
-                        len(prior) >= provider.max_calls
-                        or request.limit > provider.max_results
-                        or request.max_bytes
-                        > min(
-                            provider.max_response_bytes,
-                            provider.byte_budget - sum(previous.bytes_read for previous in prior),
-                        )
-                        or request.timeout_seconds
-                        > min(
-                            provider.timeout_seconds,
-                            provider.call_seconds_budget
-                            - sum(previous.latency_seconds for previous in prior),
-                        )
+                        request.limit > provider.max_results
+                        or request.max_bytes > provider.max_response_bytes
+                        or request.timeout_seconds > provider.timeout_seconds
                     ):
                         raise ValueError("query reservation exceeds original provider allowance")
                 if reservation.cursor.stage == "cited_by":

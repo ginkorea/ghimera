@@ -6,13 +6,13 @@ import stat
 from dataclasses import dataclass
 
 from ghimera.local_input_types import LocalDocumentSeed, LocalInputConfig, LocalInputEvidence
-from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.refusals import GhimeraRefused, RefusalCode, bound_detail
 
 
 class LocalInputFailure(GhimeraRefused):
-    def __init__(self, code: RefusalCode, bytes_read: int) -> None:
+    def __init__(self, code: RefusalCode, bytes_read: int, detail: str | None = None) -> None:
         self.bytes_read = bytes_read
-        super().__init__(code)
+        super().__init__(code, detail)
 
 
 class LocalInputAcknowledgementLost(RuntimeError):
@@ -35,7 +35,11 @@ class LocalInputLoader:
             raise LocalInputFailure(RefusalCode.LOCAL_INPUT_FAILED, 0)
         allowance = min(max_bytes, self.policy.max_input_bytes)
         if allowance <= 0:
-            raise LocalInputFailure(RefusalCode.BUDGET_EXHAUSTED, 0)
+            raise LocalInputFailure(
+                RefusalCode.BOUND_EXCEEDED,
+                0,
+                bound_detail("local_inputs.max_input_bytes", 0, max(0, allowance)),
+            )
         retained = b""
         directory = -1
         try:
@@ -56,7 +60,12 @@ class LocalInputLoader:
                 if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
                     raise LocalInputFailure(RefusalCode.LOCAL_INPUT_FAILED, 0)
                 if before.st_size > allowance:
-                    raise LocalInputFailure(RefusalCode.BUDGET_EXHAUSTED, 0)
+                    # A local file is never read in part; it is refused whole.
+                    raise LocalInputFailure(
+                        RefusalCode.BOUND_EXCEEDED,
+                        0,
+                        bound_detail("local_inputs.max_input_bytes", before.st_size, allowance),
+                    )
                 retained = stream.read(before.st_size)
                 after = os.fstat(stream.fileno())
             if (

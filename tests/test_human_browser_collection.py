@@ -7,7 +7,6 @@ import time
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.collector import Collector
 from ghimera.config import GhimeraConfig
 from ghimera.continuation import ResearchSuspended
@@ -20,6 +19,7 @@ from ghimera.ledger import Ledger
 from ghimera.models import Harvest, Page
 from ghimera.refusals import GhimeraRefused
 from ghimera.result_archive import ResearchResultArchive
+from ghimera.spend import RunSpend
 from tests.test_collector import (
     assembled,
     encoder_endpoint,
@@ -62,7 +62,6 @@ def test_human_session_completes_concrete_collector_and_private_archive(
             human_browser=selected.model_dump(),
             graph=continuation.graph.model_dump(),
             request_timeout_seconds=30.0,
-            wall_seconds=120.0,
         )
         if resume:
             values.update(
@@ -157,11 +156,11 @@ def test_absent_browser_evidence_cannot_invent_a_missing_http_status():
         )
 
 
-@pytest.mark.parametrize("failure", ["byte_budget", "assistant_failed", "robots"])
+@pytest.mark.parametrize("failure", ["dom_bound", "assistant_failed", "robots"])
 def test_browser_failure_never_retries_through_http_and_records_actual_spend(
     tmp_path, source_site, failure
 ):
-    _, scope, initial_budget, _, origin = source_state(source_site)
+    _, scope, initial_spend, _, origin = source_state(source_site)
     if failure == "robots":
         source_site[4]["/robots.txt"] = b"User-agent: *\nDisallow: /plain\n"
     source_site[4]["/plain"] = b"<title>Just a moment</title><p>Verify you are human</p>"
@@ -172,10 +171,10 @@ def test_browser_failure_never_retries_through_http_and_records_actual_spend(
                 "origins": (selected.origins[0].model_copy(update={"path_prefixes": ("/plain",)}),)
             }
         )
-        values = initial_budget.config.model_dump()
+        if failure == "dom_bound":
+            selected = selected.model_copy(update={"max_dom_bytes": 70})
+        values = initial_spend.config.model_dump()
         values.update(human_browser=selected.model_dump(), request_timeout_seconds=30.0)
-        if failure == "byte_budget":
-            values["byte_budget"] = 70
         config = GhimeraConfig.model_validate(values)
         calls = []
 
@@ -192,9 +191,9 @@ def test_browser_failure_never_retries_through_http_and_records_actual_spend(
                 CurlRoute(config, resolver=ResolverFixture()),
             )
         )
-        budget, ledger = RunBudget(config, time.monotonic), Ledger()
+        spend, ledger = RunSpend(config, time.monotonic), Ledger()
         with pytest.raises(GhimeraRefused) as caught:
-            await ladder.fetch(origin + "/plain", scope, budget, ledger)
+            await ladder.fetch(origin + "/plain", scope, spend, ledger)
         if failure == "robots":
             assert caught.value.code.value == "robots_disallowed"
             assert source_site[1]["/plain"] == 0
@@ -209,9 +208,10 @@ def test_browser_failure_never_retries_through_http_and_records_actual_spend(
                 assert row.human_assistance[0].action == "assistance_failed"
                 assert len(calls) == 1
             else:
-                assert caught.value.code.value == "budget_exhausted"
-                assert not calls and budget.bytes_read == 70
-        assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
-        assert budget.quiescent
+                # One page over its DOM input bound is refused, never cut.
+                assert caught.value.code.value == "bound_exceeded"
+                assert not calls and spend.bytes_read > 0
+        assert spend.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
+        assert spend.quiescent
 
     asyncio.run(with_browser(tmp_path, origin, scenario))

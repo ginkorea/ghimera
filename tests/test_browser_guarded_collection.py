@@ -14,7 +14,6 @@ from threading import Thread
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.collector import Collector
 from ghimera.config import GhimeraConfig
 from ghimera.document_media import DOCX_TYPE
@@ -34,6 +33,7 @@ from ghimera.refusals import GhimeraRefused
 from ghimera.research import ResearchLoop
 from ghimera.research_types import ResearchRequest, ResearchResult
 from ghimera.result_archive import ResearchResultArchive
+from ghimera.spend import RunSpend
 from tests.test_browser_downloads import download_policy
 from tests.test_browser_inline_documents import inline_policy
 from tests.test_browser_navigation_guard import navigation_policy
@@ -153,9 +153,7 @@ def effective(tmp_path, site, selected, **updates):
         human_browser=selected.model_dump(),
         global_concurrency=1,
         per_host_concurrency=1,
-        byte_budget=200_000,
         request_timeout_seconds=30.0,
-        wall_seconds=120.0,
         extraction=extraction_policy(tmp_path).model_dump(),
         document_extraction=document_config(tmp_path).document_extraction.model_dump(),
         research=research_policy(
@@ -317,7 +315,7 @@ def test_guarded_native_result_is_parsed_cited_journalled_graphed_and_archived(
         asyncio.run(with_browser(tmp_path, origin, scenario, accept_downloads=True))
 
 
-@pytest.mark.parametrize("refused", ["robots", "scope", "pages", "limit", "bytes"])
+@pytest.mark.parametrize("refused", ["robots", "scope", "limit"])
 def test_full_ladder_denies_before_final_contact_and_releases_every_reservation(tmp_path, refused):
     robots = b"User-agent: *\nDisallow: /research/final\n" if refused == "robots" else None
     with source(robots=robots, cross_origin=refused == "scope") as site:
@@ -327,27 +325,21 @@ def test_full_ladder_denies_before_final_contact_and_releases_every_reservation(
             selected = selected_policy(
                 previous, origin, max_redirects=1 if refused == "limit" else 3
             )
-            cfg = effective(
-                tmp_path,
-                site,
-                selected,
-                page_budget=3 if refused == "pages" else 40,
-                byte_budget=1 if refused == "bytes" else 200_000,
-            )
+            cfg = effective(tmp_path, site, selected)
             scope = Scope(
                 allowed_hosts=("fixture.example",),
                 allowed_ports=(site[0],),
                 max_depth=0,
                 content_types=("text/html", "application/pdf", DOCX_TYPE),
             )
-            budget, ledger = RunBudget(cfg, time.monotonic), Ledger()
+            spend, ledger = RunSpend(cfg, time.monotonic), Ledger()
             ladder = ladder_for(cfg, page)
             with pytest.raises(GhimeraRefused):
                 await asyncio.wait_for(
-                    ladder.fetch(origin + "/research/start", scope, budget, ledger), 10
+                    ladder.fetch(origin + "/research/start", scope, spend, ledger), 10
                 )
-            assert budget.quiescent
-            assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
+            assert spend.quiescent
+            assert spend.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
             assert not any(path == "/research/final" for _, path in site[1])
             assert not page.is_closed() and not unrelated.is_closed()
 
@@ -380,7 +372,6 @@ def test_concrete_collector_uses_guard_and_retains_native_chain_by_default(
             values.update(
                 human_browser=selected.model_dump(),
                 request_timeout_seconds=30.0,
-                wall_seconds=120.0,
             )
             selected_cfg = GhimeraConfig.model_validate(values)
             collector = Collector(
@@ -423,7 +414,6 @@ def test_fresh_redirect_origin_checks_robots_without_reentrant_slot_or_byte_dead
             base = effective(tmp_path, first, selected)
             cfg_values = base.model_dump()
             cfg_values["http"]["network"]["fixture_ports"] = [first[0], second[0]]
-            cfg_values["byte_budget"] = 10_000
             cfg = GhimeraConfig.model_validate(cfg_values)
             scope = Scope(
                 allowed_hosts=("fixture.example",),
@@ -431,23 +421,23 @@ def test_fresh_redirect_origin_checks_robots_without_reentrant_slot_or_byte_dead
                 max_depth=0,
                 content_types=("text/html",),
             )
-            budget, ledger = RunBudget(cfg, time.monotonic), Ledger()
+            spend, ledger = RunSpend(cfg, time.monotonic), Ledger()
             ladder = ladder_for(cfg, page)
             if denied:
                 with pytest.raises(GhimeraRefused, match="robots_disallowed"):
                     await asyncio.wait_for(
-                        ladder.fetch(origin + "/research/start", scope, budget, ledger), 10
+                        ladder.fetch(origin + "/research/start", scope, spend, ledger), 10
                     )
                 assert second[1][(f"fixture.example:{second[0]}", "/research/final")] == 0
             else:
                 fetched = await asyncio.wait_for(
-                    ladder.fetch(origin + "/research/start", scope, budget, ledger), 10
+                    ladder.fetch(origin + "/research/start", scope, spend, ledger), 10
                 )
                 assert fetched.final_url == final_origin + "/research/final"
             assert first[1][(f"fixture.example:{first[0]}", "/robots.txt")] == 1
             assert second[1][(f"fixture.example:{second[0]}", "/robots.txt")] == 1
-            assert budget.quiescent
-            assert budget.bytes_read == sum(r.bytes_read for r in ledger.snapshot())
+            assert spend.quiescent
+            assert spend.bytes_read == sum(r.bytes_read for r in ledger.snapshot())
             assert not page.is_closed() and not unrelated.is_closed()
 
         asyncio.run(with_browser(tmp_path, origin, scenario))
@@ -475,10 +465,10 @@ def test_cancelling_human_wait_keeps_spend_and_releases_target_and_run_slots(tmp
                 max_depth=0,
                 content_types=("text/html",),
             )
-            budget, ledger = RunBudget(cfg, time.monotonic), Ledger()
+            spend, ledger = RunSpend(cfg, time.monotonic), Ledger()
             ladder = ladder_for(cfg, page, WaitingHuman())
             task = asyncio.create_task(
-                ladder.fetch(origin + "/research/start", scope, budget, ledger)
+                ladder.fetch(origin + "/research/start", scope, spend, ledger)
             )
             await asyncio.wait_for(entered.wait(), 10)
             task.cancel()
@@ -489,15 +479,15 @@ def test_cancelling_human_wait_keeps_spend_and_releases_target_and_run_slots(tmp
             assert rows[-1].human_assistance[0].action == "cancelled"
             assert rows[-1].human_assistance[0].request.navigation is not None
             assert rows[-1].bytes_read > 0
-            assert budget.quiescent
-            assert budget.bytes_read == sum(r.bytes_read for r in rows)
+            assert spend.quiescent
+            assert spend.bytes_read == sum(r.bytes_read for r in rows)
             # Same run/target can immediately continue; cancellation must not
             # strand exclusive interception or the sole global request slot.
             resumed = await asyncio.wait_for(
-                ladder.fetch(origin + "/research/ready", scope, budget, ledger), 10
+                ladder.fetch(origin + "/research/ready", scope, spend, ledger), 10
             )
             assert resumed.final_url == origin + "/research/ready"
-            assert budget.quiescent
+            assert spend.quiescent
             assert not page.is_closed() and not unrelated.is_closed()
 
         asyncio.run(with_browser(tmp_path, origin, scenario))

@@ -15,6 +15,10 @@ class ContentFingerprint(BaseModel):
     normalized_text_sha256: Digest
     simhash: Annotated[str, Field(pattern=r"^[0-9a-f]{16}$")]
     normalized_chars: Annotated[int, Field(strict=True, ge=0)]
+    # Characters past max_text_chars that the simhash did not read (cut, not refused).
+    omitted_chars: Annotated[int, Field(strict=True, ge=0)] = Field(
+        default=0, exclude_if=lambda value: value == 0
+    )
     language: str
     canonical_url: str
     config_digest: Digest

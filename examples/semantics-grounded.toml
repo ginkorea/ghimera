@@ -6,7 +6,6 @@ prompt_profile = "defined_ontology"
 model_role = "analyst"
 window_chars = 1500
 max_windows_per_document = 64
-max_calls_per_run = 256
 max_mentions_per_window = 32
 max_relations_per_window = 32
 entity_roles = ["person", "organization", "position"]
@@ -36,8 +35,7 @@ definition = "The source explicitly identifies membership of this source person 
 [verification]
 schema = "ghimera.semantic-verification/3"
 model_role = "reviewer"
-max_calls_per_run = 256
 max_coverage_findings = 8
 
 # Missing items are research leads, not automatic graph insertions.
-# Generation, request and planning-context budgets stay caller-owned.
+# Generation, request and planning-context bounds stay caller-owned.

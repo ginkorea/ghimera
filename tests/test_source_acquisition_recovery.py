@@ -35,11 +35,9 @@ from tests.test_local_source_work import configured as native_configured
 
 def configured(tmp_path):
     raw = native_configured(tmp_path).model_dump()
-    raw["wall_seconds"] = 300
-    raw["judge_budget"] = 20
     raw["journal"]["max_record_bytes"] = 2000000
     raw["journal"]["max_journal_bytes"] = 40000000
-    raw["research"]["max_rounds"] = 1
+    raw["research"]["saturation_rounds"] = 1
     raw["research"]["max_pages_per_round"] = 1
     raw["research"]["content_types"] = [DOCX_TYPE]
     raw["source_work"]["frontier"] = dict(
@@ -50,13 +48,10 @@ def configured(tmp_path):
     )
     raw["model_work"] = dict(
         schema="ghimera.model-work/1",
-        max_input_bytes=4000000,
-        max_unanswered_calls=2,
         uncertain_policy="hold",
         results=dict(
             schema="ghimera.model-results/1",
             max_result_bytes=1000000,
-            max_total_result_bytes=20000000,
         ),
     )
     raw["research_recovery"] = dict(
@@ -278,7 +273,9 @@ def test_original_request_recipe_runtime_and_live_writer_are_fenced(tmp_path):
             "cut",
             expected_models=cut.snapshot.models.model_copy(update={"search_revision": "foreign"}),
         )
-    altered = GhimeraConfig.model_validate(dict(cfg.model_dump(), page_budget=cfg.page_budget + 1))
+    altered = GhimeraConfig.model_validate(
+        dict(cfg.model_dump(), saturation_window=cfg.saturation_window + 1),
+    )
     with pytest.raises(ValueError):
         SourceWorkStore.acquisition(altered, "cut")
     writer = SourceWorkStore.resume(cfg, "cut", len(cut.journal.rows), acquisition=cut)
@@ -375,25 +372,6 @@ def test_later_graph_refuses_before_parser_judge_or_external_contact(tmp_path, m
                 "cut", snapshot_sha256=cut.sha256, boundary="source_acquisition"
             )
         )
-
-
-def test_downtime_consumes_original_wall_budget_without_new_contact(tmp_path, monkeypatch):
-    cfg, *_ = crash(tmp_path, "web")
-    cut = SourceWorkStore.acquisition(cfg, "cut")
-    monkeypatch.setattr("ghimera.research.time.time", lambda: cut.snapshot.saved_at + 301)
-
-    async def denied(*args, **kwargs):
-        raise AssertionError("no call after original wall budget expires")
-
-    monkeypatch.setattr(DocumentExtractor, "extract", denied)
-    monkeypatch.setattr(DocumentRoute, "attempt", denied)
-    result = asyncio.run(
-        researcher(cfg).recover("cut", snapshot_sha256=cut.sha256, boundary="source_acquisition")
-    )
-    assert result.stop_reason == "budget_exhausted" and not result.harvest.documents
-    assert result.harvest.receipt.elapsed_seconds >= 301
-    assert result.harvest.receipt.fetches == cut.snapshot.progress.harvest.receipt.fetches
-    assert result.harvest.receipt.bytes_read == cut.snapshot.progress.harvest.receipt.bytes_read
 
 
 def test_drained_known_cancellation_cannot_publish_a_resumable_cut(tmp_path, monkeypatch):

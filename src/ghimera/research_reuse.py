@@ -18,10 +18,10 @@ from ghimera.research_reranking_types import RerankDecision, ResearchRerankingCo
 from ghimera.research_reuse_config import ResearchReuseConfig
 
 if TYPE_CHECKING:
-    from ghimera.budget import RunBudget
     from ghimera.config import GhimeraConfig
     from ghimera.ledger import Ledger
     from ghimera.models import LedgerRow
+    from ghimera.spend import RunSpend
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
@@ -232,18 +232,18 @@ class RetainedResearchSession:
         intent: str,
         *,
         restored: ResearchRetrievalReport | None = None,
-        budget: "RunBudget | None" = None,
+        spend: "RunSpend | None" = None,
         ledger: "Ledger | None" = None,
     ) -> None:
         self._policy = ResearchReuseConfig.model_validate(policy.model_dump())
-        self._budget, self._ledger = budget, ledger
+        self._spend, self._ledger = spend, ledger
         self._reranking = (
-            budget.config.research.reranking
-            if budget is not None and budget.config.research is not None
+            spend.config.research.reranking
+            if spend is not None and spend.config.research is not None
             else None
         )
         if reader.reranking_policy is not None and (
-            budget is None or ledger is None or self._reranking is None
+            spend is None or ledger is None or self._reranking is None
         ):
             raise ValueError("learned research retrieval requires original run-bound rerank owners")
         self._reader, self._intent = reader, intent
@@ -254,8 +254,8 @@ class RetainedResearchSession:
         )
         if initial is not None and (initial.policy != self._policy or initial.intent != intent):
             raise ValueError("resumed retrieval requires its original intent and policy")
-        if initial is not None and budget is not None and ledger is not None:
-            initial.validate_run(budget.config, ledger.snapshot())
+        if initial is not None and spend is not None and ledger is not None:
+            initial.validate_run(spend.config, ledger.snapshot())
         self._observations = list(initial.observations) if initial is not None else []
         self._snapshots = list(initial.snapshots) if initial is not None else []
         self._active = False
@@ -280,7 +280,6 @@ class RetainedResearchSession:
         self,
         text: str,
         *,
-        remaining_seconds: float,
         rerank_decision: RerankDecision | None = None,
         query_work: QueryWork | None = None,
     ) -> None:
@@ -297,8 +296,7 @@ class RetainedResearchSession:
         if not text.strip() or len(text) > reader.max_query_chars:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
         if (
-            remaining_seconds <= 0
-            or len(self._observations) >= policy.max_queries
+            len(self._observations) >= policy.max_queries
             or sum(
                 len(reader.query_encoder.text_prefix) + len(item.query_text)
                 for item in self._observations
@@ -307,7 +305,11 @@ class RetainedResearchSession:
             + len(text)
             > policy.max_input_chars
         ):
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise GhimeraRefused(
+                RefusalCode.BOUND_EXCEEDED,
+                "retained-evidence query is over its query count or max_input_chars; "
+                "an input bound, not a spend limit",
+            )
         if query_work is not None:
             reservation = query_work.prepare(
                 "retained",
@@ -330,10 +332,10 @@ class RetainedResearchSession:
             query_work.commit()
             rerank_decision = query_work.decision(rerank_decision)
         if self._reader.reranking_policy is not None:
-            if self._budget is None or self._ledger is None or rerank_decision is None:
+            if self._spend is None or self._ledger is None or rerank_decision is None:
                 raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
             invoker = RunBoundReranker(
-                self._budget, self._ledger, channel="retained", decision=rerank_decision
+                self._spend, self._ledger, channel="retained", decision=rerank_decision
             )
         call: EncodingCall | None = None
         recovered: EncodingRecoveryEvidence | None = None
@@ -349,7 +351,7 @@ class RetainedResearchSession:
             call = EncodingCall.model_validate(value.model_dump())
 
         try:
-            async with asyncio.timeout(min(remaining_seconds, reader.timeout_seconds)):
+            async with asyncio.timeout(reader.timeout_seconds):
                 if (
                     query_work is not None
                     and query_work.ack is not None
@@ -395,8 +397,8 @@ class RetainedResearchSession:
                 snapshots=tuple(self._snapshots) + (candidate,),
                 reranking_policy=self._reranking,
             )
-            if self._budget is not None and self._ledger is not None:
-                probe.validate_run(self._budget.config, self._ledger.snapshot())
+            if self._spend is not None and self._ledger is not None:
+                probe.validate_run(self._spend.config, self._ledger.snapshot())
             bundle, outcome = probe.snapshots[-1], "success"
             if query_work is not None and query_work.ack is None:
                 acknowledged = query_work.acknowledgement(bundle.model_dump_json().encode())

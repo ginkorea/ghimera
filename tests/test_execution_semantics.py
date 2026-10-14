@@ -3,11 +3,11 @@
 import asyncio
 import time
 
-from ghimera.budget import RunBudget
 from ghimera.graph import MemoryGraphSink, ResearchGraph
 from ghimera.ledger import Ledger
 from ghimera.model_client import SelfHostedModel
 from ghimera.semantic_graph import SemanticStage, validate_rows
+from ghimera.spend import RunSpend
 from tests.test_semantic_graph import SemanticWire, document
 from tests.test_semantic_recovery import recovery_config
 from tests.test_semantic_verification import ReviewWire
@@ -34,7 +34,7 @@ def test_interleaved_failed_reviews_keep_source_local_gap_binding(tmp_path):
                 other_returned.set()
                 return result
 
-        ledger, budget = Ledger(), RunBudget(cfg, time.monotonic)
+        ledger, spend = Ledger(), RunSpend(cfg, time.monotonic)
         graph = ResearchGraph(cfg.graph, "interleaved-gaps", MemoryGraphSink())
         await graph.start("organization")
         stage = SemanticStage(
@@ -54,7 +54,7 @@ def test_interleaved_failed_reviews_keep_source_local_gap_binding(tmp_path):
         await asyncio.wait_for(
             asyncio.gather(
                 *(
-                    stage.extract("organization", doc, identity, graph, budget, ledger)
+                    stage.extract("organization", doc, identity, graph, spend, ledger)
                     for doc, identity in zip(sources, identities, strict=True)
                 )
             ),
@@ -68,6 +68,6 @@ def test_interleaved_failed_reviews_keep_source_local_gap_binding(tmp_path):
             assert len(row.semantic_refusal.review_sequences) == 1
             review = rows[row.semantic_refusal.review_sequences[0]]
             assert review.url == row.url
-        assert budget.judge_calls == 4
+        assert spend.judge_calls == 4
 
     asyncio.run(run())

@@ -26,7 +26,6 @@ def references(**updates):
         max_queued_per_run=8,
         max_extra_hosts=2,
         max_hops=1,
-        cited_by_query_budget=0,
         cited_by_query_template='"{title}" "{url}" cited by',
         max_query_title_chars=120,
     )
@@ -106,11 +105,11 @@ def test_depth_is_configuration_not_a_one_hop_implementation_ceiling():
     assert result.model_validate_json(result.model_dump_json()) == result
 
 
-@pytest.mark.parametrize("budget", ["max_parents", "max_queued_per_run"])
-def test_document_reference_limits_share_one_run_owned_budget(budget):
+@pytest.mark.parametrize("bound", ["max_parents", "max_queued_per_run"])
+def test_document_reference_limits_share_one_run_owned_bound(bound):
     result, route = run(
         cfg=config(
-            references=references(outside_scope="observed_public", max_hops=3, **{budget: 1})
+            references=references(outside_scope="observed_public", max_hops=3, **{bound: 1})
         )
     )
     assert len(route.requests) == 2
@@ -198,7 +197,7 @@ def test_reference_policy_is_explicit_versioned_and_validates_query_templates():
         dict(schema="chimera.references/2"),
         dict(max_queued_per_run=0),
         dict(cited_by_query_template="{untrusted.attribute}"),
-        dict(discover_cited_by=True, cited_by_query_budget=1),
+        dict(discover_cited_by=True),
         dict(denied_hosts=("127.0.0.1",)),
     ]:
         with pytest.raises(ValidationError):

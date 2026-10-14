@@ -228,7 +228,7 @@ def validate_pdf_images(document: DocumentSource, config: VisualConfig) -> None:
         raise ValueError("PDF crop evidence requires its effective figure policy")
     selections = {item.picture_index: item for item in select_figures(document, policy).figures}
     if len(crops) > policy.max_figures:
-        raise ValueError("retained PDF crops exceed the admitted figure budget")
+        raise ValueError("retained PDF crops exceed the admitted figure bound")
     for image in crops:
         candidate, anchor = image.candidate, image.candidate.pdf_crop
         selection = selections.get(candidate.element_index)

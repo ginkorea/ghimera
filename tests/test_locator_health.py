@@ -183,7 +183,7 @@ def test_drift_is_a_harvest_ledger_finding_and_rejects_foreign_health(tmp_path):
         locator_drift=drift(),
     )
     data = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
-    data.update(page_budget=1, extraction=client.config.model_dump(by_alias=True))
+    data.update(extraction=client.config.model_dump(by_alias=True))
 
     async def exercise():
         await client.extract(page())

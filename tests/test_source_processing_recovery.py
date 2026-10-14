@@ -20,7 +20,6 @@ from ghimera.config import GhimeraConfig
 from ghimera.documents import DOCX_TYPE
 from ghimera.journal import _run_path, read_journal
 from ghimera.model_http import ModelHttpResponse, PinnedModelHttp
-from ghimera.refusals import GhimeraRefused
 from ghimera.research_recovery_config import ResearchRecoveryConfig
 from ghimera.research_types import ResearchRequest, ResearchResult
 from ghimera.source_processing import SourceProcessingCursor
@@ -74,10 +73,8 @@ def configured(tmp_path, source_site, search_endpoint, model_endpoint, encoder_e
         graph=native.graph,
         document_extraction=document_config(tmp_path).document_extraction,
         local_inputs=recipe(tmp_path),
-        wall_seconds=300.0,
-        judge_budget=40,
     )
-    data["research"].update(max_rounds=1, max_pages_per_round=1)
+    data["research"].update(max_pages_per_round=1)
     data["research"]["content_types"] = tuple(
         dict.fromkeys((*data["research"]["content_types"], DOCX_TYPE))
     )
@@ -88,7 +85,6 @@ def configured(tmp_path, source_site, search_endpoint, model_endpoint, encoder_e
         run_encoding_recovery=dict(
             schema="ghimera.run-encoding-recovery/1",
             max_result_bytes=200000,
-            max_total_result_bytes=2000000,
             unknown_policy="hold",
         ),
     )
@@ -397,9 +393,8 @@ def test_processing_drift_and_owner_refusals_do_not_contact(
     assert before == (len(model_endpoint[1]), len(encoder_endpoint[1]), len(search_endpoint[1]))
 
 
-@pytest.mark.parametrize("stop", ["cancelled", "wall_exhausted"])
-def test_processing_adoption_keeps_cancellation_and_original_wall_limits(
-    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint, monkeypatch, stop
+def test_processing_adoption_keeps_cancellation(
+    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint, monkeypatch
 ):
     from ghimera import Collector
     from ghimera.loop import GoalLoop
@@ -410,19 +405,12 @@ def test_processing_adoption_keeps_cancellation_and_original_wall_limits(
     )
     cut = SourceWorkStore.processing_read(cfg, "cut")
     before = len(model_endpoint[1]), len(encoder_endpoint[1]), len(search_endpoint[1])
-    if stop == "cancelled":
 
-        async def cancelled(*args, **kwargs):
-            raise asyncio.CancelledError
+    async def cancelled(*args, **kwargs):
+        raise asyncio.CancelledError
 
-        monkeypatch.setattr(GoalLoop, "_consume_page", cancelled)
-        expected = asyncio.CancelledError
-    else:
-        monkeypatch.setattr(
-            "ghimera.research.time.time",
-            lambda: cut.cursor.original.saved_at + cfg.wall_seconds + 1,
-        )
-        expected = GhimeraRefused
+    monkeypatch.setattr(GoalLoop, "_consume_page", cancelled)
+    expected = asyncio.CancelledError
 
     async def recover():
         with pytest.raises(expected):
@@ -433,6 +421,6 @@ def test_processing_adoption_keeps_cancellation_and_original_wall_limits(
     asyncio.run(recover())
     assert before == (len(model_endpoint[1]), len(encoder_endpoint[1]), len(search_endpoint[1]))
     report = read_source_work(cfg, "cut")
-    assert report.operations[-1].state == ("cancelled" if stop == "cancelled" else "refused")
+    assert report.operations[-1].state == "cancelled"
     with pytest.raises(ValueError):
         SourceWorkStore.processing_read(cfg, "cut")

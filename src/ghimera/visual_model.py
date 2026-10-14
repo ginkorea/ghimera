@@ -3,18 +3,17 @@
 import base64
 import hashlib
 import json
-from asyncio import timeout as asyncio_timeout
 from typing import Protocol
 
 from pydantic import Field, SecretStr
 
-from ghimera.budget import RunBudget
 from ghimera.ledger import Ledger
 from ghimera.model_config import ModelServiceConfig
 from ghimera.model_http import ModelHttpPort, PinnedModelHttp
 from ghimera.model_work import ModelInvocation, wire_observation
 from ghimera.models import LedgerRow, ModelIdentity
-from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.refusals import BoundExceeded, GhimeraRefused, RefusalCode
+from ghimera.spend import RunSpend
 from ghimera.visual_config import VisualConfig
 from ghimera.visual_types import Digest, OcrResult, VisualClaim, VisualInterpretation, VisualRecord
 
@@ -43,7 +42,7 @@ class VisionReader(Protocol):
         intent: str,
         raw: bytes,
         ocr: OcrResult,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         url: str,
     ) -> VisualInterpretation | None: ...
@@ -80,12 +79,12 @@ class LocalVisionReader:
         prompt: str,
         raw: bytes,
         ocr: OcrResult,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         url: str,
     ) -> tuple[str, str, str]:
         if len(prompt) > config.max_input_chars:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BoundExceeded("visual model max_input_chars", len(prompt), config.max_input_chars)
         body = json.dumps(
             {
                 "model": config.served_model,
@@ -115,10 +114,12 @@ class LocalVisionReader:
             ensure_ascii=False,
         ).encode()
         if len(body) > config.max_request_bytes:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BoundExceeded(
+                "visual model max_request_bytes", len(body), config.max_request_bytes
+            )
         request_hash = hashlib.sha256(body).hexdigest()
         invocation = ModelInvocation(
-            budget,
+            spend,
             ledger,
             phase="visual_model",
             scope="wire_request",
@@ -138,8 +139,7 @@ class LocalVisionReader:
                 reason=f"vision_attempt:{config.model_id}@{config.revision}:{request_hash}",
             )
         )
-        async with asyncio_timeout(budget.remaining_seconds):
-            response = await invocation.invoke(lambda: port.post(body), wire_observation)
+        response = await invocation.invoke(lambda: port.post(body), wire_observation)
         response_hash = hashlib.sha256(response.body).hexdigest()
         # Persist only hashes/identity; image payloads and source instructions are not logs.
         ledger.append(
@@ -183,7 +183,7 @@ class LocalVisionReader:
         intent: str,
         raw: bytes,
         ocr: OcrResult,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         url: str,
     ) -> VisualInterpretation | None:
@@ -204,7 +204,7 @@ class LocalVisionReader:
             instructions + json.dumps({"intent": intent, "ocr": ocr.model_dump()}),
             raw,
             ocr,
-            budget,
+            spend,
             ledger,
             url,
         )
@@ -234,7 +234,7 @@ class LocalVisionReader:
             ),
             raw,
             ocr,
-            budget,
+            spend,
             ledger,
             url,
         )

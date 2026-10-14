@@ -1,5 +1,5 @@
 # Inert fragment: merge into a NEW complete native recipe with matching graph
-# roles/predicates, separately pinned analyst/reviewer models and existing budgets.
+# roles/predicates, separately pinned analyst/reviewer models and existing bounds.
 # The reviewer must have a distinct model_id and json_schema responses for this
 # native_quote_checks profile. No endpoint, GPU, credential or contact is supplied.
 [semantics]
@@ -8,7 +8,6 @@ prompt_profile = "reviewed_graph_bound_native_spans"
 model_role = "analyst"
 window_chars = 1000
 max_windows_per_document = 3
-max_calls_per_run = 8
 max_mentions_per_window = 8
 max_relations_per_window = 8
 entity_roles = ["entity"]
@@ -26,12 +25,11 @@ definition = "The source explicitly states that the source institution reports t
 [semantics.verification]
 schema = "ghimera.semantic-verification/4"
 model_role = "reviewer"
-max_calls_per_run = 32
 max_coverage_findings = 2
 max_mentions_per_call = 4
 max_relations_per_call = 4
 prompt_profile = "native_quote_checks"
 
-# All review partitions plus coverage must fit the ORIGINAL shared judge budget,
+# All review partitions plus coverage must fit the ORIGINAL review call bound,
 # deadline and configured request/retention limits. No historical /5 upgrade.
 # Actual independent model judgments are not truth, human approval or corroboration.

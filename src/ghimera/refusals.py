@@ -15,7 +15,7 @@ class RefusalCode(StrEnum):
     LOGIN_WALL = "login_wall"
     PAYWALL = "paywall"
     OUT_OF_SCOPE = "out_of_scope"
-    BUDGET_EXHAUSTED = "budget_exhausted"
+    BOUND_EXCEEDED = "bound_exceeded"
     CONTENT_TYPE_UNWANTED = "content_type_unwanted"
     LOCATOR_DRIFT = "locator_drift"
     EXTRACTION_FAILED = "extraction_failed"
@@ -55,7 +55,9 @@ REFUSALS = MappingProxyType(
         ),
         RefusalCode.PAYWALL: "Subscription required; supply an entitled session or another source.",
         RefusalCode.OUT_OF_SCOPE: "URL exceeds the exact-host scope or depth limit.",
-        RefusalCode.BUDGET_EXHAUSTED: "A declared page, byte, time, or judge budget is exhausted.",
+        RefusalCode.BOUND_EXCEEDED: (
+            "One input exceeded an input bound and could not be cut; this page or call only."
+        ),
         RefusalCode.CONTENT_TYPE_UNWANTED: "Content type is outside the shelf's allowed types.",
         RefusalCode.LOCATOR_DRIFT: "Locators drifted; inspect the profile and extraction record.",
         RefusalCode.EXTRACTION_FAILED: "Extraction failed; inspect the ledger and source bytes.",
@@ -64,7 +66,7 @@ REFUSALS = MappingProxyType(
         RefusalCode.ADAPTER_CONTRACT: "Adapter violated its bounded result contract; inspect it.",
         RefusalCode.FETCH_FAILED: "Fetching failed; inspect route failure records.",
         RefusalCode.GRAPH_CONTRACT: (
-            "Graph vocabulary, citation, version or budget refused; inspect the configured profile."
+            "Graph vocabulary, citation, version or bound refused; inspect the configured profile."
         ),
         RefusalCode.GRAPH_SINK_FAILED: (
             "Graph checkpoint was not acknowledged; preserve the journal and inspect its sink."
@@ -139,28 +141,33 @@ class GhimeraRefused(Exception):
         return f"{self.code.value}: {REFUSALS[self.code]} ({self.detail})"
 
 
-class BudgetExhausted(GhimeraRefused):
-    """A declared RUN ceiling is met: names which ceiling, with used and limit.
+def bound_detail(bound: str, used: float, limit: float, note: str | None = None) -> str:
+    """The one sentence every input-bound refusal carries: bound, used, limit, and kind."""
+    return (
+        f"input bound {bound} exceeded: {used:g} over limit {limit:g}"
+        + (f"; {note}" if note else "")
+        + "; an input bound, not a spend limit"
+    )
 
-    Only this subclass (or an expired run deadline) ends collection. A page's
-    own bound, such as one reader's timeout, refuses that page and the round
-    continues.
+
+class BoundExceeded(GhimeraRefused):
+    """One input is over an input bound and cannot safely be cut.
+
+    An input bound protects the reader from one malformed or hostile input (an
+    image bomb, a stream that never ends, a reader that never answers). It is
+    never a spend limit: the core has no run ceilings. This refuses the ONE page
+    or call that carried the input; the round continues.
     """
 
     def __init__(
         self,
-        budget: str,
+        bound: str,
         used: float,
-        limit: float | None,
+        limit: float,
         detail: str | None = None,
     ) -> None:
-        self.budget, self.used, self.limit = budget, used, limit
-        shown = "unbounded" if limit is None else f"{limit:g}"
-        super().__init__(
-            RefusalCode.BUDGET_EXHAUSTED,
-            f"run budget {budget} exhausted: used {used:g} of limit {shown}"
-            + (f"; {detail}" if detail else ""),
-        )
+        self.bound, self.used, self.limit = bound, used, limit
+        super().__init__(RefusalCode.BOUND_EXCEEDED, bound_detail(bound, used, limit, detail))
 
 
 class FetchFailure(GhimeraRefused):

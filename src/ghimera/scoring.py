@@ -1,17 +1,16 @@
-"""Typed scoring template; expensive C3 implementations must share the run budget."""
+"""Typed scoring template; expensive C3 implementations must share the run spend."""
 
-import asyncio
 from abc import ABC, abstractmethod
 from types import MappingProxyType
 from typing import ClassVar, final
 
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.ledger import Ledger
 from ghimera.models import Extracted, Goal, LinkCandidate
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.spend import RunSpend
 
 
 class Scorer(ABC):
@@ -34,11 +33,9 @@ class Scorer(ABC):
 
     @final
     async def score(
-        self, goal: Goal, document: Extracted, budget: RunBudget, ledger: Ledger | None = None
+        self, goal: Goal, document: Extracted, spend: RunSpend, ledger: Ledger | None = None
     ) -> tuple[LinkCandidate, ...]:
-        budget.check_time()
-        async with asyncio.timeout(budget.remaining_seconds):
-            ranked = await self.rank(goal, document, budget, ledger or Ledger())
+        ranked = await self.rank(goal, document, spend, ledger or Ledger())
         eligible = {(link.url, link.anchor) for link in document.links}
         if any((link.url, link.anchor) not in eligible for link in ranked):
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -56,5 +53,5 @@ class Scorer(ABC):
 
     @abstractmethod
     async def rank(
-        self, goal: Goal, document: Extracted, budget: RunBudget, ledger: Ledger
+        self, goal: Goal, document: Extracted, spend: RunSpend, ledger: Ledger
     ) -> tuple[LinkCandidate, ...]: ...

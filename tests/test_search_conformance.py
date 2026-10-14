@@ -12,12 +12,12 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.ledger import Ledger
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_types import SearchQuery, SearchResponse
 from ghimera.searxng import SearxConfig, SearxSearch
+from ghimera.spend import RunSpend
 from tests.test_http_fetch import ResolverFixture
 from tests.test_intent_research import SearchFixture, policy
 from tests.test_tor_transport import NoLocalDNS, socks_server
@@ -89,13 +89,13 @@ def provider(endpoint, *, transport=None, resolver=None):
 def test_search_conformance(kind, endpoint):
     real, cfg = provider(endpoint)
     adapter = SearchFixture() if kind == "fixture" else real
-    budget, ledger = RunBudget(cfg, lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(cfg, lambda: 0.0), Ledger()
     response = asyncio.run(
-        adapter.discover(SearchQuery(text="ports & reports", question_ids=("q1",)), budget, ledger)
+        adapter.discover(SearchQuery(text="ports & reports", question_ids=("q1",)), spend, ledger)
     )
     assert response.hits[0].url == "https://example.org/one"
-    assert budget.search_calls == budget.fetches == len(ledger.snapshot()) == 1
-    assert budget.bytes_read == ledger.snapshot()[0].bytes_read == len(response.raw)
+    assert spend.search_calls == spend.fetches == len(ledger.snapshot()) == 1
+    assert spend.bytes_read == ledger.snapshot()[0].bytes_read == len(response.raw)
     assert ledger.snapshot()[0].route == f"search:{adapter.name}@{adapter.revision}"
     assert ledger.snapshot()[0].query == "ports & reports"
     if kind == "searxng":
@@ -118,14 +118,14 @@ def test_search_cannot_override_template_or_spend_without_reservation():
         )
     with pytest.raises(TypeError):
         type("Missing", (GroundedSearch,), {})
-    cfg = config(research=policy(), page_budget=1)
-    budget, ledger, adapter = RunBudget(cfg, lambda: 0.0), Ledger(), SearchFixture()
-    budget.fetches = 1
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
-        asyncio.run(
-            adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), budget, ledger)
-        )
-    assert not adapter.requests and not ledger.snapshot()
+    cfg = config(research=policy())
+    spend, ledger, adapter = RunSpend(cfg, lambda: 0.0), Ledger(), SearchFixture()
+    spend.fetches = 1
+    # No run ceiling: a search is counted as a fetch and a search before contact.
+    asyncio.run(adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), spend, ledger))
+    assert len(adapter.requests) == 1
+    assert (spend.fetches, spend.search_calls) == (2, 1)
+    assert spend.quiescent
 
 
 def test_search_response_limit_is_a_contract_not_a_suggestion():
@@ -135,13 +135,14 @@ def test_search_response_limit_is_a_contract_not_a_suggestion():
         async def request(self, request):
             return SearchResponse(raw=b"x" * (request.max_bytes + 1), hits=())
 
-    cfg = config(research=policy(), byte_budget=20)
-    budget, ledger = RunBudget(cfg, lambda: 0.0), Ledger()
+    http = config().http.model_dump(by_alias=True) | {"max_response_bytes": 20}
+    cfg = config(research=policy(), http=http)
+    spend, ledger = RunSpend(cfg, lambda: 0.0), Ledger()
     with pytest.raises(GhimeraRefused, match="adapter_contract"):
         asyncio.run(
-            Oversized().discover(SearchQuery(text="ports", question_ids=("q1",)), budget, ledger)
+            Oversized().discover(SearchQuery(text="ports", question_ids=("q1",)), spend, ledger)
         )
-    assert budget.bytes_read == ledger.snapshot()[0].bytes_read == 20
+    assert spend.bytes_read == ledger.snapshot()[0].bytes_read == 20
     assert ledger.snapshot()[0].refusal == RefusalCode.ADAPTER_CONTRACT
 
 
@@ -154,13 +155,13 @@ def test_http_search_refusal_retains_bytes_without_following_or_inventing(endpoi
     else:
         endpoint[2]["body"] = b'{"wrong":"wire"}'
     adapter, cfg = provider(endpoint)
-    budget, ledger = RunBudget(cfg, lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(cfg, lambda: 0.0), Ledger()
     with pytest.raises(GhimeraRefused, match="search_unavailable"):
         asyncio.run(
-            adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), budget, ledger)
+            adapter.discover(SearchQuery(text="ports", question_ids=("q1",)), spend, ledger)
         )
     assert len(endpoint[1]) == 1
-    assert budget.bytes_read == len(endpoint[2]["body"]) == ledger.snapshot()[0].bytes_read
+    assert spend.bytes_read == len(endpoint[2]["body"]) == ledger.snapshot()[0].bytes_read
 
 
 def test_search_uses_same_tor_route_without_local_dns(endpoint):
@@ -171,9 +172,9 @@ def test_search_uses_same_tor_route_without_local_dns(endpoint):
             tp = tor_policy(server.sockets[0].getsockname()[1]).model_dump(by_alias=True)
             tp["tor"]["allowed_ports"] = [endpoint[0]]
             adapter, cfg = provider(endpoint, transport=tp, resolver=NoLocalDNS())
-            budget, ledger = RunBudget(cfg, asyncio.get_running_loop().time), Ledger()
+            spend, ledger = RunSpend(cfg, asyncio.get_running_loop().time), Ledger()
             response = await adapter.discover(
-                SearchQuery(text="ports", question_ids=("q1",)), budget, ledger
+                SearchQuery(text="ports", question_ids=("q1",)), spend, ledger
             )
             assert response.transport.mode == ledger.snapshot()[0].transport.mode == "tor"
             assert [row[0] for row in seen] == [0xF0, 1]

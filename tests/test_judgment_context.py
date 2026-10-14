@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.doubles import FakeExtractor
 from ghimera.embedding import SelfHostedEncoder
@@ -40,6 +39,7 @@ from ghimera.model_work import uncertain_model_sequences
 from ghimera.models import Extracted, Goal, LedgerRow, Verdict
 from ghimera.refusals import GhimeraRefused
 from ghimera.semantic_scoring import EmbeddingScorer
+from ghimera.spend import RunSpend
 from tests.test_c0 import config as legacy_config
 from tests.test_served_models import service
 
@@ -64,7 +64,7 @@ def retained():
 
 
 def prepared(
-    tmp_path, *, before_scoring=False, journal_updates=None, judge_budget=None, judgment_policy=None
+    tmp_path, *, before_scoring=False, journal_updates=None, judgment_policy=None
 ):
     actual = retained()
     bound = service(
@@ -87,8 +87,6 @@ def prepared(
     raw["journal"].update(journal_updates or {})
     if journal_updates:
         raw["model_work"]["results"]["max_result_bytes"] = 10000
-    if judge_budget is not None:
-        raw["judge_budget"] = judge_budget
     raw["document_judgment"] = judgment_policy or POLICY
     cfg = GhimeraConfig.model_validate(raw)
     goal, extracted = (
@@ -221,12 +219,12 @@ def test_private_reading_capacity_refuses_before_encoder_or_judge(tmp_path):
         SelfHostedEncoder(cfg.scoring.encoder, http=encoder_http),
         query_encoder=SelfHostedEncoder(cfg.scoring.query_encoder, http=query_http),
     )
-    budget = RunBudget(cfg, time.monotonic)
+    spend = RunSpend(cfg, time.monotonic)
     try:
         with pytest.raises(GhimeraRefused):
-            asyncio.run(scorer.rank(goal, extracted, budget, ledger))
-        assert encoder_http.calls == query_http.calls == budget.judge_calls == 0
-        assert budget.encoding_calls == 0 and not judge._http.requests
+            asyncio.run(scorer.rank(goal, extracted, spend, ledger))
+        assert encoder_http.calls == query_http.calls == spend.judge_calls == 0
+        assert spend.encoding_calls == 0 and not judge._http.requests
         assert not any(row.scoring_reading for row in ledger.snapshot())
     finally:
         ledger.close()
@@ -337,8 +335,8 @@ def test_identical_text_wrong_raw_source_cannot_borrow_scoring(tmp_path):
 
 def test_native_ack_remains_reject_but_partial_reading_client_holds(tmp_path):
     cfg, goal, extracted, ledger, judge = prepared(tmp_path)
-    budget = RunBudget(cfg, time.monotonic)
-    session = CollectionSession(goal, budget, ledger, None)
+    spend = RunSpend(cfg, time.monotonic)
+    session = CollectionSession(goal, spend, ledger, None)
     loop = loop_for(cfg, judge)
     try:
         for second in (False, True):
@@ -365,7 +363,7 @@ def test_native_ack_remains_reject_but_partial_reading_client_holds(tmp_path):
                 (evidence.context.source_sha256, window.start, window.end)
                 for window in evidence.context.windows
             )
-        assert budget.judge_calls == 2
+        assert spend.judge_calls == 2
         validate_judgment_rows(cfg, goal.text, ledger.snapshot())
         rows = ledger.snapshot()
         tampered = rows[-1].document_judgment.model_copy(update={"client_disposition": "accept"})
@@ -398,8 +396,8 @@ def test_native_unknown_is_charged_and_survives_journal_reopen(tmp_path, judgmen
     cfg, goal, extracted, ledger, judge = prepared(tmp_path, judgment_policy=judgment_policy)
     transport = Reply(cfg.models.judge, unknown=True)
     judge = SelfHostedModel(cfg, cfg.models.judge, http=transport)
-    budget = RunBudget(cfg, time.monotonic)
-    session = CollectionSession(goal, budget, ledger, None)
+    spend = RunSpend(cfg, time.monotonic)
+    session = CollectionSession(goal, spend, ledger, None)
     try:
         with pytest.raises(RuntimeError, match="lost reply"):
             asyncio.run(
@@ -411,7 +409,7 @@ def test_native_unknown_is_charged_and_survives_journal_reopen(tmp_path, judgmen
                     source_sha256=extracted.document_parse.source_sha256,
                 )
             )
-        assert budget.judge_calls == 1 and len(transport.requests) == 1
+        assert spend.judge_calls == 1 and len(transport.requests) == 1
         assert len(uncertain_model_sequences(ledger.snapshot())) == 1
     finally:
         session.close()
@@ -580,8 +578,8 @@ def test_contribution_profile_keeps_original_verdict_ack_and_readback(
     cfg, goal, extracted, ledger, _ = prepared(tmp_path, judgment_policy=CONTRIBUTION_POLICY)
     transport = Reply(cfg.models.judge, decision=decision, reason=reason)
     judge = SelfHostedModel(cfg, cfg.models.judge, http=transport)
-    budget = RunBudget(cfg, time.monotonic)
-    session = CollectionSession(goal, budget, ledger, None)
+    spend = RunSpend(cfg, time.monotonic)
+    session = CollectionSession(goal, spend, ledger, None)
     try:
         verdict, client_disposition = asyncio.run(
             loop_for(cfg, judge)._document_verdict(
@@ -599,7 +597,7 @@ def test_contribution_profile_keeps_original_verdict_ack_and_readback(
         assert Verdict.model_validate_json(ack.stored_output.body()) == verdict
         assert evidence.original_model_decision == decision
         assert evidence.client_disposition == disposition
-        assert budget.judge_calls == len(transport.requests) == 1
+        assert spend.judge_calls == len(transport.requests) == 1
         validate_judgment_rows(cfg, goal.text, ledger.snapshot())
         rows = ledger.snapshot()
         call = verdict.model_call.model_copy(

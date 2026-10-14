@@ -4,10 +4,6 @@
 # HTML is enabled here. PDF/DOCX, browser, Tor, graph, journal and source sessions
 # use their existing named configuration sections; see docs/COLLECTOR.md.
 schema = "chimera.config/1"
-page_budget = 400
-byte_budget = 2147483648
-wall_seconds = 3600.0
-judge_budget = 500
 grade_interval = 20
 grade_threshold = 0.9
 saturation_window = 20
@@ -57,10 +53,8 @@ min_length_ratio = 0.9
 
 [research]
 schema = "chimera.research/1"
-max_rounds = 8
 max_questions = 12
 max_queries_per_round = 4
-query_budget = 32
 results_per_query = 8
 search_concurrency = 2
 max_pages_per_round = 20
@@ -122,8 +116,6 @@ mode = "generic_once"
 [scoring]
 schema = "chimera.scoring/1"
 reference_source = "intent"
-encoding_call_budget = 1000
-encoding_char_budget = 2000000
 window_chars = 1000
 overlap_chars = 100
 max_windows = 8

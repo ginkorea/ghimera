@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.graph import MemoryGraphSink, ResearchGraph
 from ghimera.journal import DirectoryLedgerSink, read_journal
@@ -23,6 +22,7 @@ from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.semantic_contract import build_graph_contract
 from ghimera.semantic_graph import SemanticStage, validate_rows
 from ghimera.semantic_types import SemanticConfig, SemanticProposal
+from ghimera.spend import RunSpend
 from tests.test_semantic_graph import SemanticWire, configured, document
 from tests.test_semantic_verification import reviewed_config
 
@@ -73,26 +73,26 @@ def extract(cfg, wire, doc=None):
         (
             1,
             None,
-            "86fded6458d89c388b69825ec3b2670f0b0f4ade20eaff5014b02f41ac4d9587",
-            "3fec88582c2d2bcf66ebdb6351e35f490692988a59e0cb8cc07b84dc3d47ae6d",
+            "40e9d9a9adb0d3b5024dba329d24f126d5b6f95b91174122fa312a67518ab140",
+            "35ef1818097e0b6c000a5b60dc6bd989c2635c83e6386766d9ac3b878c401fcd",
         ),
         (
             2,
             "explicit_mention_keys",
-            "0f836e3850ed0e1d6c7fc4a03396dfe3d4edb4d61cb0ad0534621e1083535759",
-            "c249c91422ae2fed8d81af084f04c3bb87ae9d5742571145de50645247be71b0",
+            "bf6d660c82480dbeea4c2d005da784b5565109208a3ed6fe3978ead57368b542",
+            "f90c26f57852a44e52eba8705f3ecec356512fbb163dd1ee6cefac5a0cdba511",
         ),
         (
             3,
             "native_span_keys",
-            "6ddc4029d44854559b4fc004c73e3502e2aabbb89c16c7642f3bff24778b0d21",
-            "d8c5dd22e84c1d5fa8386c80e3ee695a64b1cc8f83cc68be412c9a7d216f67f4",
+            "7b8c9996c553a27d3d44c48cc04250b952994f5af0c634d9067b71eb0562fea5",
+            "025f598e97eea746b76c1f4c761abc140001c6dedbf6e86e9b87438d7ccd3f72",
         ),
         (
             4,
             "defined_ontology",
-            "a94c64d0af973742b087ff2ea4977d1532d3d1f607447091f00bef5aa864d55d",
-            "87380136497b555acf39543dd69d4d74766a29f8dabd2663ebec9ebeba12ab0b",
+            "0079937d9f88f408bff67f0703fffa04d20c3ae4ec5e015610afdb087dfaf812",
+            "a48e28d13f3dcfac9ad979c68a629260ad023b24cdc6ef358f481f2812ea3534",
         ),
     ],
 )
@@ -223,12 +223,8 @@ def retained_config(tmp_path):
     )
     raw["model_work"] = dict(
         schema="ghimera.model-work/1",
-        max_input_bytes=100000,
-        max_unanswered_calls=2,
         uncertain_policy="hold",
-        results=dict(
-            schema="ghimera.model-results/1", max_result_bytes=10000, max_total_result_bytes=100000
-        ),
+        results=dict(schema="ghimera.model-results/1", max_result_bytes=10000),
     )
     return GhimeraConfig.model_validate(raw)
 
@@ -238,7 +234,7 @@ def test_native_stage_reservation_and_original_ack_replay_bind_graph_contract(tm
     goal, doc = Goal(text="map the organization"), document()
     wire = CaptureWire(cfg.models.analyst)
     client = SelfHostedModel(cfg, cfg.models.analyst, http=wire)
-    budget = RunBudget(cfg, time.monotonic)
+    spend = RunSpend(cfg, time.monotonic)
     sink = DirectoryLedgerSink(cfg, "graph-bound", goal, client.model)
     ledger = Ledger(sink=sink)
     graph = ResearchGraph(cfg.graph, "graph-bound", MemoryGraphSink())
@@ -246,7 +242,7 @@ def test_native_stage_reservation_and_original_ack_replay_bind_graph_contract(tm
     async def run():
         await graph.start(goal.text)
         identity = await graph.document(doc.url, doc.raw, doc.extracted.text, "fixture@1")
-        await SemanticStage(cfg, client).extract(goal.text, doc, identity, graph, budget, ledger)
+        await SemanticStage(cfg, client).extract(goal.text, doc, identity, graph, spend, ledger)
 
     try:
         asyncio.run(run())
@@ -255,7 +251,7 @@ def test_native_stage_reservation_and_original_ack_replay_bind_graph_contract(tm
         ack_row = next(row for row in rows if row.model_ack)
         semantic = rows[-1].semantic_window
         request = port_input(
-            budget,
+            spend,
             doc,
             cfg.semantics,
             build_graph_contract(cfg, cfg.semantics),
@@ -264,14 +260,14 @@ def test_native_stage_reservation_and_original_ack_replay_bind_graph_contract(tm
             end=len(doc.extracted.text),
         )
         assert intent_row.model_intent.input_sha256 == hashlib.sha256(request).hexdigest()
-        assert budget.judge_calls == budget.semantic_calls == len(wire.bodies) == 1
+        assert spend.judge_calls == spend.semantic_calls == len(wire.bodies) == 1
         assert semantic.review is None
         assert semantic.edges and all(e.claim_status == "model_asserted" for e in semantic.edges)
         assert validate_rows(cfg, rows) == (rows[-1],)
     finally:
         ledger.close()
     report = read_journal(cfg.journal, "graph-bound")
-    restored = RunBudget(cfg, time.monotonic)
+    restored = RunSpend(cfg, time.monotonic)
     restored.restore(
         Receipt(
             fetches=0,
@@ -279,7 +275,7 @@ def test_native_stage_reservation_and_original_ack_replay_bind_graph_contract(tm
             judge_calls=1,
             accepted_documents=0,
             elapsed_seconds=0,
-            stop_reason="budget_exhausted",
+            stop_reason="failed",
             effective_config=cfg,
             judge=client.model,
         ),
@@ -418,10 +414,10 @@ def test_original_bad_holds_position_shape_still_refuses_without_graph_commit(tm
             return ModelHttpResponse(200, json.dumps(wire).encode(), "application/json")
 
     wire = MaliciousWire(cfg.models.analyst)
-    graph, ledger, budget = (
+    graph, ledger, spend = (
         ResearchGraph(cfg.graph, "bad-shape", MemoryGraphSink()),
         Ledger(),
-        RunBudget(cfg, time.monotonic),
+        RunSpend(cfg, time.monotonic),
     )
     doc = document()
 
@@ -431,13 +427,13 @@ def test_original_bad_holds_position_shape_still_refuses_without_graph_commit(tm
         before = graph.snapshot()
         with pytest.raises(GhimeraRefused) as refused:
             await SemanticStage(cfg, SelfHostedModel(cfg, cfg.models.analyst, http=wire)).extract(
-                "map the organization", doc, identity, graph, budget, ledger
+                "map the organization", doc, identity, graph, spend, ledger
             )
         assert refused.value.code == RefusalCode.SEMANTIC_EXTRACTION_FAILED
         assert graph.snapshot() == before
 
     asyncio.run(run())
-    assert budget.judge_calls == budget.semantic_calls == len(wire.bodies) == 1
+    assert spend.judge_calls == spend.semantic_calls == len(wire.bodies) == 1
     assert ledger.snapshot()[-1].refusal == RefusalCode.SEMANTIC_EXTRACTION_FAILED
 
 

@@ -11,7 +11,6 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ghimera.dedup_config import DedupConfig
 from ghimera.dedup_types import ContentDrift, ContentFingerprint, DedupEvidence
-from ghimera.refusals import GhimeraRefused, RefusalCode
 
 if TYPE_CHECKING:
     from ghimera.models import DocumentSource
@@ -63,9 +62,13 @@ def simhash(text: str, shingle_chars: int) -> int:
 
 
 def fingerprint(document: DocumentSource, policy: DedupConfig) -> ContentFingerprint:
-    if len(document.extracted.text) > policy.max_text_chars:
-        raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+    # Input bound, cut not refused: the exact-text digest covers the whole text,
+    # the near-duplicate simhash reads only the first max_text_chars.
     text = normalized(document.extracted.text)
+    shingled = normalized(document.extracted.text[: policy.max_text_chars])
+    omitted = len(document.extracted.text) - min(
+        len(document.extracted.text), policy.max_text_chars
+    )
     # A source's rel=canonical is untrusted metadata, not authority to alias hosts.
     url = document.url
     hint = document.extracted.canonical_url
@@ -82,8 +85,9 @@ def fingerprint(document: DocumentSource, policy: DedupConfig) -> ContentFingerp
         revision="unicode-char-simhash64@1",
         source_sha256=document.sha256,
         normalized_text_sha256=hashlib.sha256(text.encode()).hexdigest(),
-        simhash=f"{simhash(text, policy.shingle_chars):016x}",
+        simhash=f"{simhash(shingled, policy.shingle_chars):016x}",
         normalized_chars=len(text),
+        omitted_chars=omitted,
         language=document.extracted.language,
         canonical_url=canonical_url(url, policy),
         config_digest=policy.content_digest(),
@@ -101,6 +105,7 @@ class ContentIndex:
         self._bands: dict[tuple[str, int, int], set[str]] = {}
         self._urls: dict[str, ContentFingerprint] = {}
         self._positions: dict[str, int] = {}
+        self.omitted_documents = 0
 
     def _keys(self, item: ContentFingerprint) -> tuple[tuple[str, int, int], ...]:
         count = self.policy.max_hamming_distance + 1
@@ -191,7 +196,9 @@ class ContentIndex:
         if document.sha256 in self._documents:
             return
         if len(self._documents) >= self.policy.max_index_documents:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            # Input bound, cut not refused: the document is kept, only not indexed.
+            self.omitted_documents += 1
+            return
         item = fingerprint(document, self.policy)
         self._positions[item.source_sha256] = len(self._documents)
         self._documents[item.source_sha256] = document

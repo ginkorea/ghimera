@@ -185,7 +185,7 @@ def test_changed_or_oversized_inline_body_refuses_without_partial_document(tmp_p
                 await BoundPageHumanSession(selected, page=page, assistant=None).capture(
                     origin + "/research/report"
                 )
-            expected = "budget_exhausted" if len(invalid) > len(raw) else "content_type_unwanted"
+            expected = "bound_exceeded" if len(invalid) > len(raw) else "content_type_unwanted"
             assert caught.value.code.value == expected
             assert caught.value.bytes_read == min(len(invalid), len(raw) + 1)
             assert not page.is_closed() and not unrelated.is_closed()

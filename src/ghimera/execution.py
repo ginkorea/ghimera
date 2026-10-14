@@ -5,8 +5,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from ghimera.budget import RunBudget
 from ghimera.execution_config import ExecutionConfig
+from ghimera.spend import RunSpend
 
 Stage = Literal["extraction", "scoring", "judge", "semantic", "visual"]
 
@@ -14,8 +14,8 @@ Stage = Literal["extraction", "scoring", "judge", "semantic", "visual"]
 class StageSlots:
     """Optional legacy compatibility; every enabled capacity is an operator input."""
 
-    def __init__(self, policy: ExecutionConfig | None, budget: RunBudget) -> None:
-        self._budget = budget
+    def __init__(self, policy: ExecutionConfig | None, spend: RunSpend) -> None:
+        self._spend = spend
         self._slots: dict[Stage, asyncio.Semaphore] = {}
         if policy is not None:
             self._slots = {
@@ -32,10 +32,8 @@ class StageSlots:
         if semaphore is None:
             yield
             return
-        async with asyncio.timeout(self._budget.remaining_seconds):
-            await semaphore.acquire()
+        await semaphore.acquire()
         try:
-            self._budget.check_time()
             yield
         finally:
             semaphore.release()

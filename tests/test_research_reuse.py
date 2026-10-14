@@ -85,7 +85,6 @@ def assemble(cfg, reader, *, analyst=None, planner=None, reviewer=None):
 def configured(reader, **updates):
     return config(
         research=policy(retained_evidence=reuse_policy(reader), max_model_input_chars=30000),
-        page_budget=30,
         **updates,
     )
 
@@ -147,7 +146,7 @@ def test_retrieval_cannot_replace_discovery_when_it_does_not_answer(tmp_path, en
                 endpoint[2]["failure"] = "wrong_model"
             reader = CorpusEvidenceReader(reader_policy(store), store)
             bound = reuse_policy(reader, assess_before_discovery=mode != "no_early_answer")
-            cfg = config(research=policy(retained_evidence=bound), page_budget=30)
+            cfg = config(research=policy(retained_evidence=bound))
             loop, route, search = assemble(cfg, reader, analyst=FreshEvidenceAnalyst())
             result = await loop.run(ResearchRequest(intent="find ports"))
             assert result.status == "answered"
@@ -465,7 +464,7 @@ def test_query_cancel_preserves_actual_encoder_observation_and_can_checkpoint(tm
             reader = CorpusEvidenceReader(reader_policy(store), store)
             state = RetainedResearchSession(reuse_policy(reader), reader, "ports")
             with pytest.raises(asyncio.CancelledError):
-                await state.query("ports", remaining_seconds=10)
+                await state.query("ports")
             report = state.report
             assert not report.snapshots and len(report.observations) == 1
             call = report.observations[0].encoding_call
@@ -486,7 +485,7 @@ def test_failed_snapshot_delivery_keeps_successful_query_spend(tmp_path, endpoin
             reader = CorpusEvidenceReader(reader_policy(store, max_response_bytes=1), store)
             state = RetainedResearchSession(reuse_policy(reader), reader, "ports")
             with pytest.raises(GhimeraRefused):
-                await state.query("ports", remaining_seconds=10)
+                await state.query("ports")
             assert state.report.observations[0].outcome == "refused"
             assert state.report.observations[0].encoding_call.outcome == "success"
             assert not state.report.snapshots and len(endpoint[1]) == 2

@@ -246,7 +246,7 @@ def test_native_decision_refuses_changed_or_stale_state_before_contact(
         chosen = ModelReconciliationDecision.model_validate(raw)
     else:
         changed = GhimeraConfig.model_validate(
-            dict(cfg.model_dump(), judge_budget=cfg.judge_budget + 1)
+            dict(cfg.model_dump(), saturation_window=cfg.saturation_window + 1)
         )
         opts.config_path.write_text("\n".join(toml_lines(changed.model_dump(mode="json"))))
     before = counts(source_site, search_endpoint, model_endpoint, encoder_endpoint)
@@ -322,30 +322,17 @@ def test_abandoned_original_late_ack_is_rejected_before_recovery_contact(
     assert before == counts(source_site, search_endpoint, model_endpoint, encoder_endpoint)
 
 
-@pytest.mark.parametrize("limit", ["judge", "unanswered", "downtime", "decision_bytes"])
+@pytest.mark.parametrize("limit", ["decision_bytes"])
 def test_original_remaining_limits_never_become_a_new_attempt_allowance(
-    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint, limit, monkeypatch
+    tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint, limit
 ):
     cfg = configured(tmp_path, source_site, search_endpoint, model_endpoint, encoder_endpoint)
     raw = cfg.model_dump()
-    if limit == "judge":
-        raw["judge_budget"] = 4
-    elif limit == "unanswered":
-        raw["model_work"]["max_unanswered_calls"] = 1
-    elif limit == "decision_bytes":
+    if limit == "decision_bytes":
         raw["research_recovery"]["model_reconciliation"]["max_decision_bytes"] = 1
     cfg = GhimeraConfig.model_validate(raw)
     opts, pin = interrupted(tmp_path, cfg)
     chosen = decision(opts, pin)
-    if limit == "downtime":
-        from ghimera.research_recovery_types import ResearchControlSnapshot
-
-        saved = ResearchControlSnapshot.model_validate_json(
-            (cfg.journal.directory / opts.run_id / "research-control.json").read_bytes()
-        )
-        monkeypatch.setattr(
-            "ghimera.research.time.time", lambda: saved.saved_at + cfg.wall_seconds + 1
-        )
     original = read_journal(cfg.journal, opts.run_id).rows
     before = counts(source_site, search_endpoint, model_endpoint, encoder_endpoint)
     with pytest.raises((ValueError, GhimeraRefused, RuntimeError)):
@@ -438,7 +425,7 @@ def test_exact_native_phase_reconciliation_keeps_round_and_source_bounds(tmp_pat
     authorized = asyncio.run(loop.reconcile_model(chosen))
     fresh, route, search, planner = assemble(cfg)
     result = asyncio.run(fresh.recover("research", snapshot_sha256=pin, attempt=authorized))
-    assert result.status == "answered" and len(result.rounds) <= cfg.research.max_rounds
+    assert result.status == "answered" and result.rounds
     assert result.harvest.receipt.effective_config == cfg
     assert (
         result.harvest.receipt.judge_calls == 6

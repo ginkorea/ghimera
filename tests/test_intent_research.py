@@ -34,10 +34,8 @@ from tests.test_c0 import config
 def policy(**updates):
     raw = {
         "schema": "chimera.research/1",
-        "max_rounds": 3,
         "max_questions": 4,
         "max_queries_per_round": 2,
-        "query_budget": 6,
         "results_per_query": 3,
         "search_concurrency": 2,
         "max_pages_per_round": 3,
@@ -147,7 +145,7 @@ class ReviewerFixture:
 
 
 def run(*, research=None, analyst=None, reviewer=None, planner=None, cfg=None, run_id=None):
-    cfg = cfg or config(research=research or policy(), page_budget=30)
+    cfg = cfg or config(research=research or policy())
     route, search = FakeRoute(), SearchFixture()
     collector = GoalLoop(
         config=cfg,
@@ -201,13 +199,6 @@ def test_unsupported_or_invented_answer_is_never_accepted(bad_quote):
     )
     assert result.status == "partial" and result.answer is None
     assert any(row.refusal for row in result.harvest.ledger)
-
-
-def test_limits_are_shared_across_search_collection_and_followup():
-    result, route, search = run(cfg=config(research=policy(), judge_budget=2, page_budget=30))
-    assert result.status == "partial" and result.stop_reason == "budget_exhausted"
-    assert result.harvest.receipt.judge_calls == 2
-    assert len(route.requests) == len(search.requests) == 1
 
 
 def test_grounded_scope_cannot_bypass_configured_hosts():
@@ -285,7 +276,7 @@ def test_graph_has_intent_questions_queries_before_first_search_and_replays(tmp_
             "semantic": False,
         },
     ]
-    cfg = config(research=policy(), graph=gp, page_budget=30)
+    cfg = config(research=policy(), graph=gp)
     sink = DirectoryGraphSink(cfg.graph, "intent-run")
 
     class ObservedSearch(SearchFixture):
@@ -320,29 +311,14 @@ def test_graph_has_intent_questions_queries_before_first_search_and_replays(tmp_
     assert batches[-1].content_digest() == result.harvest.graph.checkpoint.digest
 
 
-def test_research_wall_deadline_returns_partial_and_records_spent_model_call():
-    class SlowPlanner(PlannerFixture):
-        async def plan(self, request):
-            await asyncio.sleep(1)
-            return await super().plan(request)
-
-    cfg = config(research=policy(), wall_seconds=0.02)
-    result, route, search = run(cfg=cfg, planner=SlowPlanner())
-    assert result.status == "partial" and result.stop_reason == "budget_exhausted"
-    assert result.harvest.receipt.judge_calls == 1
-    assert not route.requests and not search.requests
-    assert any(
-        row.refusal.value == "budget_exhausted" for row in result.harvest.ledger if row.refusal
-    )
-
-
 def test_research_examples_are_valid_configuration_without_source_edits():
     from ghimera.config import GhimeraConfig
     from ghimera.graph_types import GraphConfig
     from ghimera.searxng import SearxConfig
 
     cfg = GhimeraConfig.from_toml(Path("examples/intent-research.toml"))
-    assert cfg.research.max_rounds == 8 and cfg.research.source_policy == "grounded_public"
+    assert cfg.research.source_policy == "grounded_public"
+    assert cfg.research.effective_saturation_rounds == 2
     graph = GraphConfig.from_toml(Path("examples/research-graph.toml"))
     assert {"intent", "question", "query"} <= {role.name for role in graph.roles}
     with Path("examples/searxng.toml").open("rb") as stream:

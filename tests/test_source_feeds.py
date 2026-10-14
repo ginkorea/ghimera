@@ -228,7 +228,7 @@ def test_feed_deadline_includes_precontact_package_admission_and_releases_capaci
         for _ in range(2):
             with pytest.raises(GhimeraRefused) as exc:
                 await client.extract(page)
-            assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED
+            assert exc.value.code == RefusalCode.BOUND_EXCEEDED
         # The same deadline now owns package admission before child contact.
         # A 1ms allowance may expire without starting any child at all.
         assert len(children) <= 2 and all(child.returncode is not None for child in children)
@@ -307,17 +307,17 @@ def test_conditional_feed_refresh_reuses_exact_original_without_counting_it_as_n
 ):
     feed_site[4]["/conditional"] = RSS
     feed_site[5]["/conditional"] = "application/rss+xml"
-    ladder, scope, budget, ledger, origin = fetch_state(feed_site)
+    ladder, scope, spend, ledger, origin = fetch_state(feed_site)
     scope = scope.model_copy(update={"content_types": ("application/rss+xml",)})
     client = SourceFeedExtractor(config(tmp_path))
 
     async def exercise():
-        first = await ladder.fetch(origin + "/conditional", scope, budget, ledger)
+        first = await ladder.fetch(origin + "/conditional", scope, spend, ledger)
         first_extraction = await client.extract(first)
-        spent = budget.bytes_read
-        second = await ladder.fetch(origin + "/conditional", scope, budget, ledger)
+        spent = spend.bytes_read
+        second = await ladder.fetch(origin + "/conditional", scope, spend, ledger)
         assert second.revalidated and second.body == first.body == RSS
-        assert budget.bytes_read == spent
+        assert spend.bytes_read == spent
         assert await client.extract(second) == first_extraction
 
     asyncio.run(exercise())

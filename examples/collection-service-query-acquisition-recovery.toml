@@ -12,4 +12,4 @@ permitted_boundaries = ["query_return", "source_acquisition"]
 # {"schema":"ghimera.service-recovery-request/1","boundary":"query_return"}
 # OR after the acquired transaction has committed and its writer has ended:
 # {"schema":"ghimera.service-recovery-request/1","boundary":"source_acquisition"}
-# The service chooses no boundary on restart and never extends original budgets.
+# The service chooses no boundary on restart and never extends original bounds.

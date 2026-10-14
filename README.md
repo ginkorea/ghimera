@@ -2,16 +2,17 @@
 
 Intent-driven web research with your own local model services: discover sources,
 collect native-language evidence, follow gaps, and return a source-cited answer
-or an explicit partial result when evidence or budget is insufficient.
+or an explicit partial result when evidence is insufficient.
 
 ghimera is an independent Python library and command-line application. You own
 the model services, search providers, authorized source sessions, networking and
 storage. It does not launch models, discover credentials, allocate compute or
 silently fall back to an external LLM.
 
-**Release 0.4.12.** Run limits are off by default, one page's refusal never
-ends a round, transient model refusals retry, and pages can be read in-process
-in milliseconds; see [0.4.12 changes](#0412-changes) and
+**Release 0.4.12.** The core has no run ceilings, input bounds cut or refuse
+one input and never end a round, failed readers and judges keep the page,
+transient model refusals retry, and pages can be read in-process in
+milliseconds; see [0.4.12 changes](#0412-changes) and
 [release acceptance](docs/RELEASE_0412.md). Publication readback is a separate
 step. These checks do not establish live multilingual model quality, complete
 publisher coverage or recovery from every interruption.
@@ -47,7 +48,7 @@ private paths, model identifiers and contact details. Use examples matching your
 installed version; a different source checkout does not update an installed wheel.
 
 Configure already-served private completion and embedding services, a search
-provider, source scope and extraction policies. Run limits are optional. Endpoints,
+provider, source scope and extraction policies. There are no run ceilings. Endpoints,
 model revisions, language artifacts, thresholds, direct/Tor routes and storage
 belong in typed, versioned configuration. Reference-vector fixtures are not
 production relevance data. See the [collector guide](docs/COLLECTOR.md).
@@ -89,7 +90,7 @@ intent example above needs the services and credentials you configured.
 
 Planning, discovery, collection, assessment, answer generation and independent
 review share the configured allowances. A result is answered only after native
-coverage, citation, review and confidence checks pass. Budget exhaustion is not
+coverage, citation, review and confidence checks pass. Saturation is not
 success; retained model assertions are not independent corroboration.
 
 Supply model and source credentials separately through the documented inputs,
@@ -124,7 +125,7 @@ permission to bypass controls. Robots are honored by default; an override needs
 an explicit, reasoned exact-host decision and does not disable access refusal.
 
 - **Direct HTTP:** public-network admission, pinned DNS, per-hop redirect
-  checks, robots, pacing and byte/time budgets apply at the native fetch boundary.
+  checks, robots, pacing and per-response byte/time bounds apply at the native fetch boundary.
 - **Tor and onion:** explicitly select the Tor route for public web or native
   v3 onion sources. A failed Tor route never silently falls back to direct.
   Private model control uses its separate service boundary. See [Tor policy](docs/TOR.md).
@@ -141,7 +142,7 @@ an explicit, reasoned exact-host decision and does not disable access refusal.
   See [MCP leads](docs/MCP_LEADS.md).
 - **Ahmia and other discovery providers:** use an explicitly configured
   operator-owned Ahmia-compatible index, SearXNG, or configured web/onion/MCP
-  providers. Fan-out, ordered fallback, switching and per-provider budgets are
+  providers. Fan-out, ordered fallback, switching and per-provider response bounds are
   explicit. No onion-index service is bundled. See
   [discovery routing](docs/DISCOVERY_ROUTING.md) and [Ahmia integration](docs/AHMIA_INTEGRATION.md).
 
@@ -211,7 +212,7 @@ Unattended service does not inherit interactive terminal assistance.
 Pause takes effect at a completed checkpoint quantum, not at an arbitrary
 in-flight call. Native [completed-round continuation](docs/CONTINUATION.md)
 preserves the original run, frontier, graph acknowledgement and cumulative
-budgets. Durable job/archive receipts and archive-only handoff retries prevent
+spend. Durable job/archive receipts and archive-only handoff retries prevent
 an acknowledged completed result from becoming a fresh collection.
 
 An explicit outbox and `ghimera-delivery` worker support background delivery.
@@ -224,9 +225,10 @@ scale behavior and deployed off-host acceptance remain operator requirements.
 
 ## 0.4.12 changes
 
-- Run limits are optional and absent by default; spend is still accounted and
-  only a configured limit refuses, naming itself with used/limit. The mission's
-  stopping rules (coverage, saturation, empty frontier, cancellation) end a run.
+- There are no run ceilings; a recipe naming one is refused by name. Spend is
+  still counted. The mission's stopping rules (coverage, saturation, empty
+  frontier, cancellation) end a run. Input bounds cut, or refuse one input with
+  `bound_exceeded`; a failed rich reader or served judge keeps the page.
 - A page's own refusal never ends a round. Overlong link texts are cut to the
   encoder bound; transient model/encoder refusals retry with bounded backoff.
 - `extraction.fast_reader` reads pages in-process with lxml; persistent parser
@@ -243,12 +245,12 @@ These opt-in capabilities extend the immutable 0.4.10 package:
 
 - [Research recovery](docs/RESEARCH_RECOVERY.md) and [service restart admission](docs/SERVICE_RECOVERY.md)
   restore exact acknowledged research-model boundaries with original identities,
-  output reservation and budgets. Retained ACKs replay locally; unknown outcomes
+  output reservation and bounds. Retained ACKs replay locally; unknown outcomes
   remain held and charged. Recovery does not promise immediate pause.
 - Explicit [model](docs/MODEL_UNKNOWN_RECONCILIATION.md) and
   [encoding](docs/ENCODING_RECOVERY.md) decisions can authorize one separately
   charged bounded attempt without erasing or claiming to resolve the original
-  uncertain outcome. They are not automatic retries or budget resets.
+  uncertain outcome. They are not automatic retries or spend resets.
 - [Completed-source recovery](docs/SOURCE_COMPLETION_RECOVERY.md) can adopt an
   atomic serial source acknowledgement, preserving the original cursor, dedup,
   frontier, references, graph and spend. Selected unsupported overlap refuses;

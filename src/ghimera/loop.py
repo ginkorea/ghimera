@@ -3,13 +3,13 @@
 import asyncio
 import hashlib
 import heapq
+import os
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from ghimera.budget import RunBudget
-from ghimera.ceilings import reached
 from ghimera.config import GhimeraConfig
 from ghimera.content_dedup import ContentIndex
 from ghimera.execution import StageSlots
@@ -55,11 +55,12 @@ from ghimera.ports import Extractor, Judge, ScoredDocumentJudge
 from ghimera.reference_types import DocumentReference, SearchReference
 from ghimera.references import ReferenceBook
 from ghimera.refusals import (
-    BudgetExhausted,
+    BoundExceeded,
     GhimeraRefused,
     ModelCancelled,
     ModelFailure,
     RefusalCode,
+    refusal_detail,
 )
 from ghimera.scoring import Scorer
 from ghimera.semantic_graph import SemanticExtractor, SemanticReviewer, SemanticStage
@@ -76,11 +77,36 @@ from ghimera.source_work_types import (
     SourceOperation,
     SourceRequest,
 )
+from ghimera.spend import RunSpend
 from ghimera.visual_evidence import graph_visual_readings, project_visuals
 from ghimera.visual_stage import VisualStage
 from ghimera.visual_types import ImageEvidence
 
 CollectionStop = StopReason | Literal["round_limit"]
+# Refusals that mean the core or an adapter broke its contract; these still fail
+# a run. Every other refusal (an outage, an input bound) belongs to one page.
+CONTRACT_FAILURES = frozenset(
+    {
+        RefusalCode.ADAPTER_CONTRACT,
+        RefusalCode.LEDGER_SINK_FAILED,
+        RefusalCode.GRAPH_CONTRACT,
+        RefusalCode.GRAPH_SINK_FAILED,
+        RefusalCode.RESEARCH_CONTRACT,
+    }
+)
+
+
+def unjudged(extracted: Extracted, failure: GhimeraRefused) -> tuple[Verdict, Literal["accept"]]:
+    """A kept page the served judge could not judge; never a relevance claim."""
+    return Verdict(
+        decision="accept",
+        kind="unjudged",
+        publisher="unknown",
+        language=extracted.language or "und",
+        reason=refusal_detail(f"unjudged: judge refused {failure.code.value}: {failure.detail}"),
+    ), "accept"
+
+
 AcquisitionControl = Callable[[SourceOperation, int, int], SourceAcquisitionSnapshot]
 
 if TYPE_CHECKING:
@@ -91,17 +117,17 @@ if TYPE_CHECKING:
 
 
 class CollectionSession:
-    """One run's state, reused by research rounds without resetting its budget."""
+    """One run's state, reused by research rounds without resetting its spend."""
 
     def __init__(
         self,
         goal: Goal,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         graph: ResearchGraph | None,
         source_work: "SourceWorkStore | None" = None,
     ) -> None:
-        self.goal, self.budget, self.ledger, self.graph = goal, budget, ledger, graph
+        self.goal, self.spend, self.ledger, self.graph = goal, spend, ledger, graph
         self.source_work = source_work
         self._processing: SourceProcessingWork | None = None
         self._processing_read: SourceProcessingRead | None = None
@@ -110,7 +136,7 @@ class CollectionSession:
         self._frontier: list[tuple[float, str, int]] = []
         self._local_frontier: list[LocalSourceRequest] = []
         self._visited: set[str] = set()
-        self._reference_book = ReferenceBook(budget.config)
+        self._reference_book = ReferenceBook(spend.config)
         self._reference_scopes: dict[str, Scope] = {}
         self._reference_hops: dict[str, int] = {}
         self._reference_origins: dict[str, str] = {}
@@ -118,12 +144,14 @@ class CollectionSession:
         self._driving = False
         self._closed = False
         self._operating = False
-        self._slots = StageSlots(budget.config.execution, budget)
+        self._slots = StageSlots(spend.config.execution, spend)
         self._semantic_locks: dict[str, asyncio.Lock] = {}
         self._semantic_sources: set[str] = set()
-        self._content = (
-            ContentIndex(budget.config.dedup) if budget.config.dedup is not None else None
-        )
+        self._content = ContentIndex(spend.config.dedup) if spend.config.dedup is not None else None
+        # The cause carried by a `failed` stop row.
+        self.failure_detail: str | None = None
+        # Where a page that yielded no text at all keeps its fetched bytes.
+        self.refused_archive: Path | None = None
 
     @property
     def documents(self) -> tuple[Document, ...]:
@@ -179,7 +207,7 @@ class CollectionSession:
 
     def claim_cited_by(self, document: Document) -> bool:
         """Reserve a source-derived query once, before I/O, across research rounds."""
-        policy = self.budget.config.references
+        policy = self.spend.config.references
         if (
             policy is None
             or not policy.discover_cited_by
@@ -189,7 +217,7 @@ class CollectionSession:
         return self._reference_book.claim_query(document)
 
     def checkpoint_state(self) -> SessionState:
-        if self._closed or self._operating or not self.budget.quiescent:
+        if self._closed or self._operating or not self.spend.quiescent:
             raise ValueError("checkpoint requires a quiescent live collection session")
         if self.source_work is not None:
             self.source_work.assert_quiescent()
@@ -199,7 +227,7 @@ class CollectionSession:
         if (
             self._closed
             or self._operating
-            or not self.budget.quiescent
+            or not self.spend.quiescent
             or self.source_work is None
             or not self._driving
         ):
@@ -359,7 +387,7 @@ class GoalLoop:
         return self._judge.model
 
     async def open(self, goal: Goal, *, run_id: str | None = None) -> CollectionSession:
-        budget = RunBudget(self._config, self._clock)
+        spend = RunSpend(self._config, self._clock)
         if self._config.journal is not None:
             if run_id is None:
                 raise GhimeraRefused(RefusalCode.LEDGER_SINK_FAILED)
@@ -401,7 +429,9 @@ class GoalLoop:
                 await graph.start(goal.text)
                 for seed in goal.seeds:
                     await graph.discovered(seed, graph.intent_id)
-            return CollectionSession(goal, budget, ledger, graph, source_work)
+            session = CollectionSession(goal, spend, ledger, graph, source_work)
+            session.refused_archive = self._refused_archive(run_id)
+            return session
         except BaseException:
             if source_work is not None:
                 source_work.close()
@@ -420,7 +450,7 @@ class GoalLoop:
         acquisition: SourceAcquisitionRead | None = None,
         processing: SourceProcessingRead | None = None,
     ) -> CollectionSession:
-        """Resume the exact durable run; no new identity, calls or budget reset."""
+        """Resume the exact durable run; no new identity, calls or spend reset."""
         from ghimera.journal import DirectoryLedgerSink
 
         if (
@@ -443,9 +473,7 @@ class GoalLoop:
             encoding_calls, encoding_chars = encoding_usage(self._config, rows)
             receipt = receipt.model_copy(
                 update={
-                    "judge_calls": validate_model_rows(
-                        self._config.model_work, self._config.judge_budget, rows
-                    ),
+                    "judge_calls": validate_model_rows(self._config.model_work, rows),
                     "fetches": count_fetch_attempts(self._config, rows),
                     "bytes_read": sum(row.bytes_read for row in rows),
                     "encoding_calls": encoding_calls,
@@ -481,9 +509,7 @@ class GoalLoop:
             rows = verified.journal.rows
             receipt = receipt.model_copy(
                 update={
-                    "judge_calls": validate_model_rows(
-                        self._config.model_work, self._config.judge_budget, rows
-                    ),
+                    "judge_calls": validate_model_rows(self._config.model_work, rows),
                     "fetches": count_fetch_attempts(self._config, rows),
                     "bytes_read": sum(row.bytes_read for row in rows),
                 }
@@ -506,13 +532,13 @@ class GoalLoop:
                 source_work = SourceWorkStore.resume(
                     self._config, run_id, len(rows), acquisition=acquisition, processing=processing
                 )
-            budget = RunBudget(self._config, self._clock)
+            spend = RunSpend(self._config, self._clock)
             admission = (
                 (model_return.decision or model_return.attempt)
                 if model_return is not None
                 else None
             )
-            budget.restore(receipt, rows, search_calls, downtime_seconds, admission)
+            spend.restore(receipt, rows, search_calls, downtime_seconds, admission)
             graph = None
             if self._config.graph is not None and self._config.graph.enabled:
                 graph_sink = self._graph_sink or DirectoryGraphSink(self._config.graph, run_id)
@@ -597,7 +623,8 @@ class GoalLoop:
                     )
                 if processing is None and graph.snapshot() != harvest.graph:
                     raise ValueError("graph changed after the research checkpoint; reconcile first")
-            session = CollectionSession(harvest.goal, budget, ledger, graph, source_work)
+            session = CollectionSession(harvest.goal, spend, ledger, graph, source_work)
+            session.refused_archive = self._refused_archive(run_id)
             session.restore_state(state, harvest)
             session._processing_read = processing
             return session
@@ -659,10 +686,10 @@ class GoalLoop:
 
     async def _resolve_identity(self, session: CollectionSession) -> None:
         if self._identity is not None:
-            if session.graph is None or session.budget.config != self._config:
+            if session.graph is None or session.spend.config != self._config:
                 raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
             await self._identity.run(
-                session.goal.text, session.graph, session.budget, session.ledger
+                session.goal.text, session.graph, session.spend, session.ledger
             )
 
     async def resolve_identity(self, session: CollectionSession) -> None:
@@ -682,7 +709,7 @@ class GoalLoop:
         if (
             work is None
             or session._operating
-            or not session.budget.quiescent
+            or not session.spend.quiescent
             or not session._driving
         ):
             raise ValueError(
@@ -737,11 +764,11 @@ class GoalLoop:
                 )
         if (
             result is None
-            and session.budget.fetches - session._window_start >= self._config.saturation_window
+            and session.spend.fetches - session._window_start >= self._config.saturation_window
         ):
             if session._window_new < self._config.saturation_min_new:
                 return "saturated"
-            session._window_start, session._window_new = session.budget.fetches, 0
+            session._window_start, session._window_new = session.spend.fetches, 0
         return result
 
     async def process_processing(
@@ -766,7 +793,6 @@ class GoalLoop:
         parent_hops = request.reference_hops if isinstance(request, SourceRequest) else 0
         try:
             with session.serial_driver(), session.operation():
-                session.budget.check_time()
                 result = await self._process_page(
                     session, page, request.url, depth, scope, parent_hops
                 )
@@ -786,7 +812,7 @@ class GoalLoop:
             )
             raise
         except (GhimeraRefused, TimeoutError) as exc:
-            code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+            code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BOUND_EXCEEDED
             if code in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}:
                 raise
             session.ledger.append(
@@ -800,10 +826,10 @@ class GoalLoop:
             )
             work.refused(token, code.value, session.ledger.next_sequence)
             raise
-        if session.budget.fetches - session._window_start >= self._config.saturation_window:
+        if session.spend.fetches - session._window_start >= self._config.saturation_window:
             if session._window_new < self._config.saturation_min_new:
                 return "saturated"
-            session._window_start, session._window_new = session.budget.fetches, 0
+            session._window_start, session._window_new = session.spend.fetches, 0
         return None
 
     async def _import_local(
@@ -815,7 +841,7 @@ class GoalLoop:
         acquired: "SourceWorkToken | None" = None,
     ) -> None:
         """Admit local snapshots before planning, through the shared document pipeline."""
-        if session._closed or session.budget.config != self._config:
+        if session._closed or session.spend.config != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         policy = self._config.local_inputs
         if seeds and policy is None:
@@ -823,7 +849,7 @@ class GoalLoop:
         if policy is None:
             return
         loader = LocalInputLoader(policy)
-        budget, ledger = session.budget, session.ledger
+        spend, ledger = session.spend, session.ledger
         requests = tuple(
             LocalSourceRequest(
                 schema="ghimera.local-source-request/1",
@@ -893,7 +919,7 @@ class GoalLoop:
                             work.acquired(token, page)
                         else:
                             self._commit_acquisition(
-                                session, token, page, acquisition_control, budget.fetches
+                                session, token, page, acquisition_control, spend.fetches
                             )
                 if cancelled:
                     raise asyncio.CancelledError
@@ -904,14 +930,11 @@ class GoalLoop:
                 with session.operation() if acquisition_control is not None else nullcontext():
                     if work is not None and token is not None:
                         work.processing(token)
-                    if acquisition_control is not None:
-                        budget.check_time()
                     if session.graph is not None and (
                         self._config.research_recovery is None
                         or self._config.research_recovery.source_processing is None
                     ):
                         await session.graph.discovered(seed.source_id, session.graph.intent_id)
-                    budget.check_time()
                     result = await self._process_page(session, page, seed.source_id, 0, None, 0)
                     if work is not None and token is not None:
                         work.processed(token, result, ledger.next_sequence)
@@ -936,7 +959,7 @@ class GoalLoop:
             except (GhimeraRefused, TimeoutError) as exc:
                 if isinstance(exc, ExtractionFailure):
                     self._record_parse_attempts(ledger, exc.attempts)
-                code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+                code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BOUND_EXCEEDED
                 if code in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}:
                     # A failed graph acknowledgement is unresolved, not a known refusal.
                     raise
@@ -947,28 +970,34 @@ class GoalLoop:
                         url=seed.source_id,
                         refusal=code,
                         reason="local_document_processing_refused",
+                        detail=exc.detail
+                        if isinstance(exc, GhimeraRefused)
+                        else "a local document's deadline passed",
                     )
                 )
                 if work is not None and token is not None:
                     work.refused(token, code.value, ledger.next_sequence)
-                raise GhimeraRefused(code) from None
+                if code in CONTRACT_FAILURES:
+                    raise GhimeraRefused(
+                        code, exc.detail if isinstance(exc, GhimeraRefused) else None
+                    ) from None
+                # One local document's refusal refuses that document only.
 
     async def _read_local(
         self, session: CollectionSession, loader: LocalInputLoader, seed: LocalDocumentSeed
     ) -> tuple[LocalInputSnapshot | None, RefusalCode | None, bool]:
         """Account and drain the bounded reader before acknowledging its outcome."""
-        budget, ledger = session.budget, session.ledger
-        allowance = budget.reserve_local_input()
+        spend, ledger = session.spend, session.ledger
+        allowance = spend.reserve_local_input()
         started = self._clock()
         snapshot, failure, code = None, None, None
         cancelled = False
         task = asyncio.create_task(asyncio.to_thread(loader.read, seed, max_bytes=allowance))
         try:
             try:
-                async with asyncio.timeout(budget.remaining_seconds):
-                    snapshot = await asyncio.shield(task)
+                snapshot = await asyncio.shield(task)
             except TimeoutError:
-                code = RefusalCode.BUDGET_EXHAUSTED
+                code = RefusalCode.BOUND_EXCEEDED
             except asyncio.CancelledError:
                 cancelled, code = True, RefusalCode.LOCAL_INPUT_FAILED
             except LocalInputFailure as exc:
@@ -1009,11 +1038,11 @@ class GoalLoop:
                     latency_seconds=max(0.0, self._clock() - started),
                 )
             )
-            budget.local_input_bytes += read
-            budget.record_bytes(read)
+            spend.local_input_bytes += read
+            spend.record_bytes(read)
             return snapshot, code, cancelled
         finally:
-            budget.release_bytes(allowance)
+            spend.release_bytes(allowance)
 
     async def collect(
         self,
@@ -1062,7 +1091,7 @@ class GoalLoop:
                 result = await self._collect_serial(
                     session, scope, seeds, fetch_limit=fetch_limit, allow_grade=allow_grade
                 )
-            if result not in {"failed", "budget_exhausted"}:
+            if result != "failed":
                 await self._resolve_identity(session)
             return result
 
@@ -1077,19 +1106,19 @@ class GoalLoop:
         starting_fetches: int | None,
         acquisition_control: AcquisitionControl | None = None,
     ) -> CollectionStop:
-        if session._closed or session.budget.config != self._config or fetch_limit <= 0:
+        if session._closed or session.spend.config != self._config or fetch_limit <= 0:
             raise ValueError("source completion requires its original positive collection quantum")
-        budget, work = session.budget, session.source_work
+        spend, work = session.spend, session.source_work
         if work is None:
             raise ValueError("completed source control lost its native store")
-        start = budget.fetches if starting_fetches is None else starting_fetches
-        if not 0 <= start <= budget.fetches:
+        start = spend.fetches if starting_fetches is None else starting_fetches
+        if not 0 <= start <= spend.fetches:
             raise ValueError("original collection cursor exceeds acknowledged spend")
         for seed in seeds:
             if seed not in session._visited:
                 session.queue_source(scope, seed, 0, -1.0)
         while session._frontier:
-            if budget.fetches - start >= fetch_limit:
+            if spend.fetches - start >= fetch_limit:
                 return "round_limit"
             _, url, depth = heapq.heappop(session._frontier)
             if url in session._visited:
@@ -1125,12 +1154,12 @@ class GoalLoop:
             stop: CollectionStop | None = result
             if (
                 stop is None
-                and budget.fetches - session._window_start >= self._config.saturation_window
+                and spend.fetches - session._window_start >= self._config.saturation_window
             ):
                 if session._window_new < self._config.saturation_min_new:
                     stop = "saturated"
                 else:
-                    session._window_start, session._window_new = budget.fetches, 0
+                    session._window_start, session._window_new = spend.fetches, 0
             if completed:
                 token, document = completed[0]
 
@@ -1158,19 +1187,19 @@ class GoalLoop:
         fetch_limit: int | None,
         allow_grade: bool,
     ) -> CollectionStop:
-        if session._closed or session.budget.config != self._config:
+        if session._closed or session.spend.config != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if fetch_limit is not None and fetch_limit <= 0:
             raise ValueError("collection quantum must be positive")
-        budget = session.budget
+        spend = session.spend
         frontier, visited = session._frontier, session._visited
         for seed in seeds:
             if seed not in visited:
                 session.queue_source(scope, seed, 0, -1.0)
-        starting_fetches = budget.fetches
+        starting_fetches = spend.fetches
         stop: CollectionStop = "frontier_empty"
         while frontier:
-            if fetch_limit is not None and budget.fetches - starting_fetches >= fetch_limit:
+            if fetch_limit is not None and spend.fetches - starting_fetches >= fetch_limit:
                 stop = "round_limit"
                 break
             _, url, depth = heapq.heappop(frontier)
@@ -1182,13 +1211,13 @@ class GoalLoop:
             if result is not None:
                 stop = result
                 break
-            if budget.fetches - session._window_start >= self._config.saturation_window:
+            if spend.fetches - session._window_start >= self._config.saturation_window:
                 if session._window_new < self._config.saturation_min_new:
                     stop = "saturated"
                     break
-                session._window_start, session._window_new = budget.fetches, 0
-            if allow_grade and budget.fetches - session._last_grade >= self._config.grade_interval:
-                result = await self._grade_prefix(session, session.documents, budget.fetches)
+                session._window_start, session._window_new = spend.fetches, 0
+            if allow_grade and spend.fetches - session._last_grade >= self._config.grade_interval:
+                result = await self._grade_prefix(session, session.documents, spend.fetches)
                 if result is not None:
                     stop = result
                     break
@@ -1205,10 +1234,9 @@ class GoalLoop:
         acquisition: "list[tuple[SourceWorkToken, Page]] | None" = None,
         acquired: "SourceWorkToken | None" = None,
     ) -> CollectionStop | None:
-        budget, ledger = session.budget, session.ledger
+        spend, ledger = session.spend, session.ledger
         work, token = session.source_work, acquired
         try:
-            budget.check_time()
             active_scope = session._reference_scopes.get(url, scope)
             parent_hops = session._reference_hops.get(url, 0)
             if depth > active_scope.max_depth:
@@ -1245,7 +1273,7 @@ class GoalLoop:
                         ),
                         ledger.next_sequence,
                     )
-                page = await self._fetcher.fetch(url, active_scope, budget, ledger)
+                page = await self._fetcher.fetch(url, active_scope, spend, ledger)
                 if acquisition is not None:
                     if token is None:
                         raise ValueError("acquisition cursor requires native source work")
@@ -1284,7 +1312,7 @@ class GoalLoop:
         except (GhimeraRefused, TimeoutError) as exc:
             if isinstance(exc, ExtractionFailure):
                 self._record_parse_attempts(ledger, exc.attempts)
-            code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+            code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BOUND_EXCEEDED
             if code in {RefusalCode.GRAPH_CONTRACT, RefusalCode.GRAPH_SINK_FAILED}:
                 raise
             ledger.append(
@@ -1303,15 +1331,14 @@ class GoalLoop:
                 work.refused(token, code.value, ledger.next_sequence)
             elif work is not None:
                 session.discard_source(scope, url, depth, code.value)
-            if code == RefusalCode.BUDGET_EXHAUSTED and (
-                isinstance(exc, BudgetExhausted) or budget.exhausted_ceiling() is not None
-            ):
-                # Only a declared RUN ceiling ends collection. A page's own bound
-                # (a reader deadline, one oversized response) refuses that page.
-                return "budget_exhausted"
+            # There are no run ceilings. A page's own input bound (a reader
+            # deadline, one oversized response) refuses that page only.
             # A model or encoder that stays unavailable after its bounded retries
             # refuses this page only; the round continues with the other sources.
             if isinstance(exc, SemanticRecoveryStopped) or code == RefusalCode.ADAPTER_CONTRACT:
+                session.failure_detail = f"{code.value} at {url}: " + (
+                    exc.detail if isinstance(exc, GhimeraRefused) else "deadline passed"
+                )
                 return "failed"
         return None
 
@@ -1325,46 +1352,44 @@ class GoalLoop:
         allow_grade: bool,
     ) -> CollectionStop:
         policy = self._config.execution
-        if policy is None or session._closed or session.budget.config != self._config:
+        if policy is None or session._closed or session.spend.config != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if fetch_limit is not None and fetch_limit <= 0:
             raise ValueError("collection quantum must be positive")
-        budget, frontier, visited = session.budget, session._frontier, session._visited
+        spend, frontier, visited = session.spend, session._frontier, session._visited
         for seed in seeds:
             if seed not in visited:
                 session.queue_source(scope, seed, 0, -1.0)
-        start = budget.fetches
+        start = spend.fetches
         sources: dict[asyncio.Task[CollectionStop | None], int] = {}
         source_requests: dict[asyncio.Task[CollectionStop | None], tuple[str, int]] = {}
         grade: asyncio.Task[CollectionStop | None] | None = None
         graded_documents: int | None = None
-        grading_stopped = False
         admitted = 0
         halt: CollectionStop | None = None
         try:
             while True:
                 # Never infer saturation from pages still being processed.
-                window_due = budget.fetches - session._window_start >= (
+                window_due = spend.fetches - session._window_start >= (
                     self._config.saturation_window
                 )
                 draining_window = window_due and session._window_new < (
                     self._config.saturation_min_new
                 )
                 if window_due and not draining_window:
-                    session._window_start, session._window_new = budget.fetches, 0
+                    session._window_start, session._window_new = spend.fetches, 0
                 if draining_window and not sources:
                     return "saturated"
-                if halt is None:
-                    if budget.remaining_seconds <= 0 or budget.remaining_bytes <= 0:
-                        halt = "budget_exhausted"
-                    elif reached(budget.fetches, self._config.page_budget):
-                        halt = "budget_exhausted"
-                    elif fetch_limit is not None and budget.fetches - start >= fetch_limit:
-                        halt = "round_limit"
+                if (
+                    halt is None
+                    and fetch_limit is not None
+                    and spend.fetches - start >= fetch_limit
+                ):
+                    halt = "round_limit"
                 while frontier and len(sources) < policy.active_sources and halt is None:
                     if draining_window or (
                         fetch_limit is not None
-                        and budget.fetches - start + len(sources) >= fetch_limit
+                        and spend.fetches - start + len(sources) >= fetch_limit
                     ):
                         break
                     _, url, depth = heapq.heappop(frontier)
@@ -1381,10 +1406,8 @@ class GoalLoop:
                 if (
                     grade is None
                     and allow_grade
-                    and not grading_stopped
-                    and budget.remaining_seconds > 0
                     and (
-                        budget.fetches - session._last_grade >= self._config.grade_interval
+                        spend.fetches - session._last_grade >= self._config.grade_interval
                         or (
                             not frontier
                             and not sources
@@ -1396,7 +1419,7 @@ class GoalLoop:
                     # The immutable accepted-document prefix is graded while
                     # independent source tasks continue, not after a full drain.
                     grade = asyncio.create_task(
-                        self._grade_prefix(session, session.documents, budget.fetches)
+                        self._grade_prefix(session, session.documents, spend.fetches)
                     )
                     graded_documents = len(session.documents)
                 tasks = set(sources)
@@ -1410,8 +1433,6 @@ class GoalLoop:
                     result = task.result()
                     if task is grade:
                         grade = None
-                        if result == "budget_exhausted":
-                            grading_stopped = True
                     else:
                         del sources[task]
                         del source_requests[task]
@@ -1419,8 +1440,6 @@ class GoalLoop:
                         decision = result
                     elif result == "goal_satisfied" and decision is None:
                         decision = result
-                    if result == "budget_exhausted":
-                        halt = result
                 if decision is not None:
                     return decision
         finally:
@@ -1451,24 +1470,23 @@ class GoalLoop:
     async def _grade_prefix(
         self, session: CollectionSession, documents: tuple[Document, ...], fetches: int
     ) -> CollectionStop | None:
-        budget, ledger = session.budget, session.ledger
+        spend, ledger = session.spend, session.ledger
         reserved = False
 
         try:
             async with session._slots.slot("judge"):
                 invocation = ModelInvocation(
-                    budget,
+                    spend,
                     ledger,
                     phase="grade",
                     model=self._judge.model,
-                    request=port_input(budget, session.goal, *documents),
+                    request=port_input(spend, session.goal, *documents),
                 )
                 reserved = True
-                async with asyncio.timeout(budget.remaining_seconds):
-                    grade = await invocation.invoke(
-                        lambda: self._judge.grade(session.goal, documents),
-                        record_output,
-                    )
+                grade = await invocation.invoke(
+                    lambda: self._judge.grade(session.goal, documents),
+                    record_output,
+                )
         except asyncio.CancelledError as exc:
             if reserved:
                 ledger.append(
@@ -1483,7 +1501,7 @@ class GoalLoop:
                 )
             raise asyncio.CancelledError from None
         except (GhimeraRefused, TimeoutError) as exc:
-            code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BUDGET_EXHAUSTED
+            code = exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BOUND_EXCEEDED
             if reserved:
                 ledger.append(
                     LedgerRow(
@@ -1495,7 +1513,15 @@ class GoalLoop:
                         reason="served_grade_failed",
                     )
                 )
-            return "budget_exhausted" if code == RefusalCode.BUDGET_EXHAUSTED else "failed"
+            # A grade that cannot be had (outage, input bound) is skipped;
+            # collection continues. Only a broken contract fails the run.
+            if code in CONTRACT_FAILURES:
+                session.failure_detail = (
+                    f"served grade {code.value}: "
+                    f"{exc.detail if isinstance(exc, GhimeraRefused) else 'deadline passed'}"
+                )
+                return "failed"
+            return None
         ledger.append(
             LedgerRow(
                 sequence=ledger.next_sequence,
@@ -1577,7 +1603,7 @@ class GoalLoop:
         parent_hops: int,
     ) -> Document | None:
         """One extraction/scoring/verdict/identity owner for web and local snapshots."""
-        goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
+        goal, spend, ledger, graph = session.goal, session.spend, session.ledger, session.graph
         documents, visited = session._documents, session._visited
         candidate = None
         processing = session._processing
@@ -1585,13 +1611,13 @@ class GoalLoop:
             processing.cursor.extracted if processing is not None and processing.resumed else None
         )
         extraction_started = self._clock()
-        async with session._slots.slot("extraction"), asyncio.timeout(budget.remaining_seconds):
+        async with session._slots.slot("extraction"):
             try:
                 extracted = (
                     retained
                     if retained is not None
                     else await self._pdf_transcription.extract(
-                        page, native=self._extractor, budget=budget, ledger=ledger
+                        page, native=self._extractor, spend=spend, ledger=ledger
                     )
                     if retained is not None or self._pdf_transcription is not None
                     else await self._extractor.extract(page)
@@ -1600,8 +1626,33 @@ class GoalLoop:
                 self._record_parse_attempts(ledger, exc.attempts)
                 # Preserve asyncio.timeout's exact CancelledError contract.
                 raise asyncio.CancelledError from None
+            except GhimeraRefused as exc:
+                # No text at all could be read: the page is refused, its fetched
+                # bytes are kept under the run so nothing is thrown away.
+                if exc.code != RefusalCode.CONTENT_TYPE_UNWANTED:
+                    archived = self._archive_refused(session, page)
+                    if archived is not None:
+                        exc.detail = refusal_detail(
+                            f"{exc.detail}; fetched bytes kept as {archived}"
+                        )
+                raise
         if retained is None and extracted.extraction is not None:
             self._record_parse_attempts(ledger, extracted.extraction.attempts)
+            fallback = extracted.extraction
+            if fallback.tier == "fallback_plain" and fallback.fallback_refusal is not None:
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="policy",
+                        url=page.final_url,
+                        refusal=None,
+                        reason="extraction_fallback_plain",
+                        detail=refusal_detail(
+                            f"rich tier refused {fallback.fallback_refusal.value}: "
+                            f"{fallback.fallback_detail or 'no detail'}; kept as plain body text"
+                        ),
+                    )
+                )
         if retained is None and (
             extracted.extraction is not None
             or extracted.document_parse is not None
@@ -1667,7 +1718,7 @@ class GoalLoop:
                 ranked = await self._scorer.resume_score(
                     goal,
                     extracted,
-                    budget,
+                    spend,
                     ledger,
                     original_start=len(processing.cursor.prefix_sha256),
                 )
@@ -1675,7 +1726,7 @@ class GoalLoop:
             else:
                 if processing is not None:
                     processing.save("scoring")
-                ranked = await self._scorer.score(goal, extracted, budget, ledger)
+                ranked = await self._scorer.score(goal, extracted, spend, ledger)
                 if processing is not None:
                     processing.save("scored", ranked=ranked)
         verdict = None
@@ -1698,13 +1749,20 @@ class GoalLoop:
                     else processing.cursor.first_disposition
                 ) or "hold"
             else:
-                verdict, disposition = await self._document_verdict(
-                    session,
-                    extracted,
-                    page.final_url if budget.config.document_judgment else url,
-                    second_look,
-                    source_sha256=hashlib.sha256(page.body).hexdigest(),
-                )
+                try:
+                    verdict, disposition = await self._document_verdict(
+                        session,
+                        extracted,
+                        page.final_url if spend.config.document_judgment else url,
+                        second_look,
+                        source_sha256=hashlib.sha256(page.body).hexdigest(),
+                    )
+                except GhimeraRefused as exc:
+                    if exc.code in CONTRACT_FAILURES:
+                        raise
+                    # A judge outage never drops a page or stops the round: the
+                    # page is kept unjudged and the refusal row stays in the ledger.
+                    verdict, disposition = unjudged(extracted, exc)
                 if processing is not None:
                     processing.save(
                         "judged" if disposition != "hold" or second_look else "scored",
@@ -1730,7 +1788,7 @@ class GoalLoop:
                         parent=page,
                         scope=active_scope,
                         fetcher=self._fetcher,
-                        budget=budget,
+                        spend=spend,
                         ledger=ledger,
                         language_hint=extracted.language,
                     )
@@ -1754,7 +1812,7 @@ class GoalLoop:
                     images = await self._visuals.collect_pdf(
                         goal=goal,
                         document=candidate,
-                        budget=budget,
+                        spend=spend,
                         ledger=ledger,
                         language_hint=extracted.language,
                     )
@@ -1836,11 +1894,11 @@ class GoalLoop:
                 if graph is None or document_node_id is None:
                     raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
                 lock = session._semantic_locks.setdefault(document_node_id, asyncio.Lock())
-                async with asyncio.timeout(budget.remaining_seconds), lock:
+                async with lock:
                     if document_node_id not in session._semantic_sources:
                         async with session._slots.slot("semantic"):
                             await self._semantics.extract(
-                                goal.text, candidate, document_node_id, graph, budget, ledger
+                                goal.text, candidate, document_node_id, graph, spend, ledger
                             )
                         session._semantic_sources.add(document_node_id)
             reference_policy = self._config.references
@@ -1904,8 +1962,8 @@ class GoalLoop:
         *,
         source_sha256: str | None = None,
     ) -> tuple[Verdict, Literal["accept", "reject", "hold"]]:
-        budget, ledger = session.budget, session.ledger
-        policy = budget.config.document_judgment
+        spend, ledger = session.spend, session.ledger
+        policy = spend.config.document_judgment
         context = None
         context_sequence = None
         if policy is not None:
@@ -1916,8 +1974,8 @@ class GoalLoop:
 
             rows = ledger.snapshot()
             try:
-                validate_reference_rows(budget.config, session.goal.text, rows)
-                validate_scoring_readings(budget.config, rows)
+                validate_reference_rows(spend.config, session.goal.text, rows)
+                validate_scoring_readings(spend.config, rows)
                 matching = tuple(
                     row
                     for row in rows
@@ -1925,7 +1983,7 @@ class GoalLoop:
                     and (row.scoring_source.source_url, row.scoring_source.source_sha256)
                     == (url, source_sha256)
                 )
-                if not matching or budget.config.models is None:
+                if not matching or spend.config.models is None:
                     raise ValueError("no exact original source-bound scoring observation")
                 context = select_scored_windows(
                     source_url=url,
@@ -1938,15 +1996,15 @@ class GoalLoop:
                     max_chars=policy.expanded_look_max_chars
                     if second_look
                     else policy.first_look_max_chars,
-                    window_chars=budget.config.models.judge.context.window_chars,
+                    window_chars=spend.config.models.judge.context.window_chars,
                     padding_chars=policy.padding_chars,
                 )
             except ValueError:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT) from None
         request = (
-            port_input(budget, session.goal, extracted, second_look=second_look)
+            port_input(spend, session.goal, extracted, second_look=second_look)
             if context is None
-            else (port_input(budget, session.goal, extracted, context, second_look=second_look))
+            else (port_input(spend, session.goal, extracted, context, second_look=second_look))
         )
         processing = session._processing
         stage = "second_verdict" if second_look else "first_verdict"
@@ -2006,7 +2064,7 @@ class GoalLoop:
 
             async def judge_once() -> Verdict:
                 invocation = ModelInvocation(
-                    budget,
+                    spend,
                     ledger,
                     phase="verdict",
                     model=self._judge.model,
@@ -2015,26 +2073,23 @@ class GoalLoop:
                     replay_intent_sequence=replay_sequence,
                 )
                 try:
-                    async with asyncio.timeout(budget.remaining_seconds):
-                        verdict = (
-                            invocation.replay(
-                                lambda stored: Verdict.model_validate_json(stored.body())
-                            )
-                            if replay_sequence is not None
-                            else await invocation.invoke(
-                                lambda: (
-                                    self._judge.scored_document(
-                                        session.goal, extracted, context, second_look=second_look
-                                    )
-                                    if isinstance(self._judge, ScoredDocumentJudge)
-                                    and context is not None
-                                    else self._judge.document(
-                                        session.goal, extracted, second_look=second_look
-                                    )
-                                ),
-                                record_output,
-                            )
+                    verdict = (
+                        invocation.replay(lambda stored: Verdict.model_validate_json(stored.body()))
+                        if replay_sequence is not None
+                        else await invocation.invoke(
+                            lambda: (
+                                self._judge.scored_document(
+                                    session.goal, extracted, context, second_look=second_look
+                                )
+                                if isinstance(self._judge, ScoredDocumentJudge)
+                                and context is not None
+                                else self._judge.document(
+                                    session.goal, extracted, second_look=second_look
+                                )
+                            ),
+                            record_output,
                         )
+                    )
                 except asyncio.CancelledError as exc:
                     ledger.append(
                         LedgerRow(
@@ -2050,9 +2105,7 @@ class GoalLoop:
                     raise asyncio.CancelledError from None
                 except (GhimeraRefused, TimeoutError) as exc:
                     code = (
-                        exc.code
-                        if isinstance(exc, GhimeraRefused)
-                        else RefusalCode.BUDGET_EXHAUSTED
+                        exc.code if isinstance(exc, GhimeraRefused) else RefusalCode.BOUND_EXCEEDED
                     )
                     ledger.append(
                         LedgerRow(
@@ -2149,7 +2202,7 @@ class GoalLoop:
         """Use native source context with provider-observed candidates, not invented URLs."""
         if (
             session._closed
-            or session.budget.config != self._config
+            or session.spend.config != self._config
             or (source not in session.evidence_documents)
         ):
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -2160,7 +2213,7 @@ class GoalLoop:
                 references=(),
             )
         )
-        return await self._scorer.score(session.goal, document, session.budget, session.ledger)
+        return await self._scorer.score(session.goal, document, session.spend, session.ledger)
 
     async def queue_reference(
         self,
@@ -2173,7 +2226,7 @@ class GoalLoop:
         *,
         origin_url: str | None = None,
     ) -> bool:
-        if session._closed or session.budget.config != self._config:
+        if session._closed or session.spend.config != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if source not in session.evidence_documents or (link.url, link.anchor) != (
             proof.target_url,
@@ -2216,7 +2269,7 @@ class GoalLoop:
         return True
 
     async def admit_retained(self, session: CollectionSession, original: RetainedOriginal) -> None:
-        """Reuse the current graph/stage/budget, never replay old source or model work."""
+        """Reuse the current graph/stage/spend, never replay old source or model work."""
         from ghimera.retained_graph import validate_original
 
         original = RetainedOriginal.model_validate(original.model_dump())
@@ -2225,7 +2278,7 @@ class GoalLoop:
         if (
             session._closed
             or session._operating
-            or session.budget.config != self._config
+            or session.spend.config != self._config
             or graph is None
         ):
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -2235,15 +2288,24 @@ class GoalLoop:
                 raise GhimeraRefused(RefusalCode.GRAPH_CONTRACT)
             return
         policy = self._config.research.retained_evidence if self._config.research else None
-        if policy is None or (
-            len(session._retained_sources) >= policy.max_source_documents
-            or sum(
-                len(item.document.model_dump_json().encode())
-                for item in (*session._retained_sources.values(), original)
+        if policy is None:
+            raise GhimeraRefused(
+                RefusalCode.ADAPTER_CONTRACT, "retained evidence is not configured"
             )
-            > policy.max_snapshot_bytes
-        ):
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        if len(session._retained_sources) >= policy.max_source_documents:
+            raise BoundExceeded(
+                "retained_evidence.max_source_documents",
+                len(session._retained_sources) + 1,
+                policy.max_source_documents,
+            )
+        snapshot_bytes = sum(
+            len(item.document.model_dump_json().encode())
+            for item in (*session._retained_sources.values(), original)
+        )
+        if snapshot_bytes > policy.max_snapshot_bytes:
+            raise BoundExceeded(
+                "retained_evidence.max_snapshot_bytes", snapshot_bytes, policy.max_snapshot_bytes
+            )
         with session.operation():
             work, token = session.source_work, None
             if work is not None:
@@ -2255,7 +2317,7 @@ class GoalLoop:
                 code = (
                     exc.code
                     if isinstance(exc, GhimeraRefused)
-                    else RefusalCode.BUDGET_EXHAUSTED
+                    else RefusalCode.BOUND_EXCEEDED
                     if isinstance(exc, TimeoutError)
                     else RefusalCode.SEMANTIC_EXTRACTION_FAILED
                 )
@@ -2313,7 +2375,7 @@ class GoalLoop:
         if self._semantics is not None:
             lock = session._semantic_locks.setdefault(document_id, asyncio.Lock())
             try:
-                async with asyncio.timeout(session.budget.remaining_seconds), lock:
+                async with lock:
                     if document_id not in session._semantic_sources:
                         async with session._slots.slot("semantic"):
                             await self._semantics.extract(
@@ -2321,7 +2383,7 @@ class GoalLoop:
                                 document,
                                 document_id,
                                 graph,
-                                session.budget,
+                                session.spend,
                                 session.ledger,
                                 record_terminal_refusal=True,
                             )
@@ -2330,7 +2392,7 @@ class GoalLoop:
                 code = (
                     exc.code
                     if isinstance(exc, GhimeraRefused)
-                    else RefusalCode.BUDGET_EXHAUSTED
+                    else RefusalCode.BOUND_EXCEEDED
                     if isinstance(exc, TimeoutError)
                     else RefusalCode.SEMANTIC_EXTRACTION_FAILED
                 )
@@ -2349,7 +2411,7 @@ class GoalLoop:
                 raise
 
     def finish(self, session: CollectionSession, stop: StopReason) -> Harvest:
-        if session._closed or session._operating or session.budget.config != self._config:
+        if session._closed or session._operating or session.spend.config != self._config:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         if session.source_work is not None:
             session.source_work.assert_quiescent()
@@ -2359,12 +2421,62 @@ class GoalLoop:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
         session._closed = True
         ledger = session.ledger
-        ledger.append(LedgerRow(sequence=ledger.next_sequence, event="stop", reason=stop))
+        ledger.append(
+            LedgerRow(
+                sequence=ledger.next_sequence,
+                event="stop",
+                reason=stop,
+                detail=self._failure_detail(session) if stop == "failed" else None,
+            )
+        )
         harvest = self.snapshot(session, stop)
         ledger.finish(harvest)
         if session.source_work is not None:
             session.source_work.close()
         return harvest
+
+    def _refused_archive(self, run_id: str | None) -> Path | None:
+        journal = self._config.journal
+        if journal is None or run_id is None:
+            return None
+        # A leading '.' is outside the run-id alphabet, so no store mistakes it for a run.
+        return journal.directory / ".refused-pages" / run_id
+
+    @staticmethod
+    def _archive_refused(session: CollectionSession, page: Page) -> str | None:
+        """Keep a refused page's fetched bytes under its run; never fail the run doing so."""
+        root = session.refused_archive
+        if root is None or not page.body:
+            return None
+        digest = hashlib.sha256(page.body).hexdigest()
+        try:
+            for directory in (root.parent, root):
+                directory.mkdir(mode=0o700, exist_ok=True)
+            target = root / digest
+            if not target.exists():
+                partial = root / (digest + ".partial")
+                descriptor = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(page.body)
+                os.replace(partial, target)
+        except OSError:
+            return None
+        return f".refused-pages/{root.name}/{digest}"
+
+    @staticmethod
+    def _failure_detail(session: CollectionSession) -> str:
+        """What failed: the recorded cause, else the last refusal row's code and detail."""
+        if session.failure_detail is not None:
+            return refusal_detail(session.failure_detail)
+        refused = next(
+            (row for row in reversed(session.ledger.snapshot()) if row.refusal is not None), None
+        )
+        if refused is None or refused.refusal is None:
+            return "failed without a recorded refusal row"
+        return refusal_detail(
+            f"{refused.refusal.value} at {refused.url or refused.event}: "
+            f"{refused.detail or refused.reason}"
+        )
 
     def _extraction_revision(self, extracted: Extracted) -> str:
         if extracted.source_feed is not None:
@@ -2375,9 +2487,9 @@ class GoalLoop:
 
     def snapshot(self, session: CollectionSession, stop: StopReason = "frontier_empty") -> Harvest:
         """Validated partial evidence; does not append stop or seal the journal."""
-        if session._operating or not session.budget.quiescent:
+        if session._operating or not session.spend.quiescent:
             raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-        goal, budget, ledger, graph = session.goal, session.budget, session.ledger, session.graph
+        goal, spend, ledger, graph = session.goal, session.spend, session.ledger, session.graph
         return Harvest(
             schema="chimera.harvest/2" if session._retained_sources else "chimera.harvest/1",
             goal=goal,
@@ -2385,13 +2497,13 @@ class GoalLoop:
             retained_sources=tuple(session._retained_sources.values()),
             ledger=ledger.snapshot(),
             receipt=Receipt(
-                fetches=budget.fetches,
-                bytes_read=budget.bytes_read,
-                judge_calls=budget.judge_calls,
-                encoding_calls=budget.encoding_calls,
-                encoding_chars=budget.encoding_chars,
+                fetches=spend.fetches,
+                bytes_read=spend.bytes_read,
+                judge_calls=spend.judge_calls,
+                encoding_calls=spend.encoding_calls,
+                encoding_chars=spend.encoding_chars,
                 accepted_documents=len(session.documents),
-                elapsed_seconds=budget.elapsed,
+                elapsed_seconds=spend.elapsed,
                 stop_reason=stop,
                 effective_config=self._config,
                 judge=self._judge.model,

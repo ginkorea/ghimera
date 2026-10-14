@@ -9,6 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from ghimera.model_types import ModelCallEvidence
+from ghimera.removed_ceilings import (
+    REMOVED_MODEL_WORK_CEILINGS,
+    REMOVED_RESULT_CEILINGS,
+    refuse_removed,
+)
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Count = Annotated[int, Field(strict=True, ge=0)]
@@ -37,22 +42,23 @@ class ModelResultsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["ghimera.model-results/1"] = Field(alias="schema")
     max_result_bytes: Annotated[int, Field(strict=True, gt=0)]
-    max_total_result_bytes: Annotated[int, Field(strict=True, gt=0)]
 
-    @model_validator(mode="after")
-    def bounded(self) -> "ModelResultsConfig":
-        if self.max_result_bytes > self.max_total_result_bytes:
-            raise ValueError("one retained result cannot exceed the total result budget")
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_RESULT_CEILINGS, "model_work.results.")
 
 
 class ModelWorkConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
     schema_version: Literal["ghimera.model-work/1"] = Field(alias="schema")
-    max_input_bytes: Annotated[int, Field(strict=True, gt=0)]
-    max_unanswered_calls: Annotated[int, Field(strict=True, gt=0)]
     uncertain_policy: Literal["hold"]
     results: ModelResultsConfig | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_MODEL_WORK_CEILINGS, "model_work.")
 
 
 class ModelStoredWire(BaseModel):

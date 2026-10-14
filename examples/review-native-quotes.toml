@@ -5,7 +5,6 @@
 schema = "ghimera.semantic-verification/4"
 prompt_profile = "native_quote_checks"
 model_role = "reviewer"
-max_calls_per_run = 256
 max_mentions_per_call = 4
 max_relations_per_call = 2
 max_coverage_findings = 4

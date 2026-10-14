@@ -197,7 +197,7 @@ def test_native_redirect_chain_is_admitted_before_each_contact_and_session_survi
         asyncio.run(with_browser(tmp_path, origin, operation, accept_downloads=True))
 
 
-@pytest.mark.parametrize("denial", ["robots", "scope", "browser", "budget", "limit", "loop"])
+@pytest.mark.parametrize("denial", ["robots", "scope", "browser", "bound", "limit", "loop"])
 def test_native_denied_redirect_is_never_contacted_and_cleanup_releases_page(tmp_path, denial):
     from patchright.async_api import Error
 
@@ -212,7 +212,7 @@ def test_native_denied_redirect_is_never_contacted_and_cleanup_releases_page(tmp
             admission = Admission(
                 denied={
                     "robots": RefusalCode.ROBOTS_DISALLOWED,
-                    "budget": RefusalCode.BUDGET_EXHAUSTED,
+                    "bound": RefusalCode.BOUND_EXCEEDED,
                 }.get(denial)
             )
             cfg = navigation_policy(max_redirects=1 if denial == "limit" else 3)
@@ -226,7 +226,7 @@ def test_native_denied_redirect_is_never_contacted_and_cleanup_releases_page(tmp
             )
             expected = {
                 "robots": "robots_disallowed",
-                "budget": "budget_exhausted",
+                "bound": "bound_exceeded",
                 "scope": "out_of_scope",
                 "browser": "out_of_scope",
                 "limit": "fetch_failed",

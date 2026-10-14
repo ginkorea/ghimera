@@ -24,6 +24,7 @@ from ghimera.model_http import (
 from ghimera.model_retry import transient_status
 from ghimera.models import ModelIdentity
 from ghimera.refusals import (
+    BoundExceeded,
     EncodingCancelled,
     EncodingFailure,
     GhimeraRefused,
@@ -114,15 +115,18 @@ class SelfHostedEncoder:
                 or any(len(text) > service.max_text_chars for text in inputs)
             ):
                 raise GhimeraRefused(
-                    RefusalCode.BUDGET_EXHAUSTED,
+                    RefusalCode.BOUND_EXCEEDED,
                     f"encoder batch of {len(inputs)} texts / {input_chars} chars exceeds "
                     f"max_batch_texts={service.max_batch_texts}, "
                     f"max_input_chars={service.max_input_chars} or "
-                    f"max_text_chars={service.max_text_chars}",
+                    f"max_text_chars={service.max_text_chars}; "
+                    "an input bound, not a spend limit",
                 )
             body = encoding_request(service, texts)
             if len(body) > service.max_request_bytes:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                raise BoundExceeded(
+                    "encoder max_request_bytes", len(body), service.max_request_bytes
+                )
             response = await self._http.post(body)
             if len(response.body) > service.max_response_bytes:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)

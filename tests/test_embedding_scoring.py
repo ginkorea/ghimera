@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
 from ghimera.embedding import SelfHostedEncoder
@@ -24,6 +23,7 @@ from ghimera.models import Extracted, Goal, Harvest, LinkCandidate, Scope
 from ghimera.refusals import EncodingCancelled, EncodingFailure, GhimeraRefused, RefusalCode
 from ghimera.scoring_config import ScoringConfig
 from ghimera.semantic_scoring import EmbeddingScorer
+from ghimera.spend import RunSpend
 
 
 def service(port, **changes):
@@ -71,8 +71,6 @@ def policy(cfg, refs, **changes):
         "schema": "chimera.scoring/1",
         "encoder": cfg,
         "references_sha256": refs.sha256,
-        "encoding_call_budget": 30,
-        "encoding_char_budget": 20000,
         "window_chars": 100,
         "overlap_chars": 10,
         "max_windows": 3,
@@ -223,7 +221,7 @@ def test_encoder_refusals_preserve_bounded_call_evidence(endpoint, failure):
     ],
 )
 def test_encoder_limits_refuse_before_io(endpoint, changes, texts):
-    with pytest.raises(EncodingFailure, match="budget_exhausted") as refused:
+    with pytest.raises(EncodingFailure, match="bound_exceeded") as refused:
         asyncio.run(SelfHostedEncoder(service(endpoint[0], **changes)).encode_batch(texts))
     assert not endpoint[1] and refused.value.call.response_bytes == 0
 
@@ -254,7 +252,7 @@ def test_semantic_scorer_binds_shelf_native_offsets_and_shared_spend(endpoint):
     service_cfg = service(endpoint[0])
     refs = references(service_cfg)
     scoring = policy(service_cfg, refs, max_windows=2)
-    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(run_config(scoring), lambda: 0.0), Ledger()
     document = Extracted(
         title="native",
         text="noise " * 50 + "港口 ports evidence",
@@ -269,7 +267,7 @@ def test_semantic_scorer_binds_shelf_native_offsets_and_shared_spend(endpoint):
     before = document.model_dump_json()
     ranked = asyncio.run(
         EmbeddingScorer(scoring, SelfHostedEncoder(service_cfg), refs).score(
-            Goal(text="ports"), document, budget, ledger
+            Goal(text="ports"), document, spend, ledger
         )
     )
     assert document.model_dump_json() == before
@@ -282,8 +280,8 @@ def test_semantic_scorer_binds_shelf_native_offsets_and_shared_spend(endpoint):
     assert [item.score for item in ranked] == [1.0, 0.8, 0.0, 0.0]
     observed = ledger.snapshot()
     calls = [row.encoding_call for row in observed if row.encoding_call is not None]
-    assert budget.encoding_calls == len(calls) == len(endpoint[1]) == 3
-    assert budget.encoding_chars == sum(call.input_chars for call in calls)
+    assert spend.encoding_calls == len(calls) == len(endpoint[1]) == 3
+    assert spend.encoding_chars == sum(call.input_chars for call in calls)
     evidence = observed[-1].similarity
     assert evidence.document_cosine == 1.0 and evidence.omitted_chars > 0
     assert evidence.references_sha256 == refs.sha256
@@ -294,24 +292,25 @@ def test_semantic_scorer_binds_shelf_native_offsets_and_shared_spend(endpoint):
         )
 
 
-def test_semantic_call_budget_reserves_before_spend_and_keeps_partial_ledger(endpoint):
+def test_semantic_calls_are_counted_without_a_call_ceiling(endpoint):
     cfg = service(endpoint[0], max_batch_texts=1)
     refs = references(cfg)
-    scoring = policy(cfg, refs, encoding_call_budget=1, max_windows=1)
-    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    scoring = policy(cfg, refs, max_windows=1)
+    spend, ledger = RunSpend(run_config(scoring), lambda: 0.0), Ledger()
     document = Extracted(
         title="native",
         text="ports",
         language="en",
         links=(LinkCandidate(url="https://example.org/ports"),),
     )
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
-        asyncio.run(
-            EmbeddingScorer(scoring, SelfHostedEncoder(cfg), refs).score(
-                Goal(text="ports"), document, budget, ledger
-            )
+    asyncio.run(
+        EmbeddingScorer(scoring, SelfHostedEncoder(cfg), refs).score(
+            Goal(text="ports"), document, spend, ledger
         )
-    assert budget.encoding_calls == len(endpoint[1]) == len(ledger.snapshot()) == 1
+    )
+    calls = [row.encoding_call for row in ledger.snapshot() if row.encoding_call is not None]
+    assert spend.encoding_calls == len(endpoint[1]) == len(calls) > 1
+    assert spend.encoding_chars == sum(call.input_chars for call in calls)
 
 
 def test_semantic_failure_is_accounted_and_does_not_fall_back_to_keywords(endpoint):
@@ -426,17 +425,17 @@ def test_encoding_cancellation_preserves_reserved_spend_and_partial_evidence():
 
             raise ModelWireCancelled(ModelHttpResponse(200, b"partial-vector", "application/json"))
 
-    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(run_config(scoring), lambda: 0.0), Ledger()
     with pytest.raises(EncodingCancelled):
         asyncio.run(
             EmbeddingScorer(scoring, SelfHostedEncoder(cfg, http=CancelledWire()), refs).score(
                 Goal(text="ports"),
                 Extracted(title="x", text="ports", language="en"),
-                budget,
+                spend,
                 ledger,
             )
         )
-    assert budget.encoding_calls == len(ledger.snapshot()) == 1
+    assert spend.encoding_calls == len(ledger.snapshot()) == 1
     assert ledger.snapshot()[0].encoding_call.outcome == "cancelled"
     assert ledger.snapshot()[0].encoding_call.response_bytes == len(b"partial-vector")
 
@@ -450,17 +449,17 @@ def test_injected_encoder_cannot_bypass_batch_validation(endpoint):
             result = await super().encode_batch(texts)
             return result.model_copy(update={"vectors": ((0.0, 0.0),)})
 
-    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(run_config(scoring), lambda: 0.0), Ledger()
     with pytest.raises(GhimeraRefused, match="adapter_contract"):
         asyncio.run(
             EmbeddingScorer(scoring, PoisonedEncoder(cfg), refs).score(
                 Goal(text="ports"),
                 Extracted(title="x", text="ports", language="en"),
-                budget,
+                spend,
                 ledger,
             )
         )
-    assert budget.encoding_calls == len(ledger.snapshot()) == 1
+    assert spend.encoding_calls == len(ledger.snapshot()) == 1
     assert ledger.snapshot()[0].encoding_call.outcome == "refused"
 
 
@@ -533,24 +532,24 @@ def test_separate_query_prefixes_share_spend_and_native_replay(endpoint):
     config = run_config(scoring)
     goal = Goal(text="港口 ports")
     document = Extracted(title="native", text="港口 evidence", language="zh")
-    budget, ledger = RunBudget(config, lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(config, lambda: 0.0), Ledger()
     scorer = EmbeddingScorer(
         scoring, SelfHostedEncoder(passage), query_encoder=SelfHostedEncoder(query)
     )
-    asyncio.run(scorer.score(goal, document, budget, ledger))
+    asyncio.run(scorer.score(goal, document, spend, ledger))
     before = ledger.snapshot()
     restored = Ledger(restored_rows=before)
     second = EmbeddingScorer(
         scoring, SelfHostedEncoder(passage), query_encoder=SelfHostedEncoder(query)
     )
-    asyncio.run(second.score(goal, document, budget, restored))
+    asyncio.run(second.score(goal, document, spend, restored))
     assert [item[1]["input"] for item in endpoint[1]] == [
         ["query: 港口 ports"],
         ["passage: 港口 evidence"],
         ["passage: 港口 evidence"],
     ]
-    assert budget.encoding_calls == 3
-    assert budget.encoding_chars == sum(len(item[1]["input"][0]) for item in endpoint[1])
+    assert spend.encoding_calls == 3
+    assert spend.encoding_chars == sum(len(item[1]["input"][0]) for item in endpoint[1])
     assert restored.snapshot()[: len(before)] == before
     assert sum(row.intent_reference is not None for row in restored.snapshot()) == 1
     from ghimera.scoring_validation import validate_reference_rows
@@ -585,35 +584,6 @@ def test_separate_query_full_harvest_readback_and_drift_refusal(endpoint):
         Harvest.model_validate(raw)
 
 
-def test_separate_query_keeps_charge_when_document_budget_exhausts(endpoint):
-    passage = service(endpoint[0], text_prefix="passage: ")
-    query = service(endpoint[0], text_prefix="query: ")
-    scoring = intent_policy(
-        passage,
-        schema="ghimera.scoring/2",
-        query_encoder=query,
-        max_windows=1,
-        encoding_call_budget=1,
-    )
-    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
-    scorer = EmbeddingScorer(
-        scoring, SelfHostedEncoder(passage), query_encoder=SelfHostedEncoder(query)
-    )
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
-        asyncio.run(
-            scorer.score(
-                Goal(text="ports"),
-                Extracted(title="native", text="ports", language="en"),
-                budget,
-                ledger,
-            )
-        )
-    assert budget.encoding_calls == 1
-    assert len(endpoint[1]) == 1
-    assert endpoint[1][0][1]["input"] == ["query: ports"]
-    assert sum(row.intent_reference is not None for row in ledger.snapshot()) == 1
-
-
 def test_intent_mode_is_explicit_and_preserves_pinned_serialization(endpoint):
     cfg = service(endpoint[0])
     refs = references(cfg)
@@ -638,14 +608,14 @@ def test_intent_mode_is_explicit_and_preserves_pinned_serialization(endpoint):
 def test_intent_is_encoded_once_with_original_unicode_and_prefix(endpoint):
     cfg = service(endpoint[0], text_prefix="query: ")
     scoring = intent_policy(cfg, max_windows=1)
-    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(run_config(scoring), lambda: 0.0), Ledger()
     scorer = EmbeddingScorer(scoring, SelfHostedEncoder(cfg))
     goal = Goal(text="港口 ports")
     doc = Extracted(title="native", text="港口 evidence", language="zh")
 
     async def run():
-        await scorer.score(goal, doc, budget, ledger)
-        await scorer.score(goal, doc, budget, ledger)
+        await scorer.score(goal, doc, spend, ledger)
+        await scorer.score(goal, doc, spend, ledger)
 
     asyncio.run(run())
     assert [item[1]["input"] for item in endpoint[1]] == [
@@ -662,8 +632,8 @@ def test_intent_is_encoded_once_with_original_unicode_and_prefix(endpoint):
         == hashlib.sha256(goal.text.encode()).hexdigest()
     )
     assert observation.references.chunks[0].vector == (1.0, 0.0)
-    assert budget.encoding_calls == len(endpoint[1]) == 3
-    assert budget.encoding_chars == sum(len(item[1]["input"][0]) for item in endpoint[1])
+    assert spend.encoding_calls == len(endpoint[1]) == 3
+    assert spend.encoding_chars == sum(len(item[1]["input"][0]) for item in endpoint[1])
     assert ledger.snapshot()[-1].similarity.document_cosine == 1.0
     assert ledger.snapshot()[-1].reason == "intent_cosine_not_probability"
 
@@ -672,23 +642,23 @@ def test_restored_intent_vectors_do_not_trigger_another_preparation_call(endpoin
     cfg = service(endpoint[0])
     scoring = intent_policy(cfg, max_windows=1)
     original_config = run_config(scoring)
-    budget, ledger = RunBudget(original_config, lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(original_config, lambda: 0.0), Ledger()
     goal = Goal(text="港口 ports")
     doc = Extracted(title="native", text="港口 evidence", language="zh")
     first = EmbeddingScorer(scoring, SelfHostedEncoder(cfg))
-    asyncio.run(first.score(goal, doc, budget, ledger))
+    asyncio.run(first.score(goal, doc, spend, ledger))
     before = ledger.snapshot()
     restored = Ledger(restored_rows=before)
-    resumed_budget = RunBudget(original_config, lambda: 0.0)
-    resumed_budget.encoding_calls = budget.encoding_calls
-    resumed_budget.encoding_chars = budget.encoding_chars
+    resumed_spend = RunSpend(original_config, lambda: 0.0)
+    resumed_spend.encoding_calls = spend.encoding_calls
+    resumed_spend.encoding_chars = spend.encoding_chars
     second = EmbeddingScorer(scoring, SelfHostedEncoder(cfg))
-    asyncio.run(second.score(goal, doc, resumed_budget, restored))
+    asyncio.run(second.score(goal, doc, resumed_spend, restored))
     assert len(endpoint[1]) == 3  # original intent, original document, new document
     assert endpoint[1][-1][1]["input"] == ["港口 evidence"]
     assert sum(row.intent_reference is not None for row in restored.snapshot()) == 1
     assert restored.snapshot()[: len(before)] == before
-    assert resumed_budget.encoding_calls == 3
+    assert resumed_spend.encoding_calls == 3
 
 
 def test_concurrent_scores_share_preparation_but_runs_never_share_intents(endpoint):
@@ -696,8 +666,8 @@ def test_concurrent_scores_share_preparation_but_runs_never_share_intents(endpoi
     scoring = intent_policy(cfg, max_windows=1)
     scorer = EmbeddingScorer(scoring, SelfHostedEncoder(cfg))
     document = Extracted(title="native", text="ports", language="en")
-    first = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
-    second = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    first = RunSpend(run_config(scoring), lambda: 0.0), Ledger()
+    second = RunSpend(run_config(scoring), lambda: 0.0), Ledger()
 
     async def run():
         await asyncio.gather(
@@ -707,9 +677,9 @@ def test_concurrent_scores_share_preparation_but_runs_never_share_intents(endpoi
         )
 
     asyncio.run(run())
-    for budget, ledger in (first, second):
+    for spend, ledger in (first, second):
         assert len([row for row in ledger.snapshot() if row.intent_reference]) == 1
-        assert budget.encoding_calls == len([row for row in ledger.snapshot() if row.encoding_call])
+        assert spend.encoding_calls == len([row for row in ledger.snapshot() if row.encoding_call])
     assert first[1].snapshot()[-1].similarity.document_cosine == 1.0
     assert second[1].snapshot()[-1].similarity.document_cosine == -1.0
     assert len(endpoint[1]) == 5
@@ -796,34 +766,23 @@ def test_intent_reference_failure_keeps_spend_and_never_invents_vectors(endpoint
     assert Harvest.model_validate_json(result.model_dump_json()) == result
 
 
-@pytest.mark.parametrize("mode", ["calls", "chars", "oversized"])
-def test_intent_preparation_obeys_shared_budget_without_partial_truncation(endpoint, mode):
+def test_oversized_intent_is_refused_over_its_input_bound_without_truncation(endpoint):
     cfg = service(endpoint[0])
-    changes = {"max_windows": 1}
-    goal = "ports"
-    if mode == "calls":
-        changes["encoding_call_budget"] = 1
-    elif mode == "chars":
-        changes["encoding_char_budget"] = 4
-    else:
-        goal = "ports" * 100
-    scoring = intent_policy(cfg, **changes)
-    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
+    goal = "ports" * 100
+    scoring = intent_policy(cfg, max_windows=1)
+    spend, ledger = RunSpend(run_config(scoring), lambda: 0.0), Ledger()
+    with pytest.raises(GhimeraRefused, match="bound_exceeded"):
         asyncio.run(
             EmbeddingScorer(scoring, SelfHostedEncoder(cfg)).score(
                 Goal(text=goal),
                 Extracted(title="native", text="ports", language="en"),
-                budget,
+                spend,
                 ledger,
             )
         )
-    assert len(endpoint[1]) == (1 if mode == "calls" else 0)
-    assert budget.encoding_calls == len(endpoint[1])
+    assert len(endpoint[1]) == spend.encoding_calls == 0
     assert not any(row.similarity for row in ledger.snapshot())
-    assert len([row for row in ledger.snapshot() if row.intent_reference]) == (
-        1 if mode == "calls" else 0
-    )
+    assert not any(row.intent_reference for row in ledger.snapshot())
 
 
 def test_intent_research_and_durable_inspection_share_the_prepared_reference(endpoint, tmp_path):
@@ -894,18 +853,18 @@ def test_cancelled_intent_encoding_never_becomes_a_prepared_reference():
 
             raise ModelWireCancelled(ModelHttpResponse(200, b"partial-vector", "application/json"))
 
-    budget, ledger = RunBudget(run_config(scoring), lambda: 0.0), Ledger()
+    spend, ledger = RunSpend(run_config(scoring), lambda: 0.0), Ledger()
     scorer = EmbeddingScorer(scoring, SelfHostedEncoder(cfg, http=CancelledWire()))
     with pytest.raises(EncodingCancelled):
         asyncio.run(
             scorer.score(
                 Goal(text="ports"),
                 Extracted(title="native", text="ports", language="en"),
-                budget,
+                spend,
                 ledger,
             )
         )
-    assert budget.encoding_calls == len(ledger.snapshot()) == 1
+    assert spend.encoding_calls == len(ledger.snapshot()) == 1
     assert ledger.snapshot()[0].encoding_call.outcome == "cancelled"
     assert not any(row.intent_reference for row in ledger.snapshot())
 

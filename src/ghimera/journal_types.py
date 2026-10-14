@@ -102,9 +102,7 @@ class JournalReport(Record):
         from ghimera.run_encoding import validate_run_encoding_rows
 
         validate_run_encoding_rows(self.header.config, self.rows, header=self.header)
-        validate_model_rows(
-            self.header.config.model_work, self.header.config.judge_budget, self.rows
-        )
+        validate_model_rows(self.header.config.model_work, self.rows)
         from ghimera.model_reconciliation import validate_policy
 
         validate_policy(self.header.config, self.rows)

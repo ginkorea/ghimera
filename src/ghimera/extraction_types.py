@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ghimera.extraction_attempts import HtmlExtractionAttempt, validate_chain
 from ghimera.locator_types import LocatorEvent as LocatorEvent
 from ghimera.locator_types import LocatorHealth
+from ghimera.refusals import RefusalCode
 
 if TYPE_CHECKING:
     from ghimera.extraction_config import ExtractionConfig
@@ -44,9 +45,29 @@ class ExtractionEvidence(BaseModel):
     omitted_text_chars: Annotated[int, Field(strict=True, ge=0)] = Field(
         default=0, exclude_if=lambda value: value == 0
     )
+    # Page bytes past max_input_bytes that the reader did not read (cut, not refused).
+    omitted_bytes: Annotated[int, Field(strict=True, ge=0)] = Field(
+        default=0, exclude_if=lambda value: value == 0
+    )
+    # "fallback_plain": the rich tier failed and the page was kept as plain body
+    # text. The failed rich-tier attempts and refusal are retained beside it.
+    tier: Literal["fallback_plain"] | None = Field(default=None, exclude_if=lambda v: v is None)
+    fallback_attempts: tuple[HtmlExtractionAttempt, ...] = Field(
+        default=(), exclude_if=lambda v: not v
+    )
+    fallback_refusal: RefusalCode | None = Field(default=None, exclude_if=lambda v: v is None)
+    fallback_detail: str | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def attempt_binding(self) -> "ExtractionEvidence":
+        if (self.tier == "fallback_plain") != (self.fallback_refusal is not None) or (
+            self.tier is None and (self.fallback_attempts or self.fallback_detail is not None)
+        ):
+            raise ValueError("a plain fallback must name the rich-tier refusal it replaced")
+        if self.tier == "fallback_plain" and (
+            self.attempts or any(a.outcome == "success" for a in self.fallback_attempts)
+        ):
+            raise ValueError("a plain fallback follows only failed rich-tier attempts")
         if self.attempts:
             validate_chain(self.attempts)
             if self.attempts[-1].outcome != "success" or any(

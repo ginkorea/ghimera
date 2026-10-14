@@ -131,7 +131,7 @@ def test_command_preflight_bounds_credentials_and_request_before_outbound(
     opts.request_path.write_text(json.dumps({"intent": "ports" * 100}))
     from ghimera.refusals import GhimeraRefused
 
-    with pytest.raises(GhimeraRefused, match="budget_exhausted"):
+    with pytest.raises(GhimeraRefused, match="bound_exceeded"):
         asyncio.run(execute(opts, source_resolver=ResolverFixture()))
     opts.request_path.write_text(json.dumps({"intent": "find ports"}))
     small = opts.model_copy(update={"max_input_bytes": 1})

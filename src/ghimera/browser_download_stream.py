@@ -14,7 +14,7 @@ import zipfile
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from ghimera.document_media import DOCX_TYPE, DocumentMime
-from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.refusals import BoundExceeded, GhimeraRefused, RefusalCode
 
 if TYPE_CHECKING:
     from patchright.async_api import Download
@@ -83,7 +83,7 @@ async def read_download(
     body = bytearray()
     try:
         if limit <= 0:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BoundExceeded("browser download bytes", spend.bytes_read, spend.max_bytes)
         while True:
             size = min(chunk_bytes, limit - len(body) + 1)
             encoded: object = await stream._channel.send("read", None, {"size": size})
@@ -102,7 +102,10 @@ async def read_download(
             if not chunk:
                 break
             if len(body) + len(chunk) > limit:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                # A partial download is not a document; the file is refused whole.
+                raise BoundExceeded(
+                    "browser download max_file_bytes", len(body) + len(chunk), limit
+                )
             body.extend(chunk)
         if not body:
             raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED)

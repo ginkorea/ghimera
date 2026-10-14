@@ -89,13 +89,15 @@ class ContextSelector:
             key = (identity + reading_id, citation.start, citation.end)
             if key in windows:
                 continue
-            if used + len(citation.quote) > self._policy.max_chars:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            # Input bound, cut not refused: a required window that does not fit
+            # max_chars or max_documents is left out and counted as omitted.
+            if used + len(citation.quote) > self._policy.max_chars or (
+                identity not in chosen and len(chosen) >= self._policy.max_documents
+            ):
+                continue
             windows[key] = ContextWindow.from_citation(citation)
             chosen[identity] = doc
             used += len(citation.quote)
-        if len(chosen) > self._policy.max_documents:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
         terms = tuple(dict.fromkeys(re.findall(r"\w+", intent)))
         # Required answer citations always precede discretionary context.
         ordered = tuple(chosen.values()) + tuple(

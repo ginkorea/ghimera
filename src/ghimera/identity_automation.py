@@ -12,7 +12,6 @@ from itertools import combinations
 from time import monotonic
 from typing import Literal, Protocol, TypeVar
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.graph import ResearchGraph
 from ghimera.graph_types import (
@@ -40,7 +39,14 @@ from ghimera.ledger import Ledger
 from ghimera.model_types import IdentityCallEvidence
 from ghimera.model_work import ModelInvocation, port_input, record_output, uncertain_model_sequences
 from ghimera.models import LedgerRow, ModelIdentity
-from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
+from ghimera.refusals import (
+    BoundExceeded,
+    GhimeraRefused,
+    ModelCancelled,
+    ModelFailure,
+    RefusalCode,
+)
+from ghimera.spend import RunSpend
 
 T = TypeVar("T", IdentityProposal, IdentityReview)
 
@@ -171,7 +177,12 @@ def request_for(
         if len(request.model_dump_json()) <= policy.max_context_chars:
             return request
         if not selected:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BoundExceeded(
+                "identity_automation.max_context_chars",
+                len(request.model_dump_json()),
+                policy.max_context_chars,
+                "no pair fits the context",
+            )
         selected.pop()
 
 
@@ -371,7 +382,7 @@ class IdentityStage:
 
     async def _call(
         self,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         request: IdentityProposalRequest,
         phase: Literal["identity_propose", "identity_review"],
@@ -381,7 +392,7 @@ class IdentityStage:
         output: type[T],
         validate: Callable[[T], object],
     ) -> T:
-        data = port_input(budget, payload)
+        data = port_input(spend, payload)
         previous = tuple(
             row
             for row in ledger.snapshot()
@@ -408,24 +419,23 @@ class IdentityStage:
                     validate_result_binding(self.config, ledger.snapshot(), phase, payload, cached)
                     return output.model_validate(cached.model_dump())
         invocation = ModelInvocation(
-            budget,
+            spend,
             ledger,
             phase=phase,
             model=model,
             request=data,
-            reserve=budget.reserve_identity_proposal
+            reserve=spend.reserve_identity_proposal
             if phase == "identity_propose"
-            else budget.reserve_identity_review,
+            else spend.reserve_identity_review,
             replay_intent_sequence=previous[0].sequence if previous else None,
         )
         result: T | None = None
         try:
-            async with asyncio.timeout(budget.remaining_seconds):
-                result = (
-                    invocation.replay(lambda stored: output.model_validate_json(stored.body()))
-                    if previous
-                    else await invocation.invoke(invoke, record_output)
-                )
+            result = (
+                invocation.replay(lambda stored: output.model_validate_json(stored.body()))
+                if previous
+                else await invocation.invoke(invoke, record_output)
+            )
             validate(result)
         except (GhimeraRefused, ModelCancelled, TimeoutError, asyncio.CancelledError) as exc:
             ledger.append(
@@ -443,7 +453,7 @@ class IdentityStage:
                     if isinstance(exc, GhimeraRefused)
                     else RefusalCode.MODEL_UNAVAILABLE
                     if isinstance(exc, asyncio.CancelledError)
-                    else RefusalCode.BUDGET_EXHAUSTED,
+                    else RefusalCode.BOUND_EXCEEDED,
                     reason="identity_call_refused_or_cancelled",
                 )
             )
@@ -462,9 +472,7 @@ class IdentityStage:
         )
         return result
 
-    async def run(
-        self, intent: str, graph: ResearchGraph, budget: RunBudget, ledger: Ledger
-    ) -> None:
+    async def run(self, intent: str, graph: ResearchGraph, spend: RunSpend, ledger: Ledger) -> None:
         validate_identity_rows(self.config, ledger.snapshot(), graph.snapshot())
         unknown = set(uncertain_model_sequences(ledger.snapshot()))
         if any(
@@ -498,7 +506,7 @@ class IdentityStage:
         if not request.pairs:
             return
         proposal = await self._call(
-            budget,
+            spend,
             ledger,
             request,
             "identity_propose",
@@ -513,10 +521,16 @@ class IdentityStage:
             schema="ghimera.identity-review-request/1", request=request, proposal=proposal
         )
         policy = self.config.identity_automation
-        if policy is None or len(review_request.model_dump_json()) > policy.max_context_chars:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        if policy is None:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT, "identity automation is absent")
+        if len(review_request.model_dump_json()) > policy.max_context_chars:
+            raise BoundExceeded(
+                "identity_automation.max_context_chars",
+                len(review_request.model_dump_json()),
+                policy.max_context_chars,
+            )
         review = await self._call(
-            budget,
+            spend,
             ledger,
             request,
             "identity_review",
@@ -575,7 +589,7 @@ def validate_result_binding(
     call = result.model_call
     if call is None:
         raise ValueError("identity result has no original model call")
-    input_hash = hashlib.sha256(port_input(RunBudget(config, monotonic), payload)).hexdigest()
+    input_hash = hashlib.sha256(port_input(RunSpend(config, monotonic), payload)).hexdigest()
     intents = tuple(
         row
         for row in rows
@@ -662,12 +676,8 @@ def validate_identity_rows(
         and row.model_intent.phase in {"identity_propose", "identity_review"}
     )
     policy = config.identity_automation
-    if phases and (
-        policy is None
-        or phases["identity_propose"] > policy.max_proposal_calls
-        or phases["identity_review"] > policy.max_review_calls
-    ):
-        raise ValueError("identity original reservations exceed their explicit phase quotas")
+    if phases and policy is None:
+        raise ValueError("identity reservations require their configured automation")
     if not observed:
         if graph is not None and any(d.basis == "model_reviewed" for d in graph.identity_decisions):
             raise ValueError("unacknowledged identity graph effects remain held")

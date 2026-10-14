@@ -39,9 +39,7 @@ def recipe(tmp_path, **updates):
     data = dict(
         schema="ghimera.local-inputs/1",
         allowed_roots=[str(tmp_path)],
-        max_files_per_run=2,
         max_input_bytes=2_000_000,
-        max_total_bytes=4_000_000,
     )
     data.update(updates)
     return LocalInputConfig.model_validate(data)
@@ -257,29 +255,10 @@ def test_cancelling_an_input_read_drains_its_own_task_and_accounts_bytes(tmp_pat
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert session.budget._bytes_reserved == 0
+        assert session.spend._bytes_reserved == 0
         return collection.finish(session, "failed")
 
     result = asyncio.run(run())
     assert result.receipt.bytes_read == len(raw)
     assert result.receipt.fetches == result.receipt.judge_calls == 0
     assert result.ledger[0].event == "local_input" and result.ledger[0].refusal is not None
-
-
-def test_reused_session_enforces_local_file_and_byte_quota_before_read(tmp_path):
-    from ghimera.budget import RunBudget
-    from ghimera.refusals import RefusalCode
-
-    raw = configured(tmp_path).model_dump()
-    raw["local_inputs"] = recipe(tmp_path, max_files_per_run=1)
-    budget = RunBudget(GhimeraConfig.model_validate(raw), lambda: 0.0)
-    allowance = budget.reserve_local_input()
-    budget.release_bytes(allowance)
-    with pytest.raises(GhimeraRefused) as exc:
-        budget.reserve_local_input()
-    assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED
-    budget.local_inputs = 0
-    budget.local_input_bytes = budget.config.local_inputs.max_total_bytes
-    with pytest.raises(GhimeraRefused) as exc:
-        budget.reserve_local_input()
-    assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED

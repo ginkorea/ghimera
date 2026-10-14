@@ -7,7 +7,6 @@ prompt_profile = "defined_ontology"
 model_role = "analyst"
 window_chars = 1500
 max_windows_per_document = 64
-max_calls_per_run = 256
 max_mentions_per_window = 32
 max_relations_per_window = 32
 entity_roles = ["person", "organization", "position"]
@@ -37,7 +36,6 @@ definition = "The source explicitly identifies membership of this source person 
 [verification]
 schema = "ghimera.semantic-verification/2"
 model_role = "reviewer"
-max_calls_per_run = 256
 
-# Increase the configured output budget if actual dimensioned replies truncate.
+# Increase the configured output bound if actual dimensioned replies truncate.
 # Do not infer calibrated probability or corroboration from model agreement.

@@ -24,7 +24,7 @@ from ghimera.browser_types import (
     ResourceResponse,
     WorkerResult,
 )
-from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.refusals import BoundExceeded, GhimeraRefused, RefusalCode
 
 
 class CdpRequest(BaseModel):
@@ -237,7 +237,11 @@ async def render(request: BrowserRequest) -> RenderResult:
             def paused(value: object) -> None:
                 if len(pending) > config.max_resources:
                     if not failure.done():
-                        failure.set_exception(GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED))
+                        failure.set_exception(
+                            BoundExceeded(
+                                "browser.max_resources", len(pending), config.max_resources
+                            )
+                        )
                     return
                 task = asyncio.create_task(handle(value))
                 pending.add(task)
@@ -303,7 +307,9 @@ async def render(request: BrowserRequest) -> RenderResult:
                 raise GhimeraRefused(RefusalCode.OUT_OF_SCOPE)
             html = (await view.content()).encode()
             if len(html) > config.max_rendered_bytes:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+                raise BoundExceeded(
+                    "browser.max_rendered_bytes", len(html), config.max_rendered_bytes
+                )
             await context.close()
             return RenderResult(
                 schema="chimera.browser-render/1",

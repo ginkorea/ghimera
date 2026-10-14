@@ -13,8 +13,6 @@ from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
-from ghimera.ceilings import headroom
 from ghimera.config import GhimeraConfig
 from ghimera.graph import MemoryGraphSink, ResearchGraph
 from ghimera.graph_types import GraphEdge, GraphEvidence, GraphNode
@@ -24,7 +22,12 @@ from ghimera.model_config import ModelServiceConfig
 from ghimera.model_types import ModelCallEvidence
 from ghimera.model_work import ModelInvocation, port_input, record_output
 from ghimera.models import Document, Harvest, LedgerRow, ModelIdentity
-from ghimera.refusals import GhimeraRefused, ModelCancelled, ModelFailure, RefusalCode
+from ghimera.refusals import (
+    GhimeraRefused,
+    ModelCancelled,
+    ModelFailure,
+    RefusalCode,
+)
 from ghimera.semantic_batching import assemble_review, review_selections
 from ghimera.semantic_contract import build_graph_contract
 from ghimera.semantic_recovery import SemanticRecoveryStopped, failed_window
@@ -63,6 +66,7 @@ from ghimera.semantic_verification import (
     validate_review,
     validate_review_part,
 )
+from ghimera.spend import RunSpend
 
 MENTION_REVISION = "ghimera-source-mention/1"
 
@@ -342,7 +346,7 @@ class SemanticStage:
         document: Document,
         document_id: str,
         graph: ResearchGraph,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         *,
         record_terminal_refusal: bool = False,
@@ -352,7 +356,7 @@ class SemanticStage:
         if (
             policy is None
             or graph_policy is None
-            or budget.config != self._config
+            or spend.config != self._config
             or graph.config_digest != graph_policy.content_digest()
         ):
             raise GhimeraRefused(RefusalCode.SEMANTIC_EXTRACTION_FAILED)
@@ -406,13 +410,13 @@ class SemanticStage:
                 else None
             )
             invocation = ModelInvocation(
-                budget,
+                spend,
                 ledger,
                 phase="semantic_extract",
                 model=self._extractor.model,
                 url=document.url,
                 request=port_input(
-                    budget,
+                    spend,
                     document,
                     policy,
                     *((contract,) if contract is not None else ()),
@@ -425,7 +429,7 @@ class SemanticStage:
                     start=start,
                     end=end,
                 ),
-                reserve=budget.reserve_semantic,
+                reserve=spend.reserve_semantic,
             )
             call: ModelCallEvidence | None = None
             proposal: SemanticProposal | None = None
@@ -468,13 +472,10 @@ class SemanticStage:
                 )
 
             try:
-                async with asyncio.timeout(budget.remaining_seconds):
-                    extracted = await invocation.invoke(
-                        partial(
-                            self._extractor.semantic_extract, intent, document, start, end, policy
-                        ),
-                        record_output,
-                    )
+                extracted = await invocation.invoke(
+                    partial(self._extractor.semantic_extract, intent, document, start, end, policy),
+                    record_output,
+                )
                 call = extracted.model_call
                 validated = SemanticProposal.model_validate(extracted.model_dump())
                 validate_proposal(self._config, validated, document, start, end, intent)
@@ -487,7 +488,7 @@ class SemanticStage:
                     end,
                     policy,
                     proposal,
-                    budget,
+                    spend,
                     ledger,
                     plan,
                     selection_ref,
@@ -565,7 +566,7 @@ class SemanticStage:
                     if isinstance(exc, GhimeraRefused)
                     else RefusalCode.SEMANTIC_EXTRACTION_FAILED
                     if isinstance(exc, ValidationError)
-                    else RefusalCode.BUDGET_EXHAUSTED
+                    else RefusalCode.BOUND_EXCEEDED
                 )
                 if isinstance(exc, ModelFailure):
                     call = exc.model_call
@@ -591,12 +592,19 @@ class SemanticStage:
                     record_terminal=record_terminal_refusal or plan is not None,
                     selection=selection_ref,
                 )
-                self._failure(ledger, document.url, code, call, refusal)
+                detail = (
+                    exc.detail
+                    if isinstance(exc, GhimeraRefused)
+                    else "semantic window passed its service deadline"
+                    if isinstance(exc, TimeoutError)
+                    else "semantic reply failed validation"
+                )
+                self._failure(ledger, document.url, code, call, refusal, detail)
                 if refusal is not None and refusal.continued:
                     continue
                 if refusal is not None:
                     raise SemanticRecoveryStopped(code) from None
-                raise GhimeraRefused(code) from None
+                raise GhimeraRefused(code, detail) from None
 
     async def _review(
         self,
@@ -606,7 +614,7 @@ class SemanticStage:
         end: int,
         policy: SemanticConfig,
         proposal: SemanticProposal,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         native_selection: SemanticSelection | None = None,
         native_selection_ref: SemanticSelectionRef | None = None,
@@ -619,11 +627,6 @@ class SemanticStage:
             and verification.schema_version == "ghimera.semantic-verification/4"
         ):
             selections = review_selections(verification, proposal)
-            if len(selections) > min(
-                verification.max_calls_per_run - budget.semantic_review_calls,
-                headroom(budget.config.judge_budget, budget.judge_calls),
-            ):
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
             if isinstance(self._reviewer, SemanticReviewPreflight):
                 await self._reviewer.prepare_semantic_review(
                     intent, document, start, end, policy, proposal
@@ -637,7 +640,7 @@ class SemanticStage:
                     end,
                     policy,
                     proposal,
-                    budget,
+                    spend,
                     ledger,
                     selection,
                     native_selection,
@@ -658,7 +661,7 @@ class SemanticStage:
             end,
             policy,
             proposal,
-            budget,
+            spend,
             ledger,
             native_selection=native_selection,
             native_selection_ref=native_selection_ref,
@@ -672,7 +675,7 @@ class SemanticStage:
         end: int,
         policy: SemanticConfig,
         proposal: SemanticProposal,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         selection: ReviewSelection | None = None,
         native_selection: SemanticSelection | None = None,
@@ -692,13 +695,13 @@ class SemanticStage:
             return await reviewer.semantic_review(intent, document, start, end, policy, proposal)
 
         invocation = ModelInvocation(
-            budget,
+            spend,
             ledger,
             phase="semantic_review",
             model=reviewer.model,
             url=document.url,
             request=port_input(
-                budget,
+                spend,
                 document,
                 policy,
                 proposal,
@@ -712,14 +715,13 @@ class SemanticStage:
                 start=start,
                 end=end,
             ),
-            reserve=budget.reserve_semantic_review,
+            reserve=spend.reserve_semantic_review,
         )
         call: ModelCallEvidence | None = None
         review: SemanticReview | None = None
         refusal: RefusalCode | None = None
         try:
-            async with asyncio.timeout(budget.remaining_seconds):
-                review = await invocation.invoke(review_call, record_output)
+            review = await invocation.invoke(review_call, record_output)
             call = review.model_call
             review = restore_review(review)
             if selection is not None:
@@ -771,6 +773,7 @@ class SemanticStage:
         code: RefusalCode,
         call: ModelCallEvidence | None,
         observation: SemanticRefusal | None = None,
+        detail: str | None = None,
     ) -> None:
         ledger.append(
             LedgerRow(
@@ -782,6 +785,7 @@ class SemanticStage:
                 model_call=call,
                 semantic_refusal=observation,
                 reason="semantic_window_refused",
+                detail=detail,
             )
         )
 
@@ -792,12 +796,8 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
     reviews = tuple(row for row in ledger if row.event == "semantic_review")
     policy = config.semantics
     if reviews:
-        if (
-            policy is None
-            or policy.verification is None
-            or len(reviews) > policy.verification.max_calls_per_run
-        ):
-            raise ValueError("semantic reviews exceed their configured allowance")
+        if policy is None or policy.verification is None:
+            raise ValueError("semantic reviews require their configured verification")
         service = review_service(config)
         identity = ModelIdentity(
             model_id=service.model_id, revision=service.revision, location="self_hosted"
@@ -827,8 +827,8 @@ def validate_rows(config: GhimeraConfig, ledger: tuple[LedgerRow, ...]) -> tuple
         if reviews:
             raise ValueError("semantic review requires its extraction observation")
         return rows
-    if policy is None or len(rows) > policy.max_calls_per_run:
-        raise ValueError("semantic calls exceed their configured run allowance")
+    if policy is None:
+        raise ValueError("semantic calls require their configured policy")
     service = bound_service(config)
     identity = ModelIdentity(
         model_id=service.model_id, revision=service.revision, location="self_hosted"
@@ -927,12 +927,7 @@ def validate_harvest(harvest: Harvest) -> None:
     )
     if policy is None and not rows and not marked:
         return
-    if (
-        policy is None
-        or config.graph is None
-        or snapshot is None
-        or len(rows) > policy.max_calls_per_run
-    ):
+    if policy is None or config.graph is None or snapshot is None:
         raise ValueError("semantic observations require their bounded configured graph")
     graph = ResearchGraph(config.graph, snapshot.run_id, MemoryGraphSink())
     sources = harvest.graph_source_documents

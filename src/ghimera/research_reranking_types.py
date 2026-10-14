@@ -6,6 +6,7 @@ from typing import Annotated, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ghimera.corpus_config import CorpusConfig
+from ghimera.removed_ceilings import REMOVED_RERANK_CEILINGS, refuse_removed
 from ghimera.reranking_types import PassageReranker, RerankRequest, RerankScores
 from ghimera.retrieval import HybridRetrievalConfig, RetrievalEvidence
 
@@ -20,11 +21,16 @@ class RerankRunRecord(BaseModel):
 
 class ResearchRerankingConfig(RerankRunRecord):
     schema_version: Literal["ghimera.research-reranking/1"] = Field(alias="schema")
-    max_calls: Positive
+    # Bounds of ONE rerank call; there is no per-run call or pair ceiling.
     max_pairs: Positive
     max_input_chars: Positive
     uncertain_policy: Literal["hold"]
     replay_policy: Literal["explicit_original_ack"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_RERANK_CEILINGS, "research.reranking.")
 
 
 class RerankDecision(RerankRunRecord):

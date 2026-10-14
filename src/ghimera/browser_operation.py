@@ -1,4 +1,4 @@
-"""One run's policy/budget ownership during caller-bound browser navigation."""
+"""One run's policy/spend ownership during caller-bound browser navigation."""
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -8,11 +8,11 @@ from typing import Literal
 
 from ghimera.browser_download_stream import DownloadSpend
 from ghimera.browser_operation_types import BrowserSourceAction
-from ghimera.budget import RunBudget
 from ghimera.ledger import Ledger
 from ghimera.models import LedgerRow
 from ghimera.politeness import Politeness
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.spend import RunSpend
 
 
 @dataclass
@@ -21,11 +21,11 @@ class _ReadLease:
     bytes_read: int = 0
 
 
-class RunBrowserOutputBudget:
+class RunBrowserOutputBound:
     """Reserve only during an actual output read; robots never waits on it."""
 
-    def __init__(self, budget: RunBudget) -> None:
-        self._budget = budget
+    def __init__(self, spend: RunSpend) -> None:
+        self._spend = spend
         self._bytes_read = 0
 
     @property
@@ -35,19 +35,19 @@ class RunBrowserOutputBudget:
     @asynccontextmanager
     async def reading(self, maximum: int) -> AsyncIterator[DownloadSpend]:
         if type(maximum) is not int or maximum <= 0:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
-        allowance = await self._budget.wait_bytes(maximum)
-        spend = _ReadLease(allowance)
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT, "a read needs a positive byte bound")
+        allowance = self._spend.reserve_bytes(maximum)
+        lease = _ReadLease(allowance)
         try:
-            yield spend
+            yield lease
         finally:
             try:
-                if type(spend.bytes_read) is not int or not 0 <= spend.bytes_read <= allowance:
+                if type(lease.bytes_read) is not int or not 0 <= lease.bytes_read <= allowance:
                     raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-                self._budget.record_bytes(spend.bytes_read)
-                self._bytes_read += spend.bytes_read
+                self._spend.record_bytes(lease.bytes_read)
+                self._bytes_read += lease.bytes_read
             finally:
-                self._budget.release_bytes(allowance)
+                self._spend.release_bytes(allowance)
 
 
 class RunBrowserAdmission:
@@ -55,12 +55,12 @@ class RunBrowserAdmission:
 
     def __init__(
         self,
-        budget: RunBudget,
+        spend: RunSpend,
         politeness: Politeness,
         ledger: Ledger,
         permitted: Callable[[str], Awaitable[None]],
     ) -> None:
-        self._budget = budget
+        self._spend = spend
         self._politeness = politeness
         self._ledger = ledger
         self._permitted = permitted
@@ -86,12 +86,11 @@ class RunBrowserAdmission:
             if self._closed:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             await self._release()
-            self._budget.check_time()
             await self._permitted(url)
-            policy = self._budget.config.human_browser
+            policy = self._spend.config.human_browser
             if policy is None or policy.navigation is None:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
-            self._budget.reserve_fetch()
+            self._spend.reserve_fetch()
             self._ledger.append(
                 LedgerRow(
                     sequence=self._ledger.next_sequence,

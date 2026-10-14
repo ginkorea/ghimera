@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.doubles import FakeJudge
 from ghimera.graph import MemoryGraphSink, ResearchGraph
@@ -34,6 +33,7 @@ from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research import ModelCalls
 from ghimera.research_types import PlanningRequest, ResearchRequest
 from ghimera.semantic_graph import SemanticStage
+from ghimera.spend import RunSpend
 from tests.test_c0 import config
 from tests.test_completion_diagnostics import FINAL, PRIVATE, Wire
 from tests.test_document_extraction import native_pdf
@@ -57,12 +57,9 @@ def configured(tmp_path, **updates):
         ),
         model_work=dict(
             schema="ghimera.model-work/1",
-            max_input_bytes=4000000,
-            max_unanswered_calls=4,
             uncertain_policy="hold",
         ),
         research=policy(),
-        judge_budget=40,
         **updates,
     )
 
@@ -70,13 +67,13 @@ def configured(tmp_path, **updates):
 def opened(cfg, run_id="operation"):
     goal = Goal(text="find ports")
     ledger = Ledger(sink=DirectoryLedgerSink(cfg, run_id, goal, FakeJudge().model))
-    return RunBudget(cfg, time.monotonic), ledger
+    return RunSpend(cfg, time.monotonic), ledger
 
 
-def invocation(budget, ledger, **updates):
+def invocation(spend, ledger, **updates):
     values = dict(phase="plan", model=PlannerFixture.model, request=b"request")
     values.update(updates)
-    return ModelInvocation(budget, ledger, **values)
+    return ModelInvocation(spend, ledger, **values)
 
 
 def test_policy_requires_durability_and_does_not_change_old_recipe_identity(tmp_path):
@@ -91,17 +88,19 @@ def test_policy_requires_durability_and_does_not_change_old_recipe_identity(tmp_
         type(cfg).model_validate(raw)
     no_sink = Ledger()
     with pytest.raises(FatalModelWorkFailure):
-        invocation(RunBudget(configured(tmp_path), time.monotonic), no_sink)
+        invocation(RunSpend(configured(tmp_path), time.monotonic), no_sink)
 
 
 def test_wrong_journal_binding_and_non_durable_sink_refuse_before_reservation(tmp_path):
     cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
-    changed = GhimeraConfig.model_validate(dict(cfg.model_dump(), judge_budget=41))
-    another_budget = RunBudget(changed, time.monotonic)
+    spend, ledger = opened(cfg)
+    changed = GhimeraConfig.model_validate(
+        dict(cfg.model_dump(), grade_interval=cfg.grade_interval + 1)
+    )
+    another_spend = RunSpend(changed, time.monotonic)
     with pytest.raises(FatalModelWorkFailure):
-        invocation(another_budget, ledger)
-    assert another_budget.judge_calls == 0 and ledger.snapshot() == ()
+        invocation(another_spend, ledger)
+    assert another_spend.judge_calls == 0 and ledger.snapshot() == ()
     ledger.close()
 
     class MemorySink:
@@ -115,14 +114,14 @@ def test_wrong_journal_binding_and_non_durable_sink_refuse_before_reservation(tm
             pass
 
     with pytest.raises(FatalModelWorkFailure):
-        invocation(budget, Ledger(sink=MemorySink()))
-    assert budget.judge_calls == 0
+        invocation(spend, Ledger(sink=MemorySink()))
+    assert spend.judge_calls == 0
 
 
 def test_a_port_return_without_http_status_is_not_a_remote_response(tmp_path):
     cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
-    attempt = invocation(budget, ledger, scope="wire_request")
+    spend, ledger = opened(cfg)
+    attempt = invocation(spend, ledger, scope="wire_request")
 
     async def call():
         return ModelHttpResponse(None, b"", "")
@@ -137,15 +136,15 @@ def test_a_port_return_without_http_status_is_not_a_remote_response(tmp_path):
 
 def test_intent_is_native_and_durable_before_contact_then_linked_once(tmp_path):
     cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
 
     async def call():
         report = read_journal(cfg.journal, "operation")
         assert report.uncertain_model_calls == (0,)
-        assert report.rows[0].model_intent.judge_reservation == budget.judge_calls == 1
+        assert report.rows[0].model_intent.judge_reservation == spend.judge_calls == 1
         return "response"
 
-    attempt = invocation(budget, ledger)
+    attempt = invocation(spend, ledger)
     assert asyncio.run(attempt.invoke(call, str.encode)) == "response"
     ledger.close()
     report = read_journal(cfg.journal, "operation")
@@ -161,7 +160,7 @@ def test_intent_is_native_and_durable_before_contact_then_linked_once(tmp_path):
 @pytest.mark.parametrize("failure", ["refused", "cancelled", "raised"])
 def test_ended_without_answer_retains_unknown_spend_and_never_fabricates_usage(tmp_path, failure):
     cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
 
     async def call():
         if failure == "refused":
@@ -171,7 +170,7 @@ def test_ended_without_answer_retains_unknown_spend_and_never_fabricates_usage(t
         raise RuntimeError("port crashed")
 
     with pytest.raises((GhimeraRefused, asyncio.CancelledError, RuntimeError)):
-        asyncio.run(invocation(budget, ledger).invoke(call, str.encode))
+        asyncio.run(invocation(spend, ledger).invoke(call, str.encode))
     ledger.close()
     report = read_journal(cfg.journal, "operation")
     assert report.uncertain_model_calls == (0,)
@@ -181,27 +180,9 @@ def test_ended_without_answer_retains_unknown_spend_and_never_fabricates_usage(t
     assert report.rows[-1].model_call is None
 
 
-def test_unknown_capacity_refuses_before_reserving_or_contact_and_input_bound_is_explicit(tmp_path):
-    cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
-    for _ in range(cfg.model_work.max_unanswered_calls):
-        invocation(budget, ledger)
-    before = budget.judge_calls
-    with pytest.raises(GhimeraRefused) as refused:
-        invocation(budget, ledger)
-    assert refused.value.code == RefusalCode.BUDGET_EXHAUSTED
-    assert budget.judge_calls == before
-    ledger.close()
-    budget, ledger = opened(cfg, "oversized")
-    with pytest.raises(GhimeraRefused):
-        invocation(budget, ledger, request=b"x" * (cfg.model_work.max_input_bytes + 1))
-    assert budget.judge_calls == 0 and ledger.snapshot() == ()
-    ledger.close()
-
-
 def test_storage_refuses_contact_and_lost_result_ack_leaves_original_intent(tmp_path):
     cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
     sink = ledger._sink
     original = sink.append
 
@@ -210,12 +191,12 @@ def test_storage_refuses_contact_and_lost_result_ack_leaves_original_intent(tmp_
 
     sink.append = fail
     with pytest.raises(FatalModelWorkFailure, match="intent"):
-        invocation(budget, ledger)
+        invocation(spend, ledger)
     assert read_journal(cfg.journal, "operation").rows == ()
     sink.append = original
     ledger.close()
-    budget, ledger = opened(cfg, "lost-ack")
-    attempt = invocation(budget, ledger)
+    spend, ledger = opened(cfg, "lost-ack")
+    attempt = invocation(spend, ledger)
     sink = ledger._sink
     sink.append = fail
     contacts = []
@@ -234,12 +215,12 @@ def test_storage_refuses_contact_and_lost_result_ack_leaves_original_intent(tmp_
 @pytest.mark.parametrize("change", ["model", "duplicate_ack", "reservation", "orphan"])
 def test_ack_chain_rejects_wrong_model_duplicate_ack_and_reservation(tmp_path, change):
     cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
 
     async def call():
         return "observed"
 
-    asyncio.run(invocation(budget, ledger).invoke(call, str.encode))
+    asyncio.run(invocation(spend, ledger).invoke(call, str.encode))
     rows = ledger.snapshot()
     ledger.close()
     intent, ack = rows
@@ -264,7 +245,7 @@ def test_research_crash_retains_intent_in_fresh_native_reader(tmp_path):
 import asyncio, os, sys, time
 from pathlib import Path
 from ghimera.config import GhimeraConfig
-from ghimera.budget import RunBudget
+from ghimera.spend import RunSpend
 from ghimera.journal import DirectoryLedgerSink
 from ghimera.ledger import Ledger
 from ghimera.loop import CollectionSession
@@ -275,7 +256,7 @@ cfg = GhimeraConfig.model_validate_json(Path(sys.argv[1]).read_bytes())
 model = ModelIdentity(model_id="controlled-planner", revision="1", location="test_double")
 goal = Goal(text="find ports")
 ledger = Ledger(sink=DirectoryLedgerSink(cfg, "crash", goal, model))
-session = CollectionSession(goal, RunBudget(cfg, time.monotonic), ledger, None)
+session = CollectionSession(goal, RunSpend(cfg, time.monotonic), ledger, None)
 async def crash(request):
     fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     os.write(fd, b"port-invoked")
@@ -340,11 +321,11 @@ def test_completed_round_restore_preserves_reservations_and_unknown_restore_is_h
     assert (
         len([row for row in after.rows if row.model_intent]) == result.harvest.receipt.judge_calls
     )
-    budget, ledger = opened(cfg, "uncertain")
-    invocation(budget, ledger)
+    spend, ledger = opened(cfg, "uncertain")
+    invocation(spend, ledger)
     ledger.close()
     unknown = read_journal(cfg.journal, "uncertain")
-    restored = RunBudget(cfg, time.monotonic)
+    restored = RunSpend(cfg, time.monotonic)
     with pytest.raises(ValueError, match="reconciliation"):
         restored.restore(result.harvest.receipt, unknown.rows, 0, 0)
     assert restored.judge_calls == 0
@@ -352,14 +333,14 @@ def test_completed_round_restore_preserves_reservations_and_unknown_restore_is_h
 
 def test_concurrent_calls_keep_distinct_reservations_and_ack_original_intent(tmp_path):
     cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
 
     async def run():
         ready = asyncio.Event()
         phases = ("plan", "assessment", "answer", "review")
 
         async def one(phase):
-            attempt = invocation(budget, ledger, phase=phase, request=phase.encode())
+            attempt = invocation(spend, ledger, phase=phase, request=phase.encode())
 
             async def call():
                 await ready.wait()
@@ -382,19 +363,19 @@ def test_concurrent_calls_keep_distinct_reservations_and_ack_original_intent(tmp
 
 def test_port_hash_is_logical_input_and_disabled_policy_does_not_serialize_documents(tmp_path):
     cfg = configured(tmp_path)
-    budget = RunBudget(cfg, time.monotonic)
+    spend = RunSpend(cfg, time.monotonic)
     goal = Goal(text="native question")
-    assert port_input(budget, goal, second_look=False) != port_input(budget, goal, second_look=True)
+    assert port_input(spend, goal, second_look=False) != port_input(spend, goal, second_look=True)
     assert (
-        port_input(RunBudget(config(), time.monotonic), goal, unsupported=Path("never encoded"))
+        port_input(RunSpend(config(), time.monotonic), goal, unsupported=Path("never encoded"))
         == b""
     )
 
 
 def test_research_success_uses_existing_port_and_quota_boundary(tmp_path):
     cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
-    session = CollectionSession(Goal(text="find ports"), budget, ledger, None)
+    spend, ledger = opened(cfg)
+    session = CollectionSession(Goal(text="find ports"), spend, ledger, None)
     request = PlanningRequest(
         intent=session.goal.text,
         questions=(),
@@ -413,7 +394,7 @@ def test_research_success_uses_existing_port_and_quota_boundary(tmp_path):
             planner.plan,
         )
     )
-    assert result.questions and budget.judge_calls == 1
+    assert result.questions and spend.judge_calls == 1
     assert [row.event for row in ledger.snapshot()] == ["model_intent", "model_ack", "plan"]
     session.close()
 
@@ -423,7 +404,7 @@ def test_client_contract_failure_survives_native_refused_ack_readback(tmp_path, 
     import json
 
     cfg = configured(tmp_path)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
     goal = Goal(text="find ports")
     extracted = document().extracted
     original_wire = Wire()
@@ -434,11 +415,11 @@ def test_client_contract_failure_survives_native_refused_ack_readback(tmp_path, 
     wire = Wire(content=json.dumps(output) if defect == "model_claimed_telemetry" else PRIVATE)
     model = SelfHostedModel(cfg, wire.config, http=wire)
     attempt = ModelInvocation(
-        budget,
+        spend,
         ledger,
         phase="verdict",
         model=model.model,
-        request=port_input(budget, goal, extracted, second_look=False),
+        request=port_input(spend, goal, extracted, second_look=False),
     )
     with pytest.raises(GhimeraRefused):
         asyncio.run(
@@ -468,7 +449,7 @@ def test_semantic_ports_retain_native_intents_and_distinguish_known_refused_comp
     storage = configured(tmp_path)
     raw.update(journal=storage.journal, model_work=storage.model_work)
     cfg = GhimeraConfig.model_validate(raw)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
     graph = ResearchGraph(cfg.graph, "semantic-calls", MemoryGraphSink())
     first, second = SemanticWire(cfg.models.analyst), ReviewWire(cfg.models.reviewer, defect=defect)
     extractor = SelfHostedModel(cfg, cfg.models.analyst, http=first)
@@ -479,7 +460,7 @@ def test_semantic_ports_retain_native_intents_and_distinguish_known_refused_comp
     async def run():
         await graph.start("map the organization")
         identity = await graph.document(doc.url, doc.raw, doc.extracted.text, "extractor@1")
-        await stage.extract("map the organization", doc, identity, graph, budget, ledger)
+        await stage.extract("map the organization", doc, identity, graph, spend, ledger)
 
     if defect:
         with pytest.raises(GhimeraRefused):
@@ -492,7 +473,7 @@ def test_semantic_ports_retain_native_intents_and_distinguish_known_refused_comp
         "semantic_extract",
         "semantic_review",
     ]
-    assert budget.judge_calls == 2 and report.uncertain_model_calls == ()
+    assert spend.judge_calls == 2 and report.uncertain_model_calls == ()
     if defect:
         ack = [row.model_ack for row in report.rows if row.model_ack][-1]
         assert ack.outcome == "refused" and ack.refused_call.completion.finish_reason == "length"
@@ -506,7 +487,7 @@ def test_pdf_ports_record_exact_wire_inputs_without_changing_pixels_or_review(tm
     pages = page_policy(tmp_path)
     page = asyncio.run(PdfPageRenderer(pages.renderer).render(native_pdf())).pages[0]
     first, second = ModelPort(pages.transcriber), ModelPort(pages.reviewer, review=True)
-    budget, ledger = opened(cfg)
+    spend, ledger = opened(cfg)
     result = asyncio.run(
         LocalPageTranscriber(
             pages,
@@ -516,14 +497,14 @@ def test_pdf_ports_record_exact_wire_inputs_without_changing_pixels_or_review(tm
             page,
             language_hint="zh-Hant",
             source_url="https://example.org/x.pdf",
-            budget=budget,
+            spend=spend,
             ledger=ledger,
         )
     )
     ledger.close()
     report = read_journal(cfg.journal, "operation")
     intents = [row.model_intent for row in report.rows if row.model_intent]
-    assert len(intents) == budget.judge_calls == 2
+    assert len(intents) == spend.judge_calls == 2
     assert all(
         item.phase == "transcription_model" and item.input_scope == "wire_request"
         for item in intents

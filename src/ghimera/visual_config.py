@@ -54,7 +54,7 @@ class VisualConfig(BaseModel):
     @model_validator(mode="after")
     def coherent(self) -> "VisualConfig":
         if self.max_images_per_page > self.max_candidates_per_page:
-            raise ValueError("image budget must fit candidate budget")
+            raise ValueError("image bound must fit candidate bound")
         if self.pdf_figures is not None and (
             self.pdf_figures.max_figures > self.max_images_per_page
             or self.pdf_figures.max_crop_bytes > self.max_image_bytes

@@ -2,7 +2,6 @@
 
 import asyncio
 
-from ghimera.budget import RunBudget
 from ghimera.corpus import EvidenceCorpus
 from ghimera.corpus_bindings import validate_reader
 from ghimera.corpus_search_config import CorpusSearchConfig
@@ -16,6 +15,7 @@ from ghimera.research_reranking import RunBoundReranker
 from ghimera.research_reranking_types import RerankDecision, RerankInvoker, ResearchRerankingConfig
 from ghimera.research_types import SearchHit, SearchQuery, SearchRequest, SearchResponse
 from ghimera.search import GroundedSearch
+from ghimera.spend import RunSpend
 
 
 def corpus_leads(wire: CorpusSearchWire, policy: CorpusSearchConfig) -> tuple[SearchHit, ...]:
@@ -113,7 +113,7 @@ class CorpusLeadSearch(GroundedSearch):
     async def request_for_run(
         self,
         request: SearchRequest,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         rerank_decision: RerankDecision | None,
         query_work: QueryWork | None = None,
@@ -126,11 +126,11 @@ class CorpusLeadSearch(GroundedSearch):
             )
         if (
             rerank_decision is None
-            or budget.config.research is None
-            or budget.config.research.reranking != self._run_policy
+            or spend.config.research is None
+            or spend.config.research.reranking != self._run_policy
         ):
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
-        invoker = RunBoundReranker(budget, ledger, channel="discovery", decision=rerank_decision)
+        invoker = RunBoundReranker(spend, ledger, channel="discovery", decision=rerank_decision)
         try:
             return await self._request(request, rerank_invoker=invoker, query_work=query_work)
         except (ValueError, OSError) as exc:

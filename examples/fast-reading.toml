@@ -1,8 +1,8 @@
 # Non-active fragment for a self-hosted deployment (0.4.12). Merge the
 # [extraction] keys into your extraction policy and the top-level keys into the
-# run recipe. Run limits are OFF by default: omit page_budget, byte_budget,
-# judge_budget and wall_seconds (or write "unbounded") and the mission's own
-# stopping rules end the run. Spend is still accounted on every receipt.
+# run recipe. The core has no run ceilings: page_budget, byte_budget,
+# judge_budget, wall_seconds, max_rounds and query_budget are refused by name.
+# The mission's own stopping rules end the run; spend is counted on every receipt.
 
 [extraction]
 # Read titled pages with at least min_text_chars of body text in-process

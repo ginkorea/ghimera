@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 _CONTROL = re.compile(r"[\x00-\x20]")
 FAST_READER_SCHEMA = "ghimera.fast-reader/1"
+FALLBACK_PLAIN_SCHEMA = "ghimera.fallback-plain/1"
 # Never text, whatever the operator's excluded_tags say.
 ALWAYS_DROPPED = frozenset({"script", "style", "noscript", "template"})
 BLOCKS = frozenset(
@@ -96,10 +97,8 @@ def public_link(base: str, value: str) -> str | None:
         return None
 
 
-def fast_reader_revision() -> str:
-    return (
-        f"{FAST_READER_SCHEMA}:lxml@{version('lxml')}+lingua@{version('lingua-language-detector')}"
-    )
+def fast_reader_revision(schema: str = FAST_READER_SCHEMA) -> str:
+    return f"{schema}:lxml@{version('lxml')}+lingua@{version('lingua-language-detector')}"
 
 
 @lru_cache(maxsize=8)
@@ -148,10 +147,15 @@ def _text(element: Any) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def read_fast(page: Page, config: "ExtractionConfig") -> Extracted | None:
-    """Return the first-pass reading, or ``None`` when the richer tier must read it."""
+def read_fast(page: Page, config: "ExtractionConfig", *, plain: bool = False) -> Extracted | None:
+    """Return the first-pass reading, or ``None`` when the richer tier must read it.
+
+    ``plain`` is the last resort after the rich tier failed: any body text at all
+    is kept (scripts and styles stripped), with no title or length threshold.
+    ``None`` then means no text could be read.
+    """
     policy = config.fast_reader
-    if policy is None:
+    if policy is None and not plain:
         raise ValueError("the fast reader requires its configured policy")
     from lxml import etree
 
@@ -223,22 +227,35 @@ def read_fast(page: Page, config: "ExtractionConfig") -> Extracted | None:
         ),
         None,
     )
-    if body is None or not title:
+    if plain and body is None:
+        body = root.find("body") if root.find("body") is not None else root
+    if body is None or (not title and not plain):
         return None
     full = _text(body)
     text = full[: config.max_text_chars]
-    if len(text) < policy.min_text_chars:
+    if not text.strip() or (policy is not None and not plain and len(text) < policy.min_text_chars):
         return None
+    if not title:
+        title = text.split("\n", 1)[0][:200].strip() or (urlsplit(page.final_url).hostname or "")
     sample = text[: config.language_max_chars]
     confidence = _detector(config.languages).compute_language_confidence_values(sample)
-    if not confidence:
+    if not confidence and not plain:
         return None
-    highest = confidence[0]
-    margin = highest.value - confidence[1].value if len(confidence) > 1 else highest.value
+    top, margin = (
+        (
+            confidence[0].value,
+            confidence[0].value - confidence[1].value
+            if len(confidence) > 1
+            else confidence[0].value,
+        )
+        if confidence
+        else (0.0, 0.0)
+    )
     language = (
-        highest.language.iso_code_639_1.name.lower()
-        if len(sample) >= config.language_min_chars
-        and highest.value >= config.language_min_confidence
+        confidence[0].language.iso_code_639_1.name.lower()
+        if confidence
+        and len(sample) >= config.language_min_chars
+        and top >= config.language_min_confidence
         and margin >= config.language_min_margin
         else "und"
     )
@@ -266,7 +283,9 @@ def read_fast(page: Page, config: "ExtractionConfig") -> Extracted | None:
         source_url=page.final_url,
         text_sha256=hashlib.sha256(text.encode()).hexdigest(),
         config_digest=config.content_digest(),
-        parser_revision=fast_reader_revision(),
+        parser_revision=fast_reader_revision(
+            FALLBACK_PLAIN_SCHEMA if plain else FAST_READER_SCHEMA
+        ),
         encoding=actual_encoding,
         decode_replacements=source.count("�"),
         selection="generic",
@@ -274,7 +293,7 @@ def read_fast(page: Page, config: "ExtractionConfig") -> Extracted | None:
         locators=(),
         missing_fields=(),
         declared_language=declared_language,
-        language_confidence=highest.value,
+        language_confidence=top,
         language_margin=margin,
         language_sample_chars=len(sample),
         language_hint_disagrees=bool(

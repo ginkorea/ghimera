@@ -230,8 +230,9 @@ class PersistentWorkerPool:
             if worker is not None:
                 self._retire(worker)
             raise GhimeraRefused(
-                RefusalCode.BUDGET_EXHAUSTED,
-                f"html reader exceeded its page deadline timeout_seconds={self._timeout:g}",
+                RefusalCode.BOUND_EXCEEDED,
+                f"html reader exceeded its page deadline timeout_seconds={self._timeout:g}; "
+                "an input bound, not a spend limit",
             ) from None
         except OSError as exc:
             if worker is not None:

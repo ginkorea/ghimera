@@ -149,7 +149,7 @@ def test_language_filter_keeps_an_empty_observed_query(tmp_path, encoder_endpoin
     asyncio.run(operation())
 
 
-def test_original_size_omission_and_query_budget_are_explicit(tmp_path, encoder_endpoint):
+def test_original_size_omission_and_query_byte_bound_are_explicit(tmp_path, encoder_endpoint):
     async def operation():
         store = corpus(config(tmp_path, encoder_endpoint[0]), create=True)
         try:
@@ -267,9 +267,6 @@ def test_strategy_composes_exact_named_corpus_and_preserves_archive(
                         binding=binding(store),
                         query_disclosure="planned_query",
                         use_contract="crawl_and_retain",
-                        max_calls=10,
-                        byte_budget=1000000,
-                        call_seconds_budget=100.0,
                         max_response_bytes=200000,
                         max_results=5,
                         timeout_seconds=10.0,

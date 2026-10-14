@@ -9,12 +9,12 @@ import pytest
 from pydantic import ValidationError
 
 from ghimera.browser_tor import BrowserTorConfig, TorProbeObservation, TorProbeReply
-from ghimera.budget import RunBudget
 from ghimera.human_browser import BoundPageHumanSession
 from ghimera.human_browser_types import AssistanceDecision, BrowserCapture, HumanBrowserConfig
 from ghimera.ledger import Ledger
 from ghimera.models import Scope
 from ghimera.refusals import GhimeraRefused
+from ghimera.spend import RunSpend
 from tests.test_browser_guarded_collection import effective, ladder_for
 from tests.test_browser_navigation_guard import navigation_policy, page_policy
 from tests.test_http_fetch import state
@@ -86,7 +86,7 @@ def test_native_guarded_pagination_preserves_landing_original_and_actual_budget(
             selected = HumanBrowserConfig.model_validate(raw)
             cfg = effective(tmp_path, (port, {}, {}, b"", {}), selected)
             previous = state((port, {}, {}, b""))[2]
-            budget = RunBudget(cfg, clock=previous.clock)
+            spend = RunSpend(cfg, clock=previous.clock)
             ledger = Ledger()
             scope = Scope(
                 allowed_hosts=("fixture.example",),
@@ -104,7 +104,7 @@ def test_native_guarded_pagination_preserves_landing_original_and_actual_budget(
                     )
 
             page_result = await ladder_for(cfg, page, FixtureHuman() if assisted else None).fetch(
-                origin + "/research/page2", scope, budget, ledger
+                origin + "/research/page2", scope, spend, ledger
             )
             evidence = page_result.human_browser
             assert "第二頁" in page_result.body.decode()

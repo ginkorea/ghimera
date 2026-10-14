@@ -28,13 +28,10 @@ def configured(tmp_path, source_site, search_endpoint, model_endpoint, encoder_e
     values = cfg.model_dump()
     values["model_work"] = dict(
         schema="ghimera.model-work/1",
-        max_input_bytes=4000000,
-        max_unanswered_calls=4,
         uncertain_policy="hold",
         results=dict(
             schema="ghimera.model-results/1",
             max_result_bytes=65536,
-            max_total_result_bytes=524288,
         ),
     )
     values["research_recovery"] = dict(

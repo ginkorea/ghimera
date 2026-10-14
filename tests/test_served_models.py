@@ -431,7 +431,7 @@ def endpoint():
 
 
 def test_served_model_protocol_completes_intent_with_usage_and_native_citations(endpoint):
-    cfg = config(research=policy(max_model_input_chars=20000), page_budget=30)
+    cfg = config(research=policy(max_model_input_chars=20000))
     model = SelfHostedModel(cfg, service(endpoint[0]))
     reviewer = SelfHostedModel(cfg, service(endpoint[0], model_id="protocol-reviewer"))
     collector = GoalLoop(
@@ -618,7 +618,7 @@ def test_required_citations_are_preserved_before_discretionary_context():
 
 def test_model_metadata_cannot_exceed_prompt_budget_before_wire(endpoint):
     model = SelfHostedModel(config(), service(endpoint[0], max_input_chars=50))
-    with pytest.raises(GhimeraRefused, match="budget_exhausted") as refused:
+    with pytest.raises(GhimeraRefused, match="bound_exceeded") as refused:
         asyncio.run(
             model.document(
                 Goal(text="ports"),
@@ -631,7 +631,7 @@ def test_model_metadata_cannot_exceed_prompt_budget_before_wire(endpoint):
 
 def test_model_prompt_limit_includes_system_schema_not_only_user_context(endpoint):
     model = SelfHostedModel(config(), service(endpoint[0], max_input_chars=900))
-    with pytest.raises(GhimeraRefused, match="budget_exhausted") as refused:
+    with pytest.raises(GhimeraRefused, match="bound_exceeded") as refused:
         asyncio.run(
             model.document(
                 Goal(text="ports"),

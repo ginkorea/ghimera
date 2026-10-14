@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.graph import MemoryGraphSink, ResearchGraph
 from ghimera.journal import DirectoryLedgerSink, read_journal
@@ -23,6 +22,7 @@ from ghimera.semantic_batching import review_selections
 from ghimera.semantic_contract import build_graph_contract
 from ghimera.semantic_graph import SemanticStage, validate_rows
 from ghimera.semantic_types import GroundedSemanticReview, SemanticConfig, SemanticProposal
+from ghimera.spend import RunSpend
 from tests import test_semantic_verification as verification_contract
 from tests.test_graph_bound_semantics import (
     CaptureWire,
@@ -47,13 +47,16 @@ def test_original_v5_entire_transport_and_revision_remain_frozen(tmp_path):
     cfg = GhimeraConfig.model_validate(raw)
     wire = CaptureWire(cfg.models.analyst)
     proposal = extract(cfg, wire)
+    # 0.4.12 removed semantics.max_calls_per_run (a per-run cap): the recipe
+    # digest and the recipe echoed in the request body moved; nothing else did.
     assert cfg.semantics.content_digest() == (
-        "df8af2492210ed5102c01f288de7d18b11087e94766354df232204e753e8621e"
+        "6b58b7259a34582e095cb16d275d98e8da6bd372002499ccc4bec72503051ef7"
     )
     assert hashlib.sha256(wire.bodies[0]).hexdigest() == (
-        "fec04c38b0d8e9b1e92e3d690984b1f2367b0059ba7acdb0fd60f31e146af340"
+        "be676f61819cc8049a7370f567fe3f86f440360b8435904d438dc6ef6a64b518"
     )
-    assert len(wire.bodies[0]) == 8561 and proposal.model_call.input_chars == 7838
+    # 24 fewer bytes/22 fewer chars: exactly the removed "max_calls_per_run" pair.
+    assert len(wire.bodies[0]) == 8537 and proposal.model_call.input_chars == 7816
     assert proposal.model_call.prompt_revision == "ghimera-semantic-extraction/5"
     assert "separately configured independent reviewer" not in wire.system
     assert "verification" not in wire.requests[0]["semantic_recipe"]
@@ -125,7 +128,7 @@ def test_v6_actual_native_packet_review_and_telemetry(tmp_path, quotes):
     doc = native_document() if quotes else document()
     extraction = CaptureWire(cfg.models.analyst)
     reviews = QuoteWire(cfg.models.reviewer) if quotes else DimensionWire(cfg.models.reviewer)
-    graph, rows, budget = run_stage(cfg, extraction, reviews, (doc,))
+    graph, rows, spend = run_stage(cfg, extraction, reviews, (doc,))
     window = rows[-1].semantic_window
     contract = build_graph_contract(cfg, cfg.semantics)
     assert extraction.requests[0]["semantic_graph_contract"] == contract.model_dump(mode="json")
@@ -142,8 +145,8 @@ def test_v6_actual_native_packet_review_and_telemetry(tmp_path, quotes):
     assert "separately configured independent reviewer" in extraction.system
     assert "BOTH explicit source support" in extraction.system
     assert window.review.proposal_digest == window.proposal.content_digest()
-    assert budget.semantic_calls == 1 and budget.semantic_review_calls == len(reviews.requests) == 4
-    assert budget.judge_calls == 5
+    assert spend.semantic_calls == 1 and spend.semantic_review_calls == len(reviews.requests) == 4
+    assert spend.judge_calls == 5
     for part, (request, packet) in zip(window.review.parts, reviews.requests, strict=True):
         assert packet["semantic_recipe"]["schema"] == "ghimera.semantics/6"
         assert packet["semantic_proposal"] == window.proposal.model_dump(
@@ -201,7 +204,7 @@ def test_native_v6_ack_replay_preserves_original_partition_and_graph_binding(tmp
     extraction, reviews = CaptureWire(cfg.models.analyst), DimensionWire(cfg.models.reviewer)
     extractor = SelfHostedModel(cfg, cfg.models.analyst, http=extraction)
     reviewer = SelfHostedModel(cfg, cfg.models.reviewer, http=reviews)
-    budget = RunBudget(cfg, time.monotonic)
+    spend = RunSpend(cfg, time.monotonic)
     ledger = Ledger(sink=DirectoryLedgerSink(cfg, "reviewed-graph-bound", goal, extractor.model))
     graph = ResearchGraph(cfg.graph, "reviewed-graph-bound", MemoryGraphSink())
 
@@ -209,7 +212,7 @@ def test_native_v6_ack_replay_preserves_original_partition_and_graph_binding(tmp
         await graph.start(goal.text)
         identity = await graph.document(doc.url, doc.raw, doc.extracted.text, "fixture@1")
         await SemanticStage(cfg, extractor, reviewer=reviewer).extract(
-            goal.text, doc, identity, graph, budget, ledger
+            goal.text, doc, identity, graph, spend, ledger
         )
 
     try:
@@ -217,7 +220,7 @@ def test_native_v6_ack_replay_preserves_original_partition_and_graph_binding(tmp
         rows = ledger.snapshot()
         window = rows[-1].semantic_window
         extraction_input = port_input(
-            budget,
+            spend,
             doc,
             cfg.semantics,
             build_graph_contract(cfg, cfg.semantics),
@@ -232,13 +235,13 @@ def test_native_v6_ack_replay_preserves_original_partition_and_graph_binding(tmp
             original_extraction.model_intent.input_sha256
             == hashlib.sha256(extraction_input).hexdigest()
         )
-        assert budget.judge_calls == 5
+        assert spend.judge_calls == 5
         receipt = Receipt(
             fetches=0,
             bytes_read=0,
-            judge_calls=budget.judge_calls,
+            judge_calls=spend.judge_calls,
             accepted_documents=0,
-            elapsed_seconds=budget.elapsed,
+            elapsed_seconds=spend.elapsed,
             stop_reason="frontier_empty",
             effective_config=cfg,
             judge=extractor.model,
@@ -247,7 +250,7 @@ def test_native_v6_ack_replay_preserves_original_partition_and_graph_binding(tmp
         ledger.close()
     report = read_journal(cfg.journal, "reviewed-graph-bound")
     assert report.rows == rows and report.uncertain_model_calls == ()
-    restored = RunBudget(cfg, time.monotonic)
+    restored = RunSpend(cfg, time.monotonic)
     restored.restore(receipt, report.rows, 0, 0)
     assert restored.semantic_calls == 1 and restored.semantic_review_calls == 4
     resumed = Ledger(
@@ -416,12 +419,14 @@ def test_v6_native_document_harvest_journal_and_graph_readback(tmp_path, researc
         # extraction returned, but review preflight admitted no reviewer
         # contact or semantic graph projection. The private archive retains
         # the honest partial result, not an invented completed answer.
-        assert result.stop_reason == harvest.receipt.stop_reason == "budget_exhausted"
+        # An input bound refuses that document's window only; it is not a run
+        # failure and never a spend ceiling.
+        assert result.stop_reason != "failed" and harvest.receipt.stop_reason != "failed"
         assert result.answer is None and result.review is None
         assert len(extraction.bodies) == 1 and reviews.requests == []
         assert not any(row.semantic_window for row in harvest.ledger)
         assert any(
-            row.reason == "semantic_window_refused" and row.refusal.value == "budget_exhausted"
+            row.reason == "semantic_window_refused" and row.refusal.value == "bound_exceeded"
             for row in harvest.ledger
         )
         assert harvest.receipt.judge_calls == 2

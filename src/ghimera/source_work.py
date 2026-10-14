@@ -674,9 +674,7 @@ class SourceWorkStore:
                 != hashlib.sha256(item.model_dump_json().encode()).hexdigest()
                 or snapshot.return_sequence != len(journal.rows) - 1
                 or unreconciled_model_sequences(journal.rows)
-                or validate_model_rows(
-                    self._config.model_work, self._config.judge_budget, journal.rows
-                )
+                or validate_model_rows(self._config.model_work, journal.rows)
                 != h.receipt.judge_calls
             )
         ):
@@ -957,8 +955,7 @@ class SourceWorkStore:
             or journal.incomplete_tail
             or journal.rows != h.ledger
             or unreconciled_model_sequences(journal.rows)
-            or validate_model_rows(self._config.model_work, self._config.judge_budget, journal.rows)
-            != h.receipt.judge_calls
+            or validate_model_rows(self._config.model_work, journal.rows) != h.receipt.judge_calls
             or any(
                 op.ledger_end is None or op.ledger_end > len(journal.rows)
                 for op in self._operations.values()

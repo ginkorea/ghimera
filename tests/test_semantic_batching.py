@@ -18,7 +18,6 @@ def batching_config(tmp_path, **updates):
     verification = dict(
         schema="ghimera.semantic-verification/4",
         model_role="reviewer",
-        max_calls_per_run=8,
         max_coverage_findings=2,
         max_mentions_per_call=1,
         max_relations_per_call=1,
@@ -62,7 +61,7 @@ class BatchWire(GroundedWire):
 def test_every_original_item_and_coverage_are_reviewed_once_and_replayed(tmp_path):
     cfg = batching_config(tmp_path)
     extraction, reviews = SemanticWire(cfg.models.analyst), BatchWire(cfg.models.reviewer)
-    graph, rows, budget = run_stage(cfg, extraction, reviews, (document(),))
+    graph, rows, spend = run_stage(cfg, extraction, reviews, (document(),))
     window = rows[-1].semantic_window
     assert len(extraction.requests) == 1 and len(reviews.requests) == 4
     assert [packet["semantic_review_selection"] for _, packet in reviews.requests] == [
@@ -95,9 +94,7 @@ def test_every_original_item_and_coverage_are_reviewed_once_and_replayed(tmp_pat
     assert window.review.model_call == window.review.parts[-1].review.model_call
     assert len(window.review.parts) == 4 and len(window.entities) == 2
     assert any(edge.rule == "reports_to" for edge in graph.snapshot().edges)
-    assert (
-        budget.semantic_calls == 1 and budget.semantic_review_calls == 4 and budget.judge_calls == 5
-    )
+    assert spend.semantic_calls == 1 and spend.semantic_review_calls == 4 and spend.judge_calls == 5
     assert [row.semantic_review_selection for row in rows[:-1]] == [
         part.selection for part in window.review.parts
     ]
@@ -173,15 +170,15 @@ def test_failed_second_call_is_not_retried_or_projected(tmp_path):
     import asyncio
     import time
 
-    from ghimera.budget import RunBudget
     from ghimera.graph import MemoryGraphSink, ResearchGraph
     from ghimera.ledger import Ledger
     from ghimera.model_client import SelfHostedModel
     from ghimera.semantic_graph import SemanticStage
+    from ghimera.spend import RunSpend
 
     cfg = batching_config(tmp_path)
     wire = BatchWire(cfg.models.reviewer, fail_at=2)
-    budget, ledger = RunBudget(cfg, time.monotonic), Ledger()
+    spend, ledger = RunSpend(cfg, time.monotonic), Ledger()
     graph = ResearchGraph(cfg.graph, "failed-batch", MemoryGraphSink())
     stage = SemanticStage(
         cfg,
@@ -195,7 +192,7 @@ def test_failed_second_call_is_not_retried_or_projected(tmp_path):
         identity = await graph.document(doc.url, doc.raw, doc.extracted.text, "extractor@1")
         before = graph.snapshot()
         with pytest.raises(GhimeraRefused, match="model_unavailable"):
-            await stage.extract("map the organization", doc, identity, graph, budget, ledger)
+            await stage.extract("map the organization", doc, identity, graph, spend, ledger)
         assert graph.snapshot() == before
 
     asyncio.run(run())
@@ -206,64 +203,19 @@ def test_failed_second_call_is_not_retried_or_projected(tmp_path):
     assert rows[1].model_call.status == 500 and rows[1].model_call.outcome == "refused"
     assert rows[2].model_call.task == "semantic_extract" and rows[2].model_call.outcome == "success"
     assert rows[2].semantic_window is None
-    assert (
-        budget.semantic_calls == 1 and budget.semantic_review_calls == 2 and budget.judge_calls == 3
-    )
+    assert spend.semantic_calls == 1 and spend.semantic_review_calls == 2 and spend.judge_calls == 3
     assert validate_rows(cfg, rows) == (rows[-1],)
-
-
-@pytest.mark.parametrize("limit", ["review", "judge"])
-def test_whole_partition_budget_is_checked_before_any_review_call(tmp_path, limit):
-    import asyncio
-    import time
-
-    from ghimera.budget import RunBudget
-    from ghimera.graph import MemoryGraphSink, ResearchGraph
-    from ghimera.ledger import Ledger
-    from ghimera.model_client import SelfHostedModel
-    from ghimera.semantic_graph import SemanticStage
-
-    cfg = batching_config(tmp_path, max_calls_per_run=3 if limit == "review" else 8)
-    if limit == "judge":
-        cfg = GhimeraConfig.model_validate(dict(cfg.model_dump(), judge_budget=4))
-    wire = BatchWire(cfg.models.reviewer)
-    budget, ledger = RunBudget(cfg, time.monotonic), Ledger()
-    graph = ResearchGraph(cfg.graph, "insufficient-batch-budget", MemoryGraphSink())
-    stage = SemanticStage(
-        cfg,
-        SelfHostedModel(cfg, cfg.models.analyst, http=SemanticWire(cfg.models.analyst)),
-        reviewer=SelfHostedModel(cfg, cfg.models.reviewer, http=wire),
-    )
-    doc = document()
-
-    async def run():
-        await graph.start("map the organization")
-        identity = await graph.document(doc.url, doc.raw, doc.extracted.text, "extractor@1")
-        before = graph.snapshot()
-        with pytest.raises(GhimeraRefused, match="budget_exhausted"):
-            await stage.extract("map the organization", doc, identity, graph, budget, ledger)
-        assert graph.snapshot() == before
-
-    asyncio.run(run())
-    assert not wire.requests and budget.semantic_review_calls == 0
-    assert budget.semantic_calls == budget.judge_calls == 1
-    rows = ledger.snapshot()
-    assert len(rows) == 1 and rows[0].event == "semantic"
-    assert rows[0].semantic_window is None and rows[0].refusal.value == "budget_exhausted"
-    assert rows[0].model_call.task == "semantic_extract"
-    assert rows[0].model_call.outcome == "success"
-    assert validate_rows(cfg, rows) == rows
 
 
 def test_late_cancellation_preserves_completed_and_cancelled_parts_without_projection(tmp_path):
     import asyncio
     import time
 
-    from ghimera.budget import RunBudget
     from ghimera.graph import MemoryGraphSink, ResearchGraph
     from ghimera.ledger import Ledger
     from ghimera.model_client import SelfHostedModel
     from ghimera.semantic_graph import SemanticStage
+    from ghimera.spend import RunSpend
 
     cfg = batching_config(tmp_path)
 
@@ -278,7 +230,7 @@ def test_late_cancellation_preserves_completed_and_cancelled_parts_without_proje
                 return await super().post(body)
 
         wire = BlockingWire(cfg.models.reviewer)
-        budget, ledger = RunBudget(cfg, time.monotonic), Ledger()
+        spend, ledger = RunSpend(cfg, time.monotonic), Ledger()
         graph = ResearchGraph(cfg.graph, "cancelled-batch", MemoryGraphSink())
         doc = document()
         await graph.start("map the organization")
@@ -290,7 +242,7 @@ def test_late_cancellation_preserves_completed_and_cancelled_parts_without_proje
             reviewer=SelfHostedModel(cfg, cfg.models.reviewer, http=wire),
         )
         task = asyncio.create_task(
-            stage.extract("map the organization", doc, identity, graph, budget, ledger)
+            stage.extract("map the organization", doc, identity, graph, spend, ledger)
         )
         await asyncio.wait_for(ready.wait(), timeout=5)
         task.cancel()
@@ -303,7 +255,7 @@ def test_late_cancellation_preserves_completed_and_cancelled_parts_without_proje
         assert rows[1].semantic_review is None and rows[1].model_call.outcome == "cancelled"
         assert rows[1].semantic_review_selection.mention_keys == ("m2",)
         assert rows[2].semantic_window is None and rows[2].model_call.task == "semantic_extract"
-        assert budget.semantic_review_calls == 2 and budget.judge_calls == 3
+        assert spend.semantic_review_calls == 2 and spend.judge_calls == 3
         assert validate_rows(cfg, rows) == (rows[-1],)
 
     asyncio.run(run())
@@ -356,13 +308,13 @@ def test_assembled_loop_journal_archive_and_budget_restore_all_actual_calls(tmp_
     import asyncio
     import time
 
-    from ghimera.budget import RunBudget
     from ghimera.doubles import FakeJudge, FakeRoute, KeywordScorer
     from ghimera.fetch import FetchLadder
     from ghimera.journal import read_journal
     from ghimera.loop import GoalLoop
     from ghimera.model_client import SelfHostedModel
     from ghimera.models import Goal, Harvest, Scope
+    from ghimera.spend import RunSpend
     from tests.test_graph_planning import NativeFixture, with_journal
 
     cfg = with_journal(batching_config(tmp_path), tmp_path)
@@ -389,11 +341,9 @@ def test_assembled_loop_journal_archive_and_budget_restore_all_actual_calls(tmp_
     assert Harvest.model_validate_json(harvest.model_dump_json(by_alias=True)) == harvest
     assert read_journal(cfg.journal, "batched-loop").rows == harvest.ledger
     assert harvest.receipt.judge_calls == 6
-    budget = RunBudget(cfg, time.monotonic)
-    budget.restore(harvest.receipt, harvest.ledger, search_calls=0, downtime_seconds=0)
-    assert (
-        budget.semantic_calls == 1 and budget.semantic_review_calls == 4 and budget.judge_calls == 6
-    )
+    spend = RunSpend(cfg, time.monotonic)
+    spend.restore(harvest.receipt, harvest.ledger, search_calls=0, downtime_seconds=0)
+    assert spend.semantic_calls == 1 and spend.semantic_review_calls == 4 and spend.judge_calls == 6
     altered = harvest.model_dump(mode="json", by_alias=True)
     semantic = next(row for row in altered["ledger"] if row["event"] == "semantic")
     semantic["semantic_window"]["review"]["parts"].pop(0)

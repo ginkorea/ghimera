@@ -132,18 +132,27 @@ def test_invalid_config_and_mismatched_content_refuse_before_worker(tmp_path):
 def test_limits_do_not_turn_truncated_or_empty_extraction_into_evidence(tmp_path):
     for updates, html in [
         ({"max_input_bytes": 10}, ARTICLE),
-        ({"max_text_chars": 10}, ARTICLE),
         ({}, "<html><title>Empty</title><body><script>only script</script></body></html>"),
     ]:
+        # A page with no readable text is refused, never turned into evidence.
         with pytest.raises(GhimeraRefused):
             asyncio.run(extractor(tmp_path, **updates).extract(page(html)))
+    # A rich reading over max_text_chars is refused by the rich tier; the page is
+    # kept as bounded plain text that names why the rich tier refused it.
+    parsed = asyncio.run(extractor(tmp_path / "text", max_text_chars=10).extract(page()))
+    evidence = parsed.extraction
+    assert evidence is not None and evidence.tier == "fallback_plain"
+    assert len(parsed.text) <= 10 and evidence.fallback_refusal == RefusalCode.EXTRACTION_FAILED
+    assert "max_text_chars=10" in (evidence.fallback_detail or "")
 
 
-def test_worker_timeout_is_terminal_and_releases_its_capacity(tmp_path):
+def test_worker_timeout_falls_back_to_plain_text_and_releases_its_capacity(tmp_path):
     client = extractor(tmp_path, timeout_seconds=0.001)
-    with pytest.raises(GhimeraRefused) as exc:
-        asyncio.run(client.extract(page()))
-    assert exc.value.code == RefusalCode.BUDGET_EXHAUSTED
+    parsed = asyncio.run(client.extract(page()))
+    evidence = parsed.extraction
+    assert evidence is not None and evidence.tier == "fallback_plain"
+    assert evidence.fallback_refusal == RefusalCode.BOUND_EXCEEDED
+    assert "infrastructure investment" in parsed.text
 
 
 def test_real_extraction_links_work_in_collection_and_roundtrip(tmp_path):
@@ -158,7 +167,7 @@ def test_real_extraction_links_work_in_collection_and_roundtrip(tmp_path):
 
     client = extractor(tmp_path)
     data = GhimeraConfig.from_toml(Path("examples/chimera.toml")).model_dump(by_alias=True)
-    data.update(page_budget=1, extraction=client.config.model_dump(by_alias=True))
+    data.update(extraction=client.config.model_dump(by_alias=True))
     result = asyncio.run(
         GoalLoop(
             config=GhimeraConfig.model_validate(data),
@@ -168,7 +177,7 @@ def test_real_extraction_links_work_in_collection_and_roundtrip(tmp_path):
             judge=FakeJudge(),
         ).run(
             Goal(text="ports", seeds=(page().url,)),
-            Scope(allowed_hosts=("example.org",), max_depth=1, content_types=("text/html",)),
+            Scope(allowed_hosts=("example.org",), max_depth=0, content_types=("text/html",)),
         )
     )
     assert len(result.documents) == 1
@@ -233,9 +242,13 @@ def test_extractor_binding_refuses_before_collection(tmp_path):
 def test_shared_state_directory_is_not_reused(tmp_path):
     shared = tmp_path / "worker"
     shared.mkdir(mode=0o755)
-    with pytest.raises(GhimeraRefused) as exc:
-        asyncio.run(extractor(tmp_path).extract(page()))
-    assert exc.value.code == RefusalCode.ADAPTER_CONTRACT
+    # The rich worker never runs in a shared directory; the in-process plain
+    # reading keeps the page and names the refused rich tier.
+    parsed = asyncio.run(extractor(tmp_path).extract(page()))
+    evidence = parsed.extraction
+    assert evidence is not None and evidence.tier == "fallback_plain"
+    assert evidence.fallback_refusal == RefusalCode.ADAPTER_CONTRACT
+    assert "private_directory" in (evidence.fallback_detail or "")
 
 
 def test_bounded_worker_reader_does_not_buffer_excess_output():

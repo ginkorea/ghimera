@@ -13,7 +13,6 @@ from threading import Event, Thread
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.collector import Collector
 from ghimera.config import GhimeraConfig
 from ghimera.document_media import DOCX_TYPE
@@ -36,6 +35,7 @@ from ghimera.refusals import GhimeraRefused
 from ghimera.research import ResearchLoop
 from ghimera.research_types import ResearchRequest, ResearchResult
 from ghimera.result_archive import ResearchResultArchive
+from ghimera.spend import RunSpend
 from tests.test_collector import assembled, encoder_endpoint, model_endpoint, search_endpoint
 from tests.test_document_extraction import config as document_config
 from tests.test_document_extraction import docx, native_pdf
@@ -206,7 +206,6 @@ def test_real_download_is_parsed_cited_graphed_journalled_and_archived(
                 human_browser=selected.model_dump(),
                 document_extraction=document_config(tmp_path).document_extraction.model_dump(),
                 request_timeout_seconds=30.0,
-                wall_seconds=120.0,
                 graph=graph,
                 research=research_policy(
                     allowed_ports=[site[0]],
@@ -347,18 +346,18 @@ def test_failed_download_does_not_refetch_and_preserves_budget_and_caller(tmp_pa
                     CurlRoute(cfg, resolver=ResolverFixture()),
                 )
             )
-            ledger, budget = Ledger(), RunBudget(cfg, time.monotonic)
+            ledger, spend = Ledger(), RunSpend(cfg, time.monotonic)
             scope = scope_for_source(site[0])
             with pytest.raises(GhimeraRefused) as caught:
-                await ladder.fetch(origin + "/research/report", scope, budget, ledger)
+                await ladder.fetch(origin + "/research/report", scope, spend, ledger)
             expected = {
-                "file_limit": "budget_exhausted",
+                "file_limit": "bound_exceeded",
                 "invalid_media": "content_type_unwanted",
                 "landing_robots": "robots_disallowed",
             }[failure]
             assert caught.value.code.value == expected
-            assert budget.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
-            assert budget.quiescent
+            assert spend.bytes_read == sum(row.bytes_read for row in ledger.snapshot())
+            assert spend.quiescent
             if failure == "landing_robots":
                 assert not site[1]["/research/report"] and not site[1]["/research/landing"]
                 assert page.url == "about:blank"

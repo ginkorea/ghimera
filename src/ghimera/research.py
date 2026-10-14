@@ -325,11 +325,11 @@ class ModelCalls:
         if len(request.model_dump_json(exclude={"documents"})) > self._policy.max_model_input_chars:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
         invocation = ModelInvocation(
-            self._session.budget,
+            self._session.spend,
             self._session.ledger,
             phase=event,
             model=model,
-            request=port_input(self._session.budget, request),
+            request=port_input(self._session.spend, request),
             replay_intent_sequence=intent_sequence,
         )
 
@@ -369,7 +369,7 @@ class ModelCalls:
         # Concrete model ports apply the same limit to their bounded prompt.
         if len(request.model_dump_json(exclude={"documents"})) > self._policy.max_model_input_chars:
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
-        budget, ledger = self._session.budget, self._session.ledger
+        spend, ledger = self._session.spend, self._session.ledger
         if model.location == "external":
             raise GhimeraRefused(RefusalCode.MODEL_UNAVAILABLE)
         recovery = self._recovery
@@ -381,7 +381,7 @@ class ModelCalls:
             if (
                 saved.phase != event
                 or saved.pending_model.model != model
-                or port_input(budget, request) != port_input(budget, saved.model_request)
+                or port_input(spend, request) != port_input(spend, saved.model_request)
             ):
                 raise FatalModelWorkFailure("recovery must continue its exact original model phase")
             self._recovery = None
@@ -389,11 +389,11 @@ class ModelCalls:
                 if result_type is None:
                     raise FatalModelWorkFailure("recovery requires its owning result schema")
                 replaying = ModelInvocation(
-                    budget,
+                    spend,
                     ledger,
                     phase=event,
                     model=model,
-                    request=port_input(budget, request),
+                    request=port_input(spend, request),
                     replay_intent_sequence=recovery.intent_sequence,
                 )
 
@@ -424,24 +424,24 @@ class ModelCalls:
 
         async def once() -> T:
             invocation = ModelInvocation(
-                budget,
+                spend,
                 ledger,
                 phase=event,
                 model=model,
-                request=port_input(budget, request),
+                request=port_input(spend, request),
                 attempt=attempt,
             )
-            started, code, result = budget.clock(), None, None
+            started, code, result = spend.clock(), None, None
             detail: str | None = None
             model_call: ModelCallEvidence | None = None
             try:
-                async with asyncio.timeout(budget.remaining_seconds):
-                    result = await invocation.invoke(lambda: call(request), record_output)
+                result = await invocation.invoke(lambda: call(request), record_output)
                 model_call = result.model_call
                 return result
             except TimeoutError:
-                code = RefusalCode.BUDGET_EXHAUSTED
-                raise GhimeraRefused(code) from None
+                code = RefusalCode.BOUND_EXCEEDED
+                detail = "research model call passed its service deadline without answering"
+                raise GhimeraRefused(code, detail) from None
             except GhimeraRefused as exc:
                 code, detail = exc.code, exc.detail
                 if isinstance(exc, ModelFailure):
@@ -469,16 +469,16 @@ class ModelCalls:
                         else "model_response:" + result.content_digest()
                         if result is not None
                         else "model_cancelled",
-                        latency_seconds=max(0.0, budget.clock() - started),
+                        latency_seconds=max(0.0, spend.clock() - started),
                         planning_graph=request.graph_context
                         if isinstance(request, PlanningRequest)
                         else None,
                     )
                 )
 
-        if attempt is None and budget.config.model_work is None:
+        if attempt is None and spend.config.model_work is None:
             # A transient planner/analyst refusal is retried; each try is accounted.
-            return await retry_transient(budget.config.model_retry, once)
+            return await retry_transient(spend.config.model_retry, once)
         return await once()
 
 
@@ -697,8 +697,6 @@ class ResearchLoop:
                         hit.url for observation in observations for hit in observation.response.hits
                     )
                 except GhimeraRefused as exc:
-                    if exc.code == RefusalCode.BUDGET_EXHAUSTED:
-                        raise
                     self._refuse(session, exc.code, detail=exc.detail)
                     return ()
 
@@ -734,8 +732,6 @@ class ResearchLoop:
                             else None,
                         )
                     except GhimeraRefused as exc:
-                        if exc.code == RefusalCode.BUDGET_EXHAUSTED:
-                            raise
                         self._refuse(session, exc.code, detail=exc.detail)
                         observations = ()
                 completed.append(
@@ -910,11 +906,11 @@ class ResearchLoop:
         )
         try:
             ModelInvocation(
-                session.budget,
+                session.spend,
                 session.ledger,
                 phase=saved.phase,
                 model=saved.pending_model.model,
-                request=port_input(session.budget, saved.model_request),
+                request=port_input(session.spend, saved.model_request),
                 decision=decision,
             )
             return authorization(session.ledger.snapshot()[-1])
@@ -970,7 +966,7 @@ class ResearchLoop:
             )
             try:
                 stopped = await self._collector.process_processing(session, processing)
-                if stopped in {"failed", "budget_exhausted"}:
+                if stopped == "failed":
                     raise ValueError("source processing did not complete its original consumer")
                 return await self._drive(
                     original.request, session, run_id=run_id, source_processing=processing
@@ -1147,10 +1143,7 @@ class ResearchLoop:
     ) -> None:
         if reuse is None:
             return
-        # Exhausting the separate cache-search allowance does not exhaust source
-        # discovery. A global wall-budget expiry still stops all further work.
-        if session.budget.remaining_seconds <= 0:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        # A refused cache search never stops source discovery.
         try:
             decision: RerankDecision | None = None
             if self._policy.reranking is not None:
@@ -1171,14 +1164,11 @@ class ResearchLoop:
                 )
             await reuse.query(
                 text,
-                remaining_seconds=session.budget.remaining_seconds,
                 rerank_decision=decision,
                 query_work=query_work,
             )
         except GhimeraRefused as exc:
             self._refuse(session, exc.code, detail=exc.detail)
-            if session.budget.remaining_seconds <= 0:
-                raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED) from exc
         if session.graph is not None:
             for original in reuse.report.graph_originals:
                 await self._collector.admit_retained(session, original)
@@ -1297,7 +1287,7 @@ class ResearchLoop:
             reviewer=self._reviewer.model,
             search_provider=self._search.identity[0],
             search_revision=self._search.identity[1],
-            search_calls=session.budget.search_calls,
+            search_calls=session.spend.search_calls,
             search_observations=history.observations,
             retrieval=reuse.report if reuse is not None else None,
         )
@@ -1367,7 +1357,7 @@ class ResearchLoop:
                 self._retained_reader,
                 request.intent,
                 restored=progress.retrieval if progress is not None else None,
-                budget=session.budget,
+                spend=session.spend,
                 ledger=session.ledger,
             )
             if self._policy.retained_evidence is not None and self._retained_reader is not None
@@ -1375,7 +1365,7 @@ class ResearchLoop:
         )
         history = SearchHistory(
             self._search,
-            session.budget,
+            session.spend,
             session.ledger,
             restored=progress.search_observations if progress is not None else (),
         )
@@ -1398,7 +1388,7 @@ class ResearchLoop:
         assessment_context: Literal["post_collection", "retained_first"] = (
             saved.assessment_context if saved else "post_collection"
         )
-        quantum_start = session.budget.fetches
+        quantum_start = session.spend.fetches
         collection_leg: Literal["primary", "cited_by"] = "primary"
         collection_scope: Scope | None = None
 
@@ -1420,7 +1410,7 @@ class ResearchLoop:
                 reviewer=self._reviewer.model,
                 search_provider=self._search.identity[0],
                 search_revision=self._search.identity[1],
-                search_calls=session.budget.search_calls,
+                search_calls=session.spend.search_calls,
                 search_observations=history.observations,
                 retrieval=reuse.report if reuse is not None else None,
             )
@@ -1562,7 +1552,7 @@ class ResearchLoop:
                     else None
                 )
                 return QueryWork(
-                    session.budget,
+                    session.spend,
                     session.ledger,
                     cursor,
                     before_query,
@@ -1572,7 +1562,7 @@ class ResearchLoop:
                     acknowledgement_sequence=recovery.query_ack_sequence,
                     rerank_sequence=recovery.query_rerank_sequence,
                 )
-            return QueryWork(session.budget, session.ledger, cursor, before_query)
+            return QueryWork(session.spend, session.ledger, cursor, before_query)
 
         def before_model(event: ModelEvent, model: ModelIdentity, inputs: ResearchRecord) -> None:
             policy = self._config.research_recovery
@@ -1582,7 +1572,7 @@ class ResearchLoop:
                 inputs, (PlanningRequest, EvidenceRequest, AnswerRequest, ReviewRequest)
             ):
                 raise ValueError("recovery needs an explicit run and exact native phase request")
-            wire = port_input(session.budget, inputs)
+            wire = port_input(session.spend, inputs)
             current = ResearchResult(
                 schema="chimera.research-result/3"
                 if reuse is not None
@@ -1600,7 +1590,7 @@ class ResearchLoop:
                 reviewer=self._reviewer.model,
                 search_provider=self._search.identity[0],
                 search_revision=self._search.identity[1],
-                search_calls=session.budget.search_calls,
+                search_calls=session.spend.search_calls,
                 search_observations=history.observations,
                 retrieval=reuse.report if reuse is not None else None,
             )
@@ -1642,15 +1632,13 @@ class ResearchLoop:
         )
         answer: AnswerDraft | None = None
         review: AnswerReview | None = None
-        reason: Literal[
-            "answered", "rounds_exhausted", "budget_exhausted", "failed", "saturated"
-        ] = "rounds_exhausted"
+        reason: Literal["answered", "rounds_exhausted", "failed", "saturated"] = "rounds_exhausted"
         restored_control = checkpoint if checkpoint is not None else saved
         if source_acquisition is not None and source_acquisition.snapshot.phase == "collection":
             stopped = await self._collector.process_acquisition(session, source_acquisition)
             collection_stop = stopped or collection_stop
-            if stopped in {"failed", "budget_exhausted"}:
-                reason = "failed" if stopped == "failed" else "budget_exhausted"
+            if stopped == "failed":
+                reason = "failed"
         if restored_control is not None:
             compiler.restore_hosts(restored_control)
             answer_ready = (checkpoint is not None and checkpoint.next_action == "answer") or (
@@ -1678,11 +1666,7 @@ class ResearchLoop:
                         assessment = None
                         allow_retained_completion = False
                     else:
-                        reason = (
-                            "budget_exhausted"
-                            if exc.code == RefusalCode.BUDGET_EXHAUSTED
-                            else "failed"
-                        )
+                        reason = "failed"
         if (
             isinstance(saved, ResearchQueryControlSnapshot)
             and saved.pending_query.cursor.stage == "initial_retained"
@@ -1717,18 +1701,12 @@ class ResearchLoop:
                 )
             except GhimeraRefused as exc:
                 self._refuse(session, exc.code, detail=exc.detail)
-                reason = (
-                    "budget_exhausted" if exc.code == RefusalCode.BUDGET_EXHAUSTED else "failed"
-                )
-        max_rounds = self._policy.max_rounds
+                reason = "failed"
         empty_rounds = 0
         added: tuple[SearchQuery, ...] = ()
-        for number in (
-            range(initial_rounds + 1, max_rounds + 1)
-            if max_rounds is not None
-            else itertools.count(initial_rounds + 1)
-        ):
-            if reason in {"failed", "budget_exhausted", "answered", "saturated"}:
+        # No round ceiling: research ends on an answer, saturation or a failure.
+        for number in itertools.count(initial_rounds + 1):
+            if reason in {"failed", "answered", "saturated"}:
                 break
             try:
                 resuming_assessment = (
@@ -1961,7 +1939,7 @@ class ResearchLoop:
                     and isinstance(saved, (SourceCompletionSnapshot, SourceAcquisitionSnapshot))
                     else saved.quantum_start
                     if query_stage == "cited_by" and isinstance(saved, ResearchQueryControlSnapshot)
-                    else session.budget.fetches
+                    else session.spend.fetches
                 )
                 if scope is not None and (
                     not resuming_assessment or assessment_context == "retained_first"
@@ -1997,10 +1975,7 @@ class ResearchLoop:
                             )
                             else None,
                         )
-                    if (
-                        collection_stop not in {"failed", "budget_exhausted"}
-                        and collection_leg == "primary"
-                    ):
+                    if collection_stop != "failed" and collection_leg == "primary":
                         cited_urls = await self._cited_by(
                             session,
                             scope,
@@ -2015,7 +1990,7 @@ class ResearchLoop:
                         )
                         urls = tuple(dict.fromkeys(urls + cited_urls))
                         remaining = self._policy.max_pages_per_round - (
-                            session.budget.fetches - quantum_start
+                            session.spend.fetches - quantum_start
                         )
                         if cited_urls and remaining > 0:
                             collection_leg = "cited_by"
@@ -2030,7 +2005,7 @@ class ResearchLoop:
                                 if acquisition_enabled
                                 else None,
                             )
-                if collection_stop in {"failed", "budget_exhausted"}:
+                if collection_stop == "failed":
                     rounds.append(
                         ResearchRound(
                             number=number,
@@ -2040,7 +2015,7 @@ class ResearchLoop:
                             collection_stop=collection_stop,
                         )
                     )
-                    reason = "failed" if collection_stop == "failed" else "budget_exhausted"
+                    reason = "failed"
                     break
                 assessment_context = "post_collection"
                 assessment = await self._assess(session, reuse, request, questions, calls=calls)
@@ -2099,8 +2074,7 @@ class ResearchLoop:
                         {doc.sha256 for doc in session.evidence_documents} - before_documents
                     )
                     empty_rounds = 0 if new_documents else empty_rounds + 1
-                    window = self._policy.effective_saturation_rounds
-                    if window is not None and empty_rounds >= window:
+                    if empty_rounds >= self._policy.effective_saturation_rounds:
                         reason = "saturated"
                         break
                     continue
@@ -2117,9 +2091,7 @@ class ResearchLoop:
                     # A subsequent plan sees a gap, not an apparently complete assessment.
                     assessment = None
                     continue
-                reason = (
-                    "budget_exhausted" if exc.code == RefusalCode.BUDGET_EXHAUSTED else "failed"
-                )
+                reason = "failed"
                 break
         unresolved = () if answer is not None else tuple(question.id for question in questions)
         stop: StopReason = (
@@ -2127,8 +2099,6 @@ class ResearchLoop:
             if reason == "answered"
             else "failed"
             if reason == "failed"
-            else "budget_exhausted"
-            if reason == "budget_exhausted"
             else "saturated"
             if reason == "saturated"
             else "frontier_empty"
@@ -2155,7 +2125,7 @@ class ResearchLoop:
             reviewer=self._reviewer.model,
             search_provider=self._search.identity[0],
             search_revision=self._search.identity[1],
-            search_calls=session.budget.search_calls,
+            search_calls=session.spend.search_calls,
             search_observations=history.observations,
             retrieval=reuse.report if reuse is not None else None,
         )
@@ -2174,7 +2144,7 @@ class ResearchLoop:
         """Query observed sources, concurrently, then score using native parent context.
 
         A search result is a candidate citing source, not a verified citation.
-        Queries and fetches charge the same run budget as ordinary discovery.
+        Queries and fetches are counted in the same run spend as ordinary discovery.
         """
         policy = self._config.references
         if policy is None or not policy.discover_cited_by:
@@ -2218,19 +2188,6 @@ class ResearchLoop:
             sequences: dict[tuple[str, str], int] = {}
 
             def before_call(provider: GroundedSearch) -> None:
-                if (
-                    sum(row.event == "reference_query" for row in session.ledger.snapshot())
-                    >= policy.cited_by_query_budget
-                ):
-                    session.ledger.append(
-                        LedgerRow(
-                            sequence=session.ledger.next_sequence,
-                            event="policy",
-                            query=query.text,
-                            reason="cited_by_query_budget_exhausted",
-                        )
-                    )
-                    raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
                 sequence = session.ledger.next_sequence
                 sequences[provider.identity] = sequence
                 session.ledger.append(
@@ -2266,8 +2223,6 @@ class ResearchLoop:
                         for obs in observations
                     )
                 except GhimeraRefused as exc:
-                    if exc.code == RefusalCode.BUDGET_EXHAUSTED:
-                        raise
                     self._refuse(session, exc.code, detail=exc.detail)
                     return ()
 
@@ -2300,11 +2255,6 @@ class ResearchLoop:
                         current_source: Document = source,
                         current_query: SearchQuery = query,
                     ) -> None:
-                        if (
-                            sum(row.event == "reference_query" for row in session.ledger.snapshot())
-                            >= policy.cited_by_query_budget
-                        ):
-                            raise GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
                         seq = session.ledger.next_sequence
                         session.ledger.append(
                             LedgerRow(
@@ -2362,8 +2312,6 @@ class ResearchLoop:
                             else None,
                         )
                     except GhimeraRefused as exc:
-                        if exc.code == RefusalCode.BUDGET_EXHAUSTED:
-                            raise
                         self._refuse(session, exc.code, detail=exc.detail)
                         query_observations = ()
                     batch = tuple((obs, reference_sequence(obs)) for obs in query_observations)

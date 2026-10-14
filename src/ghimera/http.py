@@ -21,7 +21,7 @@ from ghimera.challenges import ChallengeSessions
 from ghimera.config import GhimeraConfig
 from ghimera.fetch import FetchRoute
 from ghimera.models import FetchRequest, Page
-from ghimera.refusals import FetchCancelled, FetchFailure, GhimeraRefused, RefusalCode
+from ghimera.refusals import FetchCancelled, FetchFailure, GhimeraRefused, RefusalCode, bound_detail
 from ghimera.response import RETAINED_HEADERS
 from ghimera.source_session_types import SourceSessionUse
 from ghimera.source_sessions import SourceCredentials, SourceSessions
@@ -228,10 +228,11 @@ class CurlRoute(FetchRoute):
             await multi.add_handle(curl)
             if body.exhausted or headers.exhausted:
                 raise FetchFailure(
-                    RefusalCode.BUDGET_EXHAUSTED
-                    if body.exhausted
-                    else RefusalCode.ADAPTER_CONTRACT,
+                    RefusalCode.BOUND_EXCEEDED if body.exhausted else RefusalCode.ADAPTER_CONTRACT,
                     len(body.data),
+                    bound_detail("http.max_response_bytes", len(body.data), body.limit)
+                    if body.exhausted
+                    else None,
                 )
             status = curl.getinfo(CurlInfo.RESPONSE_CODE)
             final_url = curl.getinfo(CurlInfo.EFFECTIVE_URL)
@@ -259,7 +260,7 @@ class CurlRoute(FetchRoute):
             return result
         except CurlError as exc:
             code = (
-                RefusalCode.BUDGET_EXHAUSTED
+                RefusalCode.BOUND_EXCEEDED
                 if body.exhausted
                 else RefusalCode.ADAPTER_CONTRACT
                 if headers.exhausted
@@ -267,7 +268,13 @@ class CurlRoute(FetchRoute):
                 if connection.proxy_endpoint and exc.code in {5, 7, 97}
                 else RefusalCode.FETCH_FAILED
             )
-            raise FetchFailure(code, len(body.data)) from None
+            raise FetchFailure(
+                code,
+                len(body.data),
+                bound_detail("http.max_response_bytes", len(body.data), body.limit)
+                if body.exhausted
+                else None,
+            ) from None
         except asyncio.CancelledError:
             raise FetchCancelled(len(body.data)) from None
         finally:

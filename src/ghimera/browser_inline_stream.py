@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from ghimera.browser_download_stream import DownloadSpend, admit_download_media
 from ghimera.document_media import DocumentMime
-from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.refusals import BoundExceeded, GhimeraRefused, RefusalCode
 
 if TYPE_CHECKING:
     from patchright.async_api import Page
@@ -58,7 +58,7 @@ async def read_inline(
 ) -> InlineRead:
     limit = min(max_file_bytes, spend.max_bytes - spend.bytes_read - 1)
     if limit <= 0 or timeout_seconds <= 0:
-        raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+        raise BoundExceeded("browser inline document bytes", spend.bytes_read, spend.max_bytes)
     key = "ghimera_inline_" + uuid.uuid4().hex
     try:
         observed: object = await page.evaluate(
@@ -147,7 +147,7 @@ async def read_inline(
         if reply.response_content_type.split(";", 1)[0].strip().lower() not in formats:
             raise GhimeraRefused(RefusalCode.CONTENT_TYPE_UNWANTED)
         if len(body) > limit:
-            raise GhimeraRefused(RefusalCode.BUDGET_EXHAUSTED)
+            raise BoundExceeded("browser inline max_file_bytes", len(body), limit)
         if not reply.complete:
             raise GhimeraRefused(RefusalCode.FETCH_FAILED)
         content_type, media_observation = admit_download_media(body, formats)

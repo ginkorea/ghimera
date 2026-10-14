@@ -8,7 +8,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.doubles import FakeExtractor, FakeJudge, KeywordScorer
 from ghimera.fetch import FetchLadder
@@ -19,6 +18,7 @@ from ghimera.models import Goal, Harvest, Scope
 from ghimera.refusals import GhimeraRefused
 from ghimera.source_session_types import SourceSessionPolicy
 from ghimera.source_sessions import SourceCredentials, SourceSessions
+from ghimera.spend import RunSpend
 from tests.test_http_fetch import ResolverFixture
 from tests.test_http_fetch import state as http_state
 
@@ -113,8 +113,8 @@ def credentials(*, authorization=AUTH):
 
 def setup(site, *, authorization=AUTH):
     port = site[0]
-    _, _, budget, _, origin = http_state((port,))
-    raw = budget.config.model_dump(by_alias=True)
+    _, _, spend, _, origin = http_state((port,))
+    raw = spend.config.model_dump(by_alias=True)
     raw["source_sessions"] = (policy(origin, allow_http=True).model_dump(by_alias=True),)
     cfg = GhimeraConfig.model_validate(raw)
     route = CurlRoute(
@@ -133,8 +133,8 @@ def setup(site, *, authorization=AUTH):
 
 def test_supplied_session_collects_entitled_content_and_records_only_nonsecret_policy(site):
     cfg, ladder, scope, origin = setup(site)
-    budget, ledger = RunBudget(cfg, time.monotonic), Ledger()
-    page = asyncio.run(ladder.fetch(origin + "/private/report", scope, budget, ledger))
+    spend, ledger = RunSpend(cfg, time.monotonic), Ledger()
+    page = asyncio.run(ladder.fetch(origin + "/private/report", scope, spend, ledger))
     assert page.status == 200 and b"Authorized" in page.body
     assert page.source_session.session_id == "publisher-session"
     assert [item[1] for item in site[1]] == ["/robots.txt", "/private/report"]
@@ -148,7 +148,7 @@ def test_supplied_session_collects_entitled_content_and_records_only_nonsecret_p
 @pytest.mark.parametrize("path", ["/private/cross", "/private/outside"])
 def test_redirect_reselects_credentials_without_forwarding_them_outside_origin_or_path(site, path):
     cfg, ladder, scope, origin = setup(site)
-    page = asyncio.run(ladder.fetch(origin + path, scope, RunBudget(cfg, time.monotonic), Ledger()))
+    page = asyncio.run(ladder.fetch(origin + path, scope, RunSpend(cfg, time.monotonic), Ledger()))
     assert page.status == 200 and page.source_session is None
     targets = [headers for _, target, headers in site[1] if target == "/public"]
     assert len(targets) == 1
@@ -160,7 +160,7 @@ def test_expired_session_is_a_recorded_refusal_not_an_authentication_bypass(site
     ledger = Ledger()
     with pytest.raises(GhimeraRefused, match="fetch_failed"):
         asyncio.run(
-            ladder.fetch(origin + "/private/report", scope, RunBudget(cfg, time.monotonic), ledger)
+            ladder.fetch(origin + "/private/report", scope, RunSpend(cfg, time.monotonic), ledger)
         )
     assert ledger.snapshot()[-1].status == 401
     assert ledger.snapshot()[-1].source_session.session_id == "publisher-session"
@@ -272,7 +272,7 @@ def test_isolated_browser_resources_use_parent_owned_authorized_session(site, tm
     )
     ladder = FetchLadder((route,), renderer=IsolatedBrowserRenderer(cfg))
     page = asyncio.run(
-        ladder.fetch(origin + "/private/browser", scope, RunBudget(cfg, time.monotonic), Ledger())
+        ladder.fetch(origin + "/private/browser", scope, RunSpend(cfg, time.monotonic), Ledger())
     )
     assert page.rendered is not None and b"Authorized port infrastructure" in page.rendered.html
     assert b"Loading ports" in page.body

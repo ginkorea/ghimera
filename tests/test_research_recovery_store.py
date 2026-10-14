@@ -49,13 +49,10 @@ def opened(tmp_path):
             configured(tmp_path).model_dump(),
             model_work=dict(
                 schema="ghimera.model-work/1",
-                max_input_bytes=4_000_000,
-                max_unanswered_calls=4,
                 uncertain_policy="hold",
                 results=dict(
                     schema="ghimera.model-results/1",
                     max_result_bytes=1_000_000,
-                    max_total_result_bytes=6_000_000,
                 ),
             ),
         )
@@ -72,7 +69,7 @@ def opened(tmp_path):
         max_queries=cfg.research.max_queries_per_round,
         max_query_chars=cfg.research.max_query_chars,
     )
-    raw = port_input(session.budget, planning)
+    raw = port_input(session.spend, planning)
     progress = ResearchResult(
         schema="chimera.research-result/1",
         status="partial",
@@ -119,15 +116,15 @@ def opened(tmp_path):
 def returned(session, snapshot, *, phase_event):
     async def call():
         if phase_event:
-            return await ModelCalls(session, session.budget.config.research).invoke(
+            return await ModelCalls(session, session.spend.config.research).invoke(
                 "plan", PlannerFixture.model, snapshot.model_request, PlannerFixture().plan
             )
         invocation = ModelInvocation(
-            session.budget,
+            session.spend,
             session.ledger,
             phase="plan",
             model=PlannerFixture.model,
-            request=port_input(session.budget, snapshot.model_request),
+            request=port_input(session.spend, snapshot.model_request),
         )
         return await invocation.invoke(
             lambda: PlannerFixture().plan(snapshot.model_request), record_output
@@ -165,7 +162,7 @@ def test_exact_original_retained_model_return_is_admitted_without_fabricating_ro
     assert restored.intent_sequence == 0
     assert restored.snapshot == snapshot and restored.journal == before
     assert len(before.rows) == (3 if phase_event else 2)
-    assert session.budget.judge_calls == 1
+    assert session.spend.judge_calls == 1
     assert read_journal(cfg.journal, "control") == before
 
 
@@ -173,11 +170,11 @@ def test_unknown_original_model_call_holds_without_automatic_retry(opened):
     cfg, _, session, snapshot, store = opened
     pin = store.write(snapshot)
     ModelInvocation(
-        session.budget,
+        session.spend,
         session.ledger,
         phase="plan",
         model=PlannerFixture.model,
-        request=port_input(session.budget, snapshot.model_request),
+        request=port_input(session.spend, snapshot.model_request),
     )
     before = read_journal(cfg.journal, "control")
     with pytest.raises(ValueError, match="unknown model outcome"):
@@ -198,7 +195,9 @@ def test_changed_binding_or_unreconciled_journal_refuses(opened, change):
             update={"search_revision": "another-revision"}
         )
     elif change == "recipe":
-        altered = GhimeraConfig.model_validate(dict(cfg.model_dump(), judge_budget=41))
+        altered = GhimeraConfig.model_validate(
+            dict(cfg.model_dump(), saturation_window=cfg.saturation_window + 1)
+        )
         store = ResearchRecoveryStore(altered, "control", StoragePolicy())
     elif change == "digest":
         pin = pin.model_copy(update={"sha256": "0" * 64})
@@ -218,10 +217,10 @@ def test_adoption_requires_exact_input_model_phase_and_only_model_effects(opened
     if change in {"phase", "input", "model"}:
         model = AnalystFixture.model if change == "model" else PlannerFixture.model
         request = (
-            b"changed" if change == "input" else port_input(session.budget, snapshot.model_request)
+            b"changed" if change == "input" else port_input(session.spend, snapshot.model_request)
         )
         invocation = ModelInvocation(
-            session.budget,
+            session.spend,
             session.ledger,
             phase="assessment" if change == "phase" else "plan",
             model=model,
@@ -424,7 +423,7 @@ def test_phase_specific_control_and_collected_frontier_roundtrip(opened, phase):
             "rounds": rounds,
         }
     )
-    raw = port_input(session.budget, phase_request)
+    raw = port_input(session.spend, phase_request)
     snapshot = ResearchControlSnapshot.model_validate(
         dict(
             initial.model_dump(),
@@ -463,11 +462,11 @@ def test_locally_ended_call_with_unknown_remote_outcome_holds(opened, outcome):
     cfg, _, session, snapshot, store = opened
     pin = store.write(snapshot)
     invocation = ModelInvocation(
-        session.budget,
+        session.spend,
         session.ledger,
         phase="plan",
         model=PlannerFixture.model,
-        request=port_input(session.budget, snapshot.model_request),
+        request=port_input(session.spend, snapshot.model_request),
     )
 
     async def fail():

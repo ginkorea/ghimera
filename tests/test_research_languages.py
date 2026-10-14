@@ -42,7 +42,7 @@ class RecordingPlanner(PlannerFixture):
 
 
 def research(languages, planner):
-    cfg = config(research=policy(max_rounds=1), page_budget=30)
+    cfg = config(research=policy())
     search = SearchFixture()
     loop = ResearchLoop(
         config=cfg,

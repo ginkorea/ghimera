@@ -145,11 +145,69 @@ class HtmlExtractor:
         if not page.body:
             raise GhimeraRefused(RefusalCode.EXTRACTION_FAILED, "html page body is empty")
         size = max(len(page.body), len(page.rendered.html) if page.rendered is not None else 0)
-        if size > self.config.max_input_bytes:
-            raise GhimeraRefused(
-                RefusalCode.EXTRACTION_FAILED,
-                f"html page of {size} bytes exceeds max_input_bytes={self.config.max_input_bytes}",
+        # Input bound, cut not refused: read the first max_input_bytes and record
+        # the rest as omitted; evidence still names the whole page.
+        omitted = max(0, size - self.config.max_input_bytes)
+        bounded = self._bounded(page) if omitted else page
+        try:
+            result = await self._extract(bounded, size)
+        except GhimeraRefused as exc:
+            # A rich-tier failure never drops a page that has readable text.
+            fallback = await asyncio.to_thread(self._plain, bounded, exc)
+            if fallback is None:
+                raise
+            result = fallback
+        return self._unbounded(result, page, omitted) if omitted else result
+
+    def _plain(self, page: Page, failure: GhimeraRefused) -> Extracted | None:
+        """Plain body text (scripts/styles stripped) when the rich tier refused."""
+        try:
+            plain = read_fast(page, self.config, plain=True)
+        except (ValueError, UnicodeError, LookupError):
+            return None
+        if plain is None or plain.extraction is None:
+            return None
+        values = plain.extraction.model_dump(by_alias=True)
+        values.update(
+            tier="fallback_plain",
+            fallback_attempts=failure.attempts if isinstance(failure, ExtractionFailure) else (),
+            fallback_refusal=failure.code,
+            fallback_detail=failure.detail,
+        )
+        updated = plain.model_dump(by_alias=True)
+        updated["extraction"] = ExtractionEvidence.model_validate(values)
+        return Extracted.model_validate(updated)
+
+    def _bounded(self, page: Page) -> Page:
+        limit = self.config.max_input_bytes
+        rendered = page.rendered
+        if rendered is not None and len(rendered.html) > limit:
+            html = rendered.html[:limit]
+            rendered = rendered.model_copy(
+                update={"html": html, "html_sha256": hashlib.sha256(html).hexdigest()}
             )
+        return page.model_copy(update={"body": page.body[:limit], "rendered": rendered})
+
+    @staticmethod
+    def _unbounded(result: Extracted, page: Page, omitted: int) -> Extracted:
+        """Bind a cut reading back to the whole page it was cut from."""
+        evidence = result.extraction
+        if evidence is None:
+            raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
+        source = {
+            "source_sha256": hashlib.sha256(page.body).hexdigest(),
+            "rendered_sha256": page.rendered.html_sha256 if page.rendered is not None else None,
+        }
+        values = evidence.model_dump(by_alias=True)
+        values.update(source, omitted_bytes=omitted)
+        values["attempts"] = tuple(
+            attempt.model_copy(update=source) for attempt in evidence.attempts
+        )
+        updated = result.model_dump(by_alias=True)
+        updated["extraction"] = ExtractionEvidence.model_validate(values)
+        return Extracted.model_validate(updated)
+
+    async def _extract(self, page: Page, size: int) -> Extracted:
         profile = next(
             (p for p in self.config.profiles if p.host == urlsplit(page.final_url).hostname), None
         )
@@ -244,13 +302,14 @@ class HtmlExtractor:
         except TimeoutError:
             if attempts and attempts[-1].outcome == "cancelled":
                 values = attempts[-1].model_dump(by_alias=True)
-                values.update(outcome="refused", refusal=RefusalCode.BUDGET_EXHAUSTED)
+                values.update(outcome="refused", refusal=RefusalCode.BOUND_EXCEEDED)
                 attempts[-1] = HtmlExtractionAttempt.model_validate(values)
             raise ExtractionFailure(
-                RefusalCode.BUDGET_EXHAUSTED,
+                RefusalCode.BOUND_EXCEEDED,
                 tuple(attempts),
                 f"html reader exceeded its page deadline "
-                f"timeout_seconds={self.config.timeout_seconds:g} on a {size}-byte page",
+                f"timeout_seconds={self.config.timeout_seconds:g} on a {size}-byte page; "
+                "an input bound, not a spend limit",
             ) from None
         except asyncio.CancelledError:
             raise ExtractionCancelled(tuple(attempts)) from None

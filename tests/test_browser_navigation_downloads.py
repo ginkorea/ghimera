@@ -104,7 +104,6 @@ def test_native_parent_links_feed_unknown_browser_download_without_a_url_list(tm
             values.update(
                 human_browser=selected.model_dump(),
                 request_timeout_seconds=30.0,
-                wall_seconds=120.0,
                 extraction=extraction_policy(tmp_path).model_dump(),
                 document_extraction=document_config(tmp_path).document_extraction.model_dump(),
                 graph=graph,

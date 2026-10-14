@@ -6,8 +6,6 @@ from abc import ABC, abstractmethod
 from types import MappingProxyType
 from typing import ClassVar, final
 
-from ghimera.budget import RunBudget
-from ghimera.ceilings import headroom
 from ghimera.discovery_config import SearchCallLimits
 from ghimera.ledger import Ledger
 from ghimera.models import LedgerRow
@@ -16,6 +14,7 @@ from ghimera.query_work_types import QueryCorpusBinding, QueryReservation
 from ghimera.refusals import FetchCancelled, FetchFailure, GhimeraRefused, RefusalCode
 from ghimera.research_reranking_types import RerankDecision
 from ghimera.research_types import SearchQuery, SearchRequest, SearchResponse
+from ghimera.spend import NO_TRANSFER_BOUND, RunSpend
 from ghimera.transport_types import TransportEvidence
 
 
@@ -53,22 +52,22 @@ class GroundedSearch(ABC):
     async def discover(
         self,
         query: SearchQuery,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         *,
         limits: SearchCallLimits | None = None,
         rerank_decision: RerankDecision | None = None,
         query_work: QueryWork | None = None,
     ) -> SearchResponse:
-        policy = budget.config.research
+        policy = spend.config.research
         if policy is None or len(query.text) > policy.max_query_chars or not query.text.strip():
             raise GhimeraRefused(RefusalCode.RESEARCH_CONTRACT)
         if limits is not None:
             limits = SearchCallLimits.model_validate(limits.model_dump())
         maximum = (
-            budget.config.http.max_response_bytes
-            if budget.config.http is not None
-            else headroom(budget.config.byte_budget, 0)
+            spend.config.http.max_response_bytes
+            if spend.config.http is not None
+            else NO_TRANSFER_BOUND
         )
         if limits is not None:
             maximum = min(maximum, limits.max_bytes)
@@ -81,11 +80,10 @@ class GroundedSearch(ABC):
                     limit=min(policy.results_per_query, limits.limit)
                     if limits
                     else policy.results_per_query,
-                    max_bytes=min(maximum, budget.remaining_bytes),
+                    max_bytes=maximum,
                     timeout_seconds=min(
-                        budget.config.request_timeout_seconds,
-                        budget.remaining_seconds,
-                        limits.timeout_seconds if limits else budget.remaining_seconds,
+                        spend.config.request_timeout_seconds,
+                        limits.timeout_seconds if limits else spend.config.request_timeout_seconds,
                     ),
                 )
             )
@@ -112,15 +110,15 @@ class GroundedSearch(ABC):
                     return response
             maximum = request.max_bytes
         if query_work is None or not query_work.resuming:
-            budget.reserve_search()
-        allowance = budget.reserve_bytes(maximum)
+            spend.reserve_search()
+        allowance = spend.reserve_bytes(maximum)
         try:
             if query_work is None or not query_work.resuming:
-                budget.reserve_fetch()
+                spend.reserve_fetch()
         except BaseException:
-            budget.release_bytes(allowance)
+            spend.release_bytes(allowance)
             raise
-        started = budget.clock()
+        started = spend.clock()
         response = None
         code = None
         size = 0
@@ -133,9 +131,8 @@ class GroundedSearch(ABC):
                 else policy.results_per_query,
                 max_bytes=allowance,
                 timeout_seconds=min(
-                    budget.config.request_timeout_seconds,
-                    budget.remaining_seconds,
-                    limits.timeout_seconds if limits else budget.remaining_seconds,
+                    spend.config.request_timeout_seconds,
+                    limits.timeout_seconds if limits else spend.config.request_timeout_seconds,
                 ),
             )
             if query_work is None
@@ -148,13 +145,12 @@ class GroundedSearch(ABC):
             try:
                 # The original request bytes stay pinned across restart. Its
                 # timeout is not a renewed wall allowance after charged downtime.
-                budget.check_time()
-                async with asyncio.timeout(min(request.timeout_seconds, budget.remaining_seconds)):
+                async with asyncio.timeout(request.timeout_seconds):
                     response = (
-                        await self.request_for_run(request, budget, ledger, rerank_decision)
+                        await self.request_for_run(request, spend, ledger, rerank_decision)
                         if query_work is None
                         else await self.request_for_run(
-                            request, budget, ledger, rerank_decision, query_work
+                            request, spend, ledger, rerank_decision, query_work
                         )
                     )
                 size = min(len(response.raw), allowance)
@@ -179,7 +175,7 @@ class GroundedSearch(ABC):
                     else None,
                     refusal=code,
                     bytes_read=size,
-                    latency_seconds=max(0.0, budget.clock() - started),
+                    latency_seconds=max(0.0, spend.clock() - started),
                     transport=response.transport
                     if response is not None
                     else self.transport_selection(),
@@ -200,7 +196,7 @@ class GroundedSearch(ABC):
                     else None,
                 )
             )
-            budget.record_bytes(size)
+            spend.record_bytes(size)
             if cancelled:
                 raise asyncio.CancelledError
             if code is not None:
@@ -209,12 +205,12 @@ class GroundedSearch(ABC):
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
             return response
         finally:
-            budget.release_bytes(allowance)
+            spend.release_bytes(allowance)
 
     async def request_for_run(
         self,
         request: SearchRequest,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         rerank_decision: RerankDecision | None,
         query_work: QueryWork | None = None,

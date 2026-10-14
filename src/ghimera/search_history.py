@@ -5,7 +5,6 @@ import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ghimera.budget import RunBudget
 from ghimera.discovery import BoundSearch, DiscoveryProviders
 from ghimera.discovery_config import SearchCallLimits
 from ghimera.ledger import Ledger
@@ -16,6 +15,7 @@ from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.research_reranking_types import RerankDecision
 from ghimera.research_types import ResearchRound, SearchObservation, SearchQuery, SearchResponse
 from ghimera.search import GroundedSearch
+from ghimera.spend import RunSpend
 
 
 @dataclass
@@ -23,8 +23,6 @@ class _Usage:
     calls: int = 0
     bytes_read: int = 0
     seconds: float = 0.0
-    reserved_bytes: int = 0
-    reserved_seconds: float = 0.0
     failures: int = 0
 
 
@@ -32,13 +30,13 @@ class SearchHistory:
     def __init__(
         self,
         provider: GroundedSearch | DiscoveryProviders,
-        budget: RunBudget,
+        spend: RunSpend,
         ledger: Ledger,
         *,
         restored: tuple[SearchObservation, ...] = (),
     ) -> None:
-        self._provider, self._budget, self._ledger = provider, budget, ledger
-        if isinstance(provider, DiscoveryProviders) and provider.policy != budget.config.discovery:
+        self._provider, self._spend, self._ledger = provider, spend, ledger
+        if isinstance(provider, DiscoveryProviders) and provider.policy != spend.config.discovery:
             raise ValueError("discovery history requires the effective run recipe")
         self._observations: list[SearchObservation] = list(restored)
         self._rounds: tuple[ResearchRound, ...] = ()
@@ -132,13 +130,13 @@ class SearchHistory:
                     ).encode()
                 ).hexdigest(),
             )
-            if self._budget.config.research is not None
-            and self._budget.config.research.reranking is not None
+            if self._spend.config.research is not None
+            and self._spend.config.research.reranking is not None
             else None
         )
         response = await provider.discover(
             query,
-            self._budget,
+            self._spend,
             self._ledger,
             limits=limits,
             rerank_decision=decision,
@@ -171,19 +169,8 @@ class SearchHistory:
         async with self._semaphore:
             usage = self._usage.setdefault(provider.identity, _Usage())
             policy = provider.policy
-            available_bytes = policy.byte_budget - usage.bytes_read - usage.reserved_bytes
-            available_seconds = policy.call_seconds_budget - usage.seconds - usage.reserved_seconds
-            held = (
-                "circuit_open"
-                if usage.failures >= policy.consecutive_failure_limit
-                else "call_budget"
-                if usage.calls >= policy.max_calls
-                else "byte_budget"
-                if available_bytes <= 0
-                else "call_seconds_budget"
-                if available_seconds <= 0
-                else None
-            )
+            # The circuit breaker is the only hold: there are no provider spend ceilings.
+            held = "circuit_open" if usage.failures >= policy.consecutive_failure_limit else None
             if held is not None:
                 self._ledger.append(
                     LedgerRow(
@@ -195,13 +182,11 @@ class SearchHistory:
                 )
                 return GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
             limits = SearchCallLimits(
-                max_bytes=min(policy.max_response_bytes, available_bytes),
+                max_bytes=policy.max_response_bytes,
                 limit=policy.max_results,
-                timeout_seconds=min(policy.timeout_seconds, available_seconds),
+                timeout_seconds=policy.timeout_seconds,
             )
             usage.calls += 1  # Atomic reservation before the provider's first await.
-            usage.reserved_bytes += limits.max_bytes
-            usage.reserved_seconds += limits.timeout_seconds
             start = self._ledger.next_sequence
             try:
                 return await self._call(
@@ -210,8 +195,6 @@ class SearchHistory:
             except GhimeraRefused as exc:
                 return exc
             finally:
-                usage.reserved_bytes -= limits.max_bytes
-                usage.reserved_seconds -= limits.timeout_seconds
                 usage.calls -= 1
                 rows = self._ledger.snapshot()
                 if len(rows) > start:
@@ -274,21 +257,11 @@ class SearchHistory:
                 results.append(result)
                 if isinstance(result, SearchObservation) and result.response.hits:
                     break
-                if (
-                    isinstance(result, GhimeraRefused)
-                    and result.code == RefusalCode.BUDGET_EXHAUSTED
-                ):
-                    break
         for result in results:
             if isinstance(result, GhimeraRefused):
                 failures.append(result)
             else:
                 observations.append(result)
-        budget_failure = next(
-            (exc for exc in failures if exc.code == RefusalCode.BUDGET_EXHAUSTED), None
-        )
-        if budget_failure is not None:
-            raise budget_failure
         if not observations:
             raise failures[-1] if failures else GhimeraRefused(RefusalCode.SEARCH_UNAVAILABLE)
         return tuple(observations)

@@ -141,7 +141,7 @@ class ChallengeSessions:
             payload["max_timeout"] = max(1, math.ceil(timeout))
         else:
             # Byparr 3.x interprets <1000 as seconds, unlike FlareSolverr.
-            # The local deadline still bounds subsecond caller budgets.
+            # The local deadline still bounds subsecond caller deadlines.
             minimum = 1000 if policy.provider == "byparr" else 1
             payload["maxTimeout"] = max(minimum, int(timeout * 1000))
             payload["returnOnlyCookies"] = True

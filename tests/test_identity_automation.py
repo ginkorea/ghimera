@@ -8,7 +8,6 @@ from time import monotonic
 import pytest
 from pydantic import ValidationError
 
-from ghimera.budget import RunBudget
 from ghimera.config import GhimeraConfig
 from ghimera.doubles import FakeExtractor, FakeJudge, FakeRoute, KeywordScorer
 from ghimera.fetch import FetchLadder
@@ -23,6 +22,7 @@ from ghimera.model_http import ModelHttpResponse
 from ghimera.model_work import uncertain_model_sequences
 from ghimera.models import Extracted, Goal, Harvest, LedgerRow, Scope
 from ghimera.refusals import GhimeraRefused, RefusalCode
+from ghimera.spend import RunSpend
 from tests.test_collector import (
     assembled,
     encoder_endpoint,
@@ -40,13 +40,10 @@ def configured(tmp_path, *, roles=("entity",), **updates):
     raw.update(
         model_work={
             "schema": "ghimera.model-work/1",
-            "max_input_bytes": 200_000,
-            "max_unanswered_calls": 1,
             "uncertain_policy": "hold",
             "results": {
                 "schema": "ghimera.model-results/1",
                 "max_result_bytes": 100_000,
-                "max_total_result_bytes": 3_000_000,
             },
         },
         identity_automation={
@@ -57,8 +54,6 @@ def configured(tmp_path, *, roles=("entity",), **updates):
             "require_distinct_models": False,
             "max_mentions": 8,
             "max_pairs_per_pass": 20,
-            "max_proposal_calls": 4,
-            "max_review_calls": 4,
             "max_context_chars": 70_000,
             "max_evidence_chars": 5000,
             "max_reason_chars": 500,
@@ -261,7 +256,7 @@ def test_native_cross_script_decision_is_separately_reviewed_then_planned_and_re
         session = await observed(loop, texts)
         before = session.graph.snapshot()
         assert len(proposer.requests) == len(reviewer.requests) == 1
-        assert session.budget.identity_proposal_calls == session.budget.identity_review_calls == 1
+        assert session.spend.identity_proposal_calls == session.spend.identity_review_calls == 1
         assert before.identity_decisions and all(
             d.basis == "model_reviewed" for d in before.identity_decisions
         )
@@ -494,8 +489,8 @@ def test_exact_ack_survives_application_crash_and_reopen_without_contact(
             cfg, "ack-crash", session.goal, loop._judge.model, resume_rows=report.rows
         )
         session.ledger = Ledger(sink=sink, restored_rows=report.rows)
-        session.budget = RunBudget(cfg, monotonic)
-        session.budget.restore(receipt, report.rows, 0, 0)
+        session.spend = RunSpend(cfg, monotonic)
+        session.spend.restore(receipt, report.rows, 0, 0)
         session.graph = ResearchGraph(
             cfg.graph,
             "ack-crash",
@@ -506,7 +501,7 @@ def test_exact_ack_survives_application_crash_and_reopen_without_contact(
         await session.graph.start("map aliases")
         await loop.resolve_identity(session)
         assert len(proposer.requests) == len(reviewer.requests) == 1
-        assert session.budget.identity_proposal_calls == session.budget.identity_review_calls == 1
+        assert session.spend.identity_proposal_calls == session.spend.identity_review_calls == 1
         assert session.graph.snapshot().identity_decisions
         loop.finish(session, "frontier_empty")
         session.close()
@@ -620,22 +615,22 @@ def test_unknown_identity_outcome_remains_charged_and_never_repeated(tmp_path, m
                 allow_grade=False,
             )
         monkeypatch.setattr(session.ledger, "append", append)
-        charged = session.budget.judge_calls
+        charged = session.spend.judge_calls
         assert uncertain_model_sequences(session.ledger.snapshot())
         with pytest.raises(GhimeraRefused):
             await loop.resolve_identity(session)
-        assert session.budget.judge_calls == charged and session.budget.identity_proposal_calls == 1
+        assert session.spend.judge_calls == charged and session.spend.identity_proposal_calls == 1
         assert len(proposer.requests) == 1 and not reviewer.requests
         receipt = loop.snapshot(session).receipt
         with pytest.raises(ValueError, match="uncertain model reservations"):
-            RunBudget(cfg, monotonic).restore(receipt, session.ledger.snapshot(), 0, 0)
+            RunSpend(cfg, monotonic).restore(receipt, session.ledger.snapshot(), 0, 0)
         session.close()
 
     asyncio.run(scenario())
 
 
-def test_native_identity_pair_and_call_budgets_are_not_extended(tmp_path):
-    cfg = configured(tmp_path, max_pairs_per_pass=1, max_proposal_calls=1, max_review_calls=1)
+def test_native_identity_pair_bound_is_not_extended(tmp_path):
+    cfg = configured(tmp_path, max_pairs_per_pass=1)
     texts = {"https://example.org/a": "Bureau A is also called Bureau B and Bureau C."}
     loop, proposer, reviewer = loop_for(
         cfg, texts, (("entity", "Bureau A"), ("entity", "Bureau B"), ("entity", "Bureau C"))
@@ -645,20 +640,18 @@ def test_native_identity_pair_and_call_budgets_are_not_extended(tmp_path):
         session = await observed(loop, texts)
         first = session.ledger.snapshot()[-1].identity_observation
         assert len(first.request.pairs) == 1 and first.request.omitted_pairs == 2
-        with pytest.raises(GhimeraRefused) as caught:
-            await loop.resolve_identity(session)
-        assert caught.value.code == RefusalCode.BUDGET_EXHAUSTED
         assert len(proposer.requests) == len(reviewer.requests) == 1
-        assert session.budget.identity_proposal_calls == session.budget.identity_review_calls == 1
+        assert session.spend.identity_proposal_calls == session.spend.identity_review_calls == 1
+        # There is no per-run call cap: a further pass proceeds to the next pair.
+        await loop.resolve_identity(session)
+        assert len(proposer.requests) == len(reviewer.requests) == 2
         session.close()
 
     asyncio.run(scenario())
 
 
 def test_bounded_mentions_progress_to_uninspected_original_pairs(tmp_path):
-    cfg = configured(
-        tmp_path, max_mentions=2, max_pairs_per_pass=1, max_proposal_calls=3, max_review_calls=3
-    )
+    cfg = configured(tmp_path, max_mentions=2, max_pairs_per_pass=1)
     texts = {"https://example.org/a": "Bureau A is also called Bureau B and Bureau C."}
     loop, proposer, reviewer = loop_for(
         cfg, texts, (("entity", "Bureau A"), ("entity", "Bureau B"), ("entity", "Bureau C"))
@@ -817,7 +810,6 @@ def test_collector_facade_consumes_resolved_projection_on_next_round(
         raw[field] = identity.model_dump(by_alias=True)[field]
     raw["research"]["graph_context"] = identity.research.graph_context.model_dump(by_alias=True)
     raw["research"]["max_model_input_chars"] = 200_000
-    raw["judge_budget"] = 30
     cfg = GhimeraConfig.model_validate(raw)
     source_site[4]["/plain"] = source_site[4]["/plain"].replace(
         b"</article>", "<p>海事局 is also called Maritime Bureau.</p></article>".encode()

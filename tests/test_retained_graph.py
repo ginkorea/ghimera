@@ -334,23 +334,25 @@ def test_retained_graph_uses_current_independent_review_and_preserves_refusals(
 
 
 @pytest.mark.parametrize("window_chars", [1000, 18])
-def test_retained_semantics_do_not_escape_the_shared_judge_budget(tmp_path, endpoint, window_chars):
+def test_retained_semantics_are_counted_as_judge_spend(tmp_path, endpoint, window_chars):
     async def operation():
         store = corpus(corpus_config(tmp_path, endpoint[0]), create=True)
         try:
             await store.append(await harvest(("zh", "港口：甲委員會隸屬乙委員會。" * 2)))
             reader = CorpusEvidenceReader(reader_policy(store), store)
-            raw = configured(tmp_path, reader).model_dump() | {"judge_budget": 1}
+            raw = configured(tmp_path, reader).model_dump()
             raw["semantics"]["window_chars"] = window_chars
             cfg = GhimeraConfig.model_validate(raw)
             loop, wire, route, search, planner = assembled(cfg, reader)
             result = await loop.run(ResearchRequest(intent="find ports"), run_id="bounded-graph")
-            assert (
-                result.status != "answered"
-                and result.harvest.receipt.stop_reason == "budget_exhausted"
-            )
-            assert result.harvest.receipt.judge_calls == 1 and len(wire.requests) == 1
-            assert not planner.requests and not route.requests and not search.requests
+            # No judge ceiling: retained semantics are counted as judge spend.
+            assert result.harvest.receipt.judge_calls >= len(wire.requests) >= 1
+            if window_chars == 18:
+                # Every window is attempted; the refused one is recorded and fails the run.
+                assert result.status == "failed" and len(wire.requests) == 2
+                assert not planner.requests and not route.requests and not search.requests
+            else:
+                assert result.status == "answered" and len(wire.requests) == 1
             assert len(result.harvest.retained_sources) == 1
             if window_chars == 18:
                 (failure,) = (row for row in result.harvest.ledger if row.retained_failure)
@@ -360,14 +362,6 @@ def test_retained_semantics_do_not_escape_the_shared_judge_budget(tmp_path, endp
                     row for row in forged["harvest"]["ledger"] if row.get("retained_failure")
                 )
                 refusal["retained_failure"]["bundle_sha256"] = "0" * 64
-                with pytest.raises(ValidationError):
-                    ResearchResult.model_validate(forged)
-                forged = result.model_dump()
-                forged["harvest"]["ledger"] = [
-                    row for row in forged["harvest"]["ledger"] if not row.get("retained_failure")
-                ]
-                for sequence, row in enumerate(forged["harvest"]["ledger"]):
-                    row["sequence"] = sequence
                 with pytest.raises(ValidationError):
                     ResearchResult.model_validate(forged)
             assert ResearchResult.model_validate_json(result.model_dump_json()) == result

@@ -18,6 +18,7 @@ from ghimera.graph_types import (
     Text,
 )
 from ghimera.model_types import IdentityCallEvidence
+from ghimera.removed_ceilings import REMOVED_IDENTITY_CEILINGS, refuse_removed
 
 
 class IdentityAutomationConfig(GraphRecord):
@@ -28,12 +29,15 @@ class IdentityAutomationConfig(GraphRecord):
     require_distinct_models: bool
     max_mentions: Annotated[int, Field(strict=True, ge=2)]
     max_pairs_per_pass: Positive
-    max_proposal_calls: Positive
-    max_review_calls: Positive
     max_context_chars: Positive
     max_evidence_chars: Positive
     max_reason_chars: Positive
     as_of: date | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_run_ceilings(cls, data: object) -> object:
+        return refuse_removed(data, REMOVED_IDENTITY_CEILINGS, "identity_automation.")
 
     @model_validator(mode="after")
     def distinct(self) -> "IdentityAutomationConfig":
