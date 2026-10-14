@@ -23,7 +23,13 @@ class Judge(Protocol):
     @property
     def model(self) -> ModelIdentity: ...
 
-    async def document(self, goal: Goal, document: Extracted, *, second_look: bool) -> Verdict: ...
+    async def document(self, goal: Goal, document: Extracted, *, second_look: bool) -> Verdict:
+        """Return a READING of the page; it guides the collection and never drops it.
+
+        A judge may also accept ``questions`` (the research plan's sub-questions) so
+        its reading can say which of them the page informs.
+        """
+        ...
 
     async def grade(self, goal: Goal, documents: tuple[Document, ...]) -> Grade: ...
 

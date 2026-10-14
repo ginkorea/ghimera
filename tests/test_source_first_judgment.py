@@ -79,10 +79,10 @@ def test_v2_exact_legacy_policy_and_wire_fingerprints(tmp_path):
         verdict = asyncio.run(judge.scored_document(goal, extracted, context, second_look=False))
         system = judge._http.requests[0]["messages"][0]["content"]
         assert hashlib.sha256(system.encode()).hexdigest() == (
-            "df23dba7c95930aa1ba9b5898660c7c57ea81c0cb0ed1f74af30762b1b197963"
+            "af5c15b77330352a64fdf1667d55cc04c7c4c755d4c22550c389f41a1644748c"
         )
         assert verdict.model_call.request_sha256 == (
-            "c332fb4982f9983966014d7b23140e7fa33ed7ca2d7d9a84d45f8ef691397555"
+            "b553b5826ef5d93c982789bb486abc237e2e530a3ebb5573a3be33d953c7dc64"
         )
     finally:
         ledger.close()
@@ -114,7 +114,8 @@ def test_source_first_example_is_explicit_inert_policy():
     )
     assert set(raw) == {"document_judgment"}
     policy = DocumentJudgmentConfig.model_validate(raw["document_judgment"])
-    assert policy.model_dump() == SOURCE_FIRST_POLICY
+    assert policy.model_dump() == dict(SOURCE_FIRST_POLICY, keep_at_or_above=0.8)
+    assert policy.effective_keep_at_or_above == 0.8
     assert policy.effective_prompt_revision == "ghimera-scored-document-judgment/3"
 
 
@@ -265,7 +266,8 @@ def test_source_first_original_ack_replay_is_local_exact_and_counted_once(tmp_pa
             )
         )
         evidence = ledger.snapshot()[-1].document_judgment
-        assert verdict.decision == "reject" and disposition == "hold"
+        assert verdict.decision == "reject" and disposition == "accept"
+        assert evidence.reason == "similarity_floor"
         request = port_input(spend, goal, extracted, evidence.context, second_look=False)
         ack = ledger.snapshot()[evidence.ack_sequence].model_ack
         assert Verdict.model_validate_json(ack.stored_output.body()) == verdict

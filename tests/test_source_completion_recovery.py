@@ -423,22 +423,32 @@ def test_completed_none_or_merged_duplicate_preserves_frontier_references_and_or
     cut = offline_cut(cfg, monkeypatch, reject=reject, duplicate=True, count=1 if reject else 2)
     operations = read_source_work(cfg, "cut").operations
     if reject:
-        assert operations[-1].result is None and not cut.snapshot.progress.harvest.documents
+        # The judge never discards: a legacy "reject" completes with the page kept
+        # and graded unrelated.
+        kept = operations[-1].result
+        assert kept is not None and kept.verdict.relevance == "unrelated"
+        assert cut.snapshot.progress.harvest.documents == (kept,)
     else:
         assert len(cut.snapshot.progress.harvest.documents) == 1
         assert len(cut.snapshot.progress.harvest.documents[0].occurrences) == 1
         assert cut.snapshot.session.reference_hops and cut.snapshot.session.reference_origins
         assert any(row.reference is not None for row in cut.journal.rows)
     assert cut.snapshot.session.frontier
-    assert bool(cut.snapshot.session.content_revisions) == (not reject)
+    assert cut.snapshot.session.content_revisions
     resumed, route, search, planner = offline_loop(cfg, reject=reject, duplicate=True)
     result = asyncio.run(
         resumed.recover("cut", snapshot_sha256=cut.sha256, boundary="source_completion")
     )
+    assert result.harvest.ledger[: len(cut.journal.rows)] == cut.journal.rows
+    if reject:
+        # The kept page is new evidence, so the round does not saturate and research
+        # goes on; the completed source itself is never fetched again.
+        assert all(request.url != kept.url for request in route.requests)
+        assert any(doc.sha256 == kept.sha256 for doc in result.harvest.documents)
+        return
     assert not route.requests and not search.requests and not planner.requests
     assert result.harvest.documents == cut.snapshot.progress.harvest.documents
     assert result.harvest.receipt.fetches == cut.snapshot.progress.harvest.receipt.fetches
-    assert result.harvest.ledger[: len(cut.journal.rows)] == cut.journal.rows
     assert len(result.rounds) == 1
 
 

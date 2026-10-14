@@ -73,6 +73,7 @@ from ghimera.research_types import (
     EvidenceRequest,
     PlanningRequest,
     Question,
+    ReadingNote,
     ResearchPlan,
     ReviewRequest,
 )
@@ -114,6 +115,36 @@ GRADE_PROMPT_REVISION = "chimera-collection-grade/2"
 RETAINED_PROMPT_REVISION = "ghimera-retained-research-prompts/1"
 SCORED_JUDGMENT_REVISION = "ghimera-scored-document-judgment/1"
 VISUAL_PROMPT_REVISION = "ghimera-visual-evidence-prompts/1"
+READING_INSTRUCTIONS = (
+    "Read this page for the researcher. Your job is to help the researcher USE the page "
+    "and decide what to look at next. You never decide whether the page is kept: every "
+    "page is kept, and what you return is a reading of it. "
+    "First name the SUBJECT of the original intent in one short phrase (the event, the "
+    "actors and the reactions it is about) and put it in subject. Grade the page against "
+    "that SUBJECT, not against the literal wording of the question: "
+    "direct = it answers part of the intent; "
+    "supporting = it is about the same subject (the event, the actors, the reactions or "
+    "the context the intent names) even if it does not answer the question as worded; "
+    "background = related material useful for the network graph or the brief; "
+    "unrelated = about something else entirely. "
+    "Example: for an intent about how influencers describe the PRC reaction to the "
+    "Taiwanese President's 10/10 speech, a scholar's analysis of the speech and of "
+    "Beijing's likely response is supporting (a scholar is not an influencer, but the "
+    "page is about the speech and the reaction); a page about engagement-rate formulas "
+    "is unrelated. "
+    "Set decision to accept when you have read and graded the page, or hold only when the "
+    "excerpt is too partial to grade at all; a hold gets a wider second look. "
+    "informs lists the ids of the supplied questions the page helps answer (empty when no "
+    "questions are supplied). contribution says in one sentence what the page says about "
+    "the subject. follow suggests a few leads worth pursuing next: kind=query for a named "
+    "person, outlet, account, hashtag or event worth a search, kind=link for an absolute "
+    "URL that appears on the page and is worth fetching. names lists people, "
+    "organisations, accounts and claims the page names, each with its kind. "
+    "Return kind, publisher, language and reason too; unknown attributes say unknown. "
+    "Never infer unsupported source identity and never invent a link."
+)
+
+
 INSTRUCTIONS = MappingProxyType(
     {
         "identity_propose": (
@@ -163,7 +194,11 @@ INSTRUCTIONS = MappingProxyType(
         "plan": (
             "Decompose the original intent into questions and grounded-search queries. "
             "Preserve supplied question IDs and text exactly. Do not propose URLs. "
-            "Obey the supplied question/query limits; target unresolved coverage."
+            "Obey the supplied question/query limits; target unresolved coverage. "
+            "readings, when supplied, are the judge's notes on pages already kept: which "
+            "questions each page informs, what it says, the queries it suggests and the "
+            "names it carries. Use them to steer the next queries toward questions no "
+            "reading informs and toward the suggested people, outlets, accounts and events."
         ),
         "assessment": (
             "Assess every supplied question. Use only retained native evidence. "
@@ -182,12 +217,7 @@ INSTRUCTIONS = MappingProxyType(
             "and whether the question pack covers the original intent. Unsupported or "
             "ambiguous evidence is not supported. Judge only the supplied native evidence."
         ),
-        "verdict": (
-            "Judge whether this native document excerpt is relevant to the original intent. "
-            "Return accept, reject or hold with kind, publisher, language and reason. "
-            "Unknown attributes must say unknown. A second look is explicit; never infer "
-            "unsupported source identity."
-        ),
+        "verdict": READING_INSTRUCTIONS,
         "grade": (
             "This is a collection sufficiency check over retained source evidence, not an "
             "answer review. No answer draft is supplied or required. Decide whether the "
@@ -199,6 +229,7 @@ INSTRUCTIONS = MappingProxyType(
         ),
     }
 )
+
 
 LANGUAGE_PLAN_INSTRUCTIONS = (
     " The request names preferred source languages. For every question, write at "
@@ -457,6 +488,7 @@ class PromptInput(Record):
     retained_sources: tuple[RetainedSourceNotice, ...] = Field(
         default=(), exclude_if=lambda value: not value
     )
+    readings: tuple[ReadingNote, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     def packet(self) -> str:
         return self.model_dump_json(
@@ -470,6 +502,23 @@ class PromptInput(Record):
         )
 
 
+def reading_schema(schema: dict[str, JsonValue], properties: dict[str, JsonValue]) -> None:
+    """A served reading may only read (accept) or ask for the second look (hold)."""
+    properties["decision"] = {"type": "string", "enum": ["accept", "hold"]}
+    properties["relevance"] = {
+        "type": "string",
+        "enum": ["direct", "supporting", "background", "unrelated"],
+    }
+    properties["subject"] = {"type": "string"}
+    properties["contribution"] = {"type": "string"}
+    required = schema.get("required")
+    names = list(required) if isinstance(required, list) else []
+    for name in ("relevance", "subject", "informs", "contribution", "follow", "names"):
+        if name not in names:
+            names.append(name)
+    schema["required"] = names
+
+
 def model_schema(
     output: type[T], *, template_ids: bool = False, graph_planning: bool = False
 ) -> dict[str, JsonValue]:
@@ -479,6 +528,8 @@ def model_schema(
     properties = schema.get("properties")
     if isinstance(properties, dict):
         properties.pop("model_call", None)
+        if output is Verdict:
+            reading_schema(schema, properties)
     definitions = schema.get("$defs")
     if isinstance(definitions, dict):
         query = definitions.get("SearchQuery")
@@ -704,22 +755,14 @@ class SelfHostedModel:
                 "citations or fabricate call telemetry. "
                 + (
                     "The scored_document contains bounded, unchanged excerpts of ONE original "
-                    "source. Judge useful source contribution, not answer completeness: accept "
-                    "when a supplied excerpt directly supports ANY factual part of the original "
-                    "intent, even if other requested facts remain unanswered. Assess every "
-                    "supplied window before deciding; quotes and reasons must be grounded in "
-                    "those excerpts, not inferred from titles, source identity or topic names. "
-                    "Similarity never establishes relevance, truth or acceptance; scores and "
-                    "source hashes are selection provenance, not evidence of a factual claim. "
-                    "Do not require a complete answer, every requested entity or all requested "
-                    "facts for source admission. Missing or unresolved names and dates remain "
-                    "downstream gaps, not grounds to reject an otherwise useful contribution. "
-                    "Reject only demonstrably unrelated excerpts; hold when uncertain about "
-                    "their factual contribution, including ambiguous or conflicting evidence. "
-                    "Omitted text is UNREAD: never claim the whole document lacks information "
-                    "from partial excerpts. Downstream assessment and review determine answer "
-                    "completeness; admitting a useful source does not establish that completeness. "
-                    "Offsets, hashes, windows and omissions remain client provenance. "
+                    "source. Read every supplied window before grading; quotes, contribution "
+                    "and reasons must be grounded in those excerpts, not inferred from titles, "
+                    "source identity or topic names. Similarity is selection provenance, not "
+                    "relevance or truth. Omitted text is UNREAD: never claim the whole document "
+                    "lacks information from partial excerpts. A page does not need to answer the "
+                    "whole intent, name every requested entity or use the intent's exact words "
+                    "to be direct or supporting. Offsets, hashes, windows and omissions remain "
+                    "client provenance. "
                     if prompt.scored_document is not None
                     and judgment is not None
                     and judgment.prompt_profile == "contribution_relevance"
@@ -1378,6 +1421,7 @@ class SelfHostedModel:
                 graph_context=request.graph_context,
                 retained_sources=request.retained_sources,
                 languages=request.languages,
+                readings=request.readings,
             ),
             ResearchPlan,
         )
@@ -1451,7 +1495,13 @@ class SelfHostedModel:
         )
 
     async def scored_document(
-        self, goal: Goal, document: Extracted, context: ScoredNativeContext, *, second_look: bool
+        self,
+        goal: Goal,
+        document: Extracted,
+        context: ScoredNativeContext,
+        *,
+        second_look: bool,
+        questions: tuple[Question, ...] = (),
     ) -> Verdict:
         from ghimera.judgment_context import validate_native_source
 
@@ -1485,13 +1535,21 @@ class SelfHostedModel:
                 task="verdict",
                 intent=goal.text,
                 evidence=self._evidence(goal.text, ()),
+                questions=questions,
                 scored_document=context,
                 second_look=second_look,
             ),
             Verdict,
         )
 
-    async def document(self, goal: Goal, document: Extracted, *, second_look: bool) -> Verdict:
+    async def document(
+        self,
+        goal: Goal,
+        document: Extracted,
+        *,
+        second_look: bool,
+        questions: tuple[Question, ...] = (),
+    ) -> Verdict:
         text = document.text
         starts = [
             hit.start()
@@ -1522,6 +1580,7 @@ class SelfHostedModel:
                 task="verdict",
                 intent=goal.text,
                 evidence=self._evidence(goal.text, ()),
+                questions=questions,
                 document=excerpt,
                 second_look=second_look,
             ),

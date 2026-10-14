@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import heapq
+import inspect
 import os
 import time
 from collections.abc import Callable, Iterator
@@ -22,7 +23,11 @@ from ghimera.fetch import FetchLadder
 from ghimera.graph import DirectoryGraphSink, GraphSink, ResearchGraph
 from ghimera.identity_automation import IdentityProposer, IdentityReviewer, IdentityStage
 from ghimera.judgment_context import select_scored_windows
-from ghimera.judgment_types import DocumentJudgmentEvidence, JudgmentContextReservation
+from ghimera.judgment_types import (
+    DocumentJudgmentEvidence,
+    JudgmentContextReservation,
+    reading_disposition,
+)
 from ghimera.ledger import Ledger
 from ghimera.local_input_types import LocalDocumentSeed
 from ghimera.local_inputs import (
@@ -104,6 +109,7 @@ def unjudged(extracted: Extracted, failure: GhimeraRefused) -> tuple[Verdict, Li
         publisher="unknown",
         language=extracted.language or "und",
         reason=refusal_detail(f"unjudged: judge refused {failure.code.value}: {failure.detail}"),
+        relevance="unjudged",
     ), "accept"
 
 
@@ -112,8 +118,19 @@ AcquisitionControl = Callable[[SourceOperation, int, int], SourceAcquisitionSnap
 if TYPE_CHECKING:
     from ghimera.graph_types import GraphBatch
     from ghimera.research_recovery_types import ResearchRecoveryRead
+    from ghimera.research_types import Question
     from ghimera.source_completion import SourceCompletionSnapshot
     from ghimera.source_work import SourceWorkStore, SourceWorkToken
+
+
+def accepts_questions(method: Callable[..., object]) -> bool:
+    try:
+        parameters = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return False
+    return "questions" in parameters or any(
+        item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values()
+    )
 
 
 class CollectionSession:
@@ -152,6 +169,11 @@ class CollectionSession:
         self.failure_detail: str | None = None
         # Where a page that yielded no text at all keeps its fetched bytes.
         self.refused_archive: Path | None = None
+        # The research plan's current sub-questions, handed to the judge so a reading
+        # can say which of them a page informs. Empty outside research.
+        self.reading_questions: tuple[Question, ...] = ()
+        # Link leads a reading asked the frontier to fetch, in order.
+        self.followed_leads: list[str] = []
 
     @property
     def documents(self) -> tuple[Document, ...]:
@@ -1758,10 +1780,11 @@ class GoalLoop:
                         source_sha256=hashlib.sha256(page.body).hexdigest(),
                     )
                 except GhimeraRefused as exc:
-                    if exc.code in CONTRACT_FAILURES:
+                    if exc.code in CONTRACT_FAILURES and not exc.served_judge_failed:
                         raise
-                    # A judge outage never drops a page or stops the round: the
-                    # page is kept unjudged and the refusal row stays in the ledger.
+                    # The judge guides; it never discards. A failed or unavailable
+                    # judge leaves the page kept as "unjudged" and the round goes on;
+                    # the refusal row stays in the ledger.
                     verdict, disposition = unjudged(extracted, exc)
                 if processing is not None:
                     processing.save(
@@ -1774,6 +1797,18 @@ class GoalLoop:
                 break
         if processing is not None:
             processing.save("consuming")
+        if verdict is not None:
+            kept = self._kept_reading(session, verdict, disposition, page.final_url, url)
+            if kept is not verdict:
+                ledger.append(
+                    LedgerRow(
+                        sequence=ledger.next_sequence,
+                        event="policy",
+                        url=page.final_url,
+                        reason=f"reading_kept: {kept.grade}: {kept.reason}"[:4000],
+                    )
+                )
+            verdict, disposition = kept, "accept"
         if verdict is not None and disposition == "accept":
             digest = hashlib.sha256(page.body).hexdigest()
             images: tuple[ImageEvidence, ...] = ()
@@ -1906,6 +1941,8 @@ class GoalLoop:
                 reference_policy is not None
                 and active_scope is not None
                 and candidate in session.evidence_documents
+                # A page read as unrelated is kept, but its citations do not steer.
+                and verdict.grade != "unrelated"
             ):
                 by_target = {item.target_url: item for item in extracted.references}
                 reference_links = tuple(link for link in ranked if link.url in by_target)
@@ -1934,6 +1971,7 @@ class GoalLoop:
                 else None,
             )
         reference_targets = {item.target_url for item in extracted.references}
+        queued: set[str] = set()
         for link in ranked[: self._config.max_links_per_page]:
             if link.url in reference_targets:
                 continue
@@ -1942,6 +1980,7 @@ class GoalLoop:
                 and link.score >= self._config.min_link_score
                 and link.url not in visited
             ):
+                queued.add(link.url)
                 if graph is not None and document_node_id is not None:
                     await graph.discovered(link.url, document_node_id)
                 if parent_hops:
@@ -1951,7 +1990,94 @@ class GoalLoop:
                         link.url, session._reference_origins.get(url, url)
                     )
                 session.queue_source(active_scope, link.url, depth + 1, -link.score)
+        if verdict is not None:
+            self._follow_leads(
+                session,
+                extracted,
+                verdict,
+                active_scope,
+                depth,
+                skip=queued | reference_targets | visited,
+            )
         return candidate
+
+    @staticmethod
+    def _kept_reading(
+        session: CollectionSession,
+        verdict: Verdict,
+        disposition: str,
+        final_url: str,
+        url: str,
+    ) -> Verdict:
+        """The reading a KEPT page carries: decision accept, with its grade beside it.
+
+        The model's own reply stays verbatim in the ledger's verdict row and ACK; this
+        copy only changes when the client kept a page the model graded differently.
+        """
+        if verdict.relevance == "unjudged":
+            return verdict
+        judged = tuple(
+            row.document_judgment
+            for row in session.ledger.snapshot()
+            if row.event == "verdict"
+            and row.refusal is None
+            and row.document_judgment is not None
+            and row.url in {final_url, url}
+            and row.reason == f"{verdict.decision}: {verdict.reason}"
+        )
+        evidence = judged[-1] if judged else None
+        if evidence is not None and evidence.reason in {
+            "similarity_floor",
+            "undecided_after_second_look",
+            "unrelated_kept",
+        }:
+            relevance = evidence.client_relevance or "background"
+            note = {
+                "similarity_floor": (
+                    f"kept by similarity floor {evidence.keep_at_or_above} at "
+                    f"{evidence.document_cosine}"
+                ),
+                "undecided_after_second_look": "undecided after the second look",
+                "unrelated_kept": "graded unrelated; kept, not used for answers",
+            }[evidence.reason]
+        elif verdict.decision == "hold" or disposition == "hold":
+            relevance, note = "background", "undecided after the second look"
+        elif verdict.decision == "reject":
+            relevance, note = "unrelated", "graded unrelated; kept, not used for answers"
+        else:
+            return verdict
+        return verdict.model_copy(
+            update={
+                "decision": "accept",
+                "relevance": relevance,
+                "reason": f"{note} (model said: {verdict.decision}: {verdict.reason})",
+            }
+        )
+
+    def _follow_leads(
+        self,
+        session: CollectionSession,
+        extracted: Extracted,
+        verdict: Verdict,
+        scope: Scope | None,
+        depth: int,
+        *,
+        skip: set[str],
+    ) -> None:
+        """Queue the reading's link leads that really appear on the page.
+
+        A link the model names but the page does not carry is never fetched; the
+        frontier already holds every link the scorer queued, so those are skipped.
+        """
+        if scope is None or not verdict.follow:
+            return
+        on_page = {link.url for link in extracted.links}
+        for lead in verdict.follow:
+            if lead.kind != "link" or lead.value not in on_page or lead.value in skip:
+                continue
+            skip.add(lead.value)
+            session.queue_source(scope, lead.value, depth + 1, -1.0)
+            session.followed_leads.append(lead.value)
 
     async def _document_verdict(
         self,
@@ -1966,6 +2092,11 @@ class GoalLoop:
         policy = spend.config.document_judgment
         context = None
         context_sequence = None
+        document_cosine: float | None = None
+        questions = session.reading_questions
+        asked = (
+            {"questions": [item.model_dump(mode="json") for item in questions]} if questions else {}
+        )
         if policy is not None:
             if not isinstance(self._judge, ScoredDocumentJudge) or source_sha256 is None:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT)
@@ -1985,6 +2116,8 @@ class GoalLoop:
                 )
                 if not matching or spend.config.models is None:
                     raise ValueError("no exact original source-bound scoring observation")
+                similarity = matching[-1].similarity
+                document_cosine = similarity.document_cosine if similarity is not None else None
                 context = select_scored_windows(
                     source_url=url,
                     source_sha256=source_sha256,
@@ -2002,9 +2135,22 @@ class GoalLoop:
             except ValueError:
                 raise GhimeraRefused(RefusalCode.ADAPTER_CONTRACT) from None
         request = (
-            port_input(spend, session.goal, extracted, second_look=second_look)
+            port_input(spend, session.goal, extracted, second_look=second_look, **asked)
             if context is None
-            else (port_input(spend, session.goal, extracted, context, second_look=second_look))
+            else (
+                port_input(
+                    spend, session.goal, extracted, context, second_look=second_look, **asked
+                )
+            )
+        )
+        judge_method = (
+            self._judge.scored_document
+            if isinstance(self._judge, ScoredDocumentJudge) and context is not None
+            else self._judge.document
+        )
+        # A judge port that predates readings keeps its original signature.
+        judge_questions = (
+            {"questions": questions} if questions and accepts_questions(judge_method) else {}
         )
         processing = session._processing
         stage = "second_verdict" if second_look else "first_verdict"
@@ -2079,12 +2225,19 @@ class GoalLoop:
                         else await invocation.invoke(
                             lambda: (
                                 self._judge.scored_document(
-                                    session.goal, extracted, context, second_look=second_look
+                                    session.goal,
+                                    extracted,
+                                    context,
+                                    second_look=second_look,
+                                    **judge_questions,
                                 )
                                 if isinstance(self._judge, ScoredDocumentJudge)
                                 and context is not None
                                 else self._judge.document(
-                                    session.goal, extracted, second_look=second_look
+                                    session.goal,
+                                    extracted,
+                                    second_look=second_look,
+                                    **judge_questions,
                                 )
                             ),
                             record_output,
@@ -2124,6 +2277,7 @@ class GoalLoop:
                     )
                     # Preserve a transient service refusal so a legacy verdict can retry.
                     refused.transient = isinstance(exc, GhimeraRefused) and exc.transient
+                    refused.served_judge_failed = True
                     raise refused from None
                 return verdict
 
@@ -2139,7 +2293,11 @@ class GoalLoop:
             else:
                 verdict = await judge_once()
             judgment = None
-            disposition = verdict.decision
+            # A reading never drops a page: it is read (accept) or asks for the
+            # wider second look (hold). A legacy "reject" is kept as unrelated.
+            disposition: Literal["accept", "reject", "hold"] = (
+                "hold" if verdict.decision == "hold" else "accept"
+            )
             if context is not None and policy is not None and context_sequence is not None:
                 acknowledged = tuple(
                     row
@@ -2149,8 +2307,15 @@ class GoalLoop:
                 )
                 if len(acknowledged) != 1 or acknowledged[0].model_ack is None:
                     raise RuntimeError("scored judgment lost its native acknowledged result")
-                held = verdict.decision == "reject" and context.omitted_chars > 0
-                disposition = "hold" if held else verdict.decision
+                floor = policy.effective_keep_at_or_above
+                disposition, client_relevance, reading_reason = reading_disposition(
+                    verdict.decision,
+                    verdict.relevance,
+                    omitted_chars=context.omitted_chars,
+                    second_look=second_look,
+                    document_cosine=document_cosine,
+                    keep_at_or_above=floor,
+                )
                 judgment = DocumentJudgmentEvidence(
                     schema="ghimera.document-judgment-evidence/1",
                     policy_sha256=policy.content_digest(),
@@ -2161,8 +2326,12 @@ class GoalLoop:
                     ack_sequence=acknowledged[0].sequence,
                     output_sha256=hashlib.sha256(record_output(verdict)).hexdigest(),
                     original_model_decision=verdict.decision,
+                    original_relevance=verdict.relevance,
                     client_disposition=disposition,
-                    reason="incomplete_rejection_hold" if held else "native_model_decision",
+                    client_relevance=client_relevance,
+                    document_cosine=document_cosine,
+                    keep_at_or_above=floor,
+                    reason=reading_reason,
                 )
             ledger.append(
                 LedgerRow(

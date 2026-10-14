@@ -114,9 +114,13 @@ def validate_processing(
             and row.model_ack.stored_output is not None
             and row.model_ack.stored_output.body() == record_output(verdict)
         )
-        if not originals or disposition != (
-            judgment.client_disposition if judgment is not None else verdict.decision
-        ):
+        dispositions: set[str] = (
+            {judgment.client_disposition}
+            if judgment is not None
+            # A reading keeps the page; a legacy cursor may still record "reject".
+            else {verdict.decision, "hold" if verdict.decision == "hold" else "accept"}
+        )
+        if not originals or disposition not in dispositions:
             raise ValueError("retained verdict changed its original decision/HOLD disposition")
     tail = rows[len(cursor.prefix_sha256) :]
     if cursor.stage == "scoring":

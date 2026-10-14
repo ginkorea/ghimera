@@ -146,7 +146,7 @@ def test_disabled_outscope_and_denied_references_never_reach_fetcher():
             assert next(row.reference for row in result.ledger if row.reference).outcome == expected
 
 
-def test_rejected_document_never_seeds_references():
+def test_unrelated_document_is_kept_but_never_seeds_references():
     class Reject(FakeJudge):
         async def document(self, goal, document, *, second_look):
             return (await super().document(goal, document, second_look=second_look)).model_copy(
@@ -154,7 +154,11 @@ def test_rejected_document_never_seeds_references():
             )
 
     result, route = run(judge=Reject())
-    assert len(route.requests) == 1 and not result.documents
+    # The judge guides, it never discards: a legacy "reject" is kept as unrelated.
+    assert len(route.requests) == 1 and len(result.documents) == 1
+    kept = result.documents[0].verdict
+    assert kept.decision == "accept" and kept.relevance == "unrelated"
+    assert "model said: reject" in kept.reason
     assert not any(row.reference for row in result.ledger)
 
 

@@ -331,7 +331,7 @@ def test_identical_text_wrong_raw_source_cannot_borrow_scoring(tmp_path):
         ledger.close()
 
 
-def test_native_ack_remains_reject_but_partial_reading_client_holds(tmp_path):
+def test_native_ack_remains_reject_but_the_client_keeps_the_page(tmp_path):
     cfg, goal, extracted, ledger, judge = prepared(tmp_path)
     spend = RunSpend(cfg, time.monotonic)
     session = CollectionSession(goal, spend, ledger, None)
@@ -347,10 +347,15 @@ def test_native_ack_remains_reject_but_partial_reading_client_holds(tmp_path):
                     source_sha256=extracted.document_parse.source_sha256,
                 )
             )
-            assert verdict.decision == "reject" and disposition == "hold"
             evidence = ledger.snapshot()[-1].document_judgment
+            # The model's reply stays verbatim; the client never drops the page. This
+            # fixture page scores above the similarity floor, so it is kept as background.
+            assert verdict.decision == "reject" and disposition == "accept"
             assert evidence.original_model_decision == "reject"
-            assert evidence.client_disposition == "hold"
+            assert evidence.client_disposition == "accept"
+            assert evidence.client_relevance == "background"
+            assert evidence.reason == "similarity_floor"
+            assert evidence.document_cosine >= evidence.keep_at_or_above == 0.8
             ack = ledger.snapshot()[evidence.ack_sequence].model_ack
             assert Verdict.model_validate_json(ack.stored_output.body()) == verdict
             packet = json.loads(judge._http.requests[-1]["messages"][1]["content"])
@@ -364,7 +369,7 @@ def test_native_ack_remains_reject_but_partial_reading_client_holds(tmp_path):
         assert spend.judge_calls == 2
         validate_judgment_rows(cfg, goal.text, ledger.snapshot())
         rows = ledger.snapshot()
-        tampered = rows[-1].document_judgment.model_copy(update={"client_disposition": "accept"})
+        tampered = rows[-1].document_judgment.model_copy(update={"client_disposition": "reject"})
         with pytest.raises(ValueError, match="original model decision"):
             validate_judgment_rows(
                 cfg,
@@ -376,7 +381,7 @@ def test_native_ack_remains_reject_but_partial_reading_client_holds(tmp_path):
     report = read_journal(cfg.journal, "native-reading")
     assert (
         report.state == "unsealed"
-        and report.rows[-1].document_judgment.client_disposition == "hold"
+        and report.rows[-1].document_judgment.client_disposition == "accept"
     )
 
 
@@ -468,10 +473,10 @@ def test_scored_judgment_v1_exact_policy_and_wire_fingerprints(tmp_path):
         verdict = asyncio.run(judge.scored_document(goal, extracted, context, second_look=False))
         system = judge._http.requests[0]["messages"][0]["content"]
         assert hashlib.sha256(system.encode()).hexdigest() == (
-            "29e9afa8d8df26f92fb6036d22318a5908087857ac11ad95bac38339d344d5cc"
+            "def7b4a56980489046ee772923db5e1c01a0aa33abd5b3c94a837fc6bd417f52"
         )
         assert verdict.model_call.request_sha256 == (
-            "47d32686a83c2c09c9aa1409a346675a0c425dedbb7d9a5e0c18df572f65dc9a"
+            "00df9616806bc57405eeca9dda5540941ccd7e2950705d7cf5e69d1b7e8e6d75"
         )
         assert verdict.model_call.prompt_revision == "ghimera-scored-document-judgment/1"
     finally:
@@ -501,7 +506,8 @@ def test_contribution_example_is_explicit_inert_policy():
     )
     assert set(raw) == {"document_judgment"}
     policy = DocumentJudgmentConfig.model_validate(raw["document_judgment"])
-    assert policy.model_dump() == CONTRIBUTION_POLICY
+    assert policy.model_dump() == dict(CONTRIBUTION_POLICY, keep_at_or_above=0.8)
+    assert policy.effective_keep_at_or_above == 0.8
     assert policy.effective_prompt_revision == "ghimera-scored-document-judgment/2"
 
 
@@ -546,14 +552,15 @@ def test_contribution_profile_changes_only_instructions_and_revision(tmp_path):
     assert packet["scored_document"] == contexts[1].model_dump(mode="json")
     system = requests[1]["messages"][0]["content"]
     for instruction in (
-        "ANY factual part",
-        "not answer completeness",
-        "Assess every supplied window",
-        "quotes and reasons must be grounded",
-        "Similarity never establishes relevance",
-        "unresolved names and dates",
-        "Reject only demonstrably unrelated excerpts",
-        "hold when uncertain",
+        "Read every supplied window before grading",
+        "quotes, contribution and reasons must be grounded",
+        "Similarity is selection provenance",
+        "Omitted text is UNREAD",
+        "does not need to answer the whole intent",
+        "You never decide whether the page is kept",
+        "Grade the page against that SUBJECT",
+        "a scholar's analysis of the speech",
+        "engagement-rate formulas is unrelated",
     ):
         assert instruction in system
     for window in contexts[1].windows:
@@ -566,7 +573,7 @@ def test_contribution_profile_changes_only_instructions_and_revision(tmp_path):
     ("decision", "reason", "disposition"),
     [
         ("accept", "fixture: one factual contribution, other questions unresolved", "accept"),
-        ("reject", "fixture: unrelated excerpts", "hold"),
+        ("reject", "fixture: unrelated excerpts", "accept"),
         ("hold", "fixture: contradictory excerpts cannot establish contribution", "hold"),
     ],
 )

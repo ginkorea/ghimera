@@ -1,5 +1,7 @@
 """Offline collaborators for C0 contracts, explicitly not production fallbacks."""
 
+from typing import TYPE_CHECKING
+
 from ghimera.config import GhimeraConfig
 from ghimera.fetch import FetchRoute
 from ghimera.ledger import Ledger
@@ -17,6 +19,9 @@ from ghimera.models import (
 from ghimera.refusals import GhimeraRefused, RefusalCode
 from ghimera.scoring import Scorer
 from ghimera.spend import RunSpend
+
+if TYPE_CHECKING:
+    from ghimera.research_types import Question
 
 
 class FakeRoute(FetchRoute):
@@ -80,7 +85,14 @@ class FakeJudge:
         self.satisfied = satisfied
         self.hold_first = hold_first
 
-    async def document(self, goal: Goal, document: Extracted, *, second_look: bool) -> Verdict:
+    async def document(
+        self,
+        goal: Goal,
+        document: Extracted,
+        *,
+        second_look: bool,
+        questions: tuple["Question", ...] = (),
+    ) -> Verdict:
         return Verdict(
             decision="hold" if self.hold_first and not second_look else "accept",
             kind="fixture",

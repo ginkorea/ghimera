@@ -265,6 +265,70 @@ class SearchObservation(ResearchRecord):
     response: SearchResponse
 
 
+MAX_PLANNING_READINGS = 32
+
+
+class ReadingNote(ResearchRecord):
+    """What one kept page's reading tells the planner: no page text, only guidance."""
+
+    url: Text
+    language: Text
+    relevance: Text
+    informs: tuple[Text, ...] = Field(default=(), exclude_if=lambda v: not v)
+    contribution: str | None = Field(default=None, exclude_if=lambda v: not v)
+    queries: tuple[Text, ...] = Field(default=(), exclude_if=lambda v: not v)
+    names: tuple[Text, ...] = Field(default=(), exclude_if=lambda v: not v)
+
+
+def answer_order(documents: tuple[Document, ...]) -> tuple[Document, ...]:
+    """Grade order for answers (direct, supporting, background, unjudged); stable,
+    so a run of legacy ungraded pages keeps its original order. Unrelated is left out."""
+    ranked = [(doc.verdict.answer_rank, index, doc) for index, doc in enumerate(documents)]
+    return tuple(doc for rank, _, doc in sorted(item for item in ranked if item[0] is not None))
+
+
+def planning_readings(documents: tuple[Document, ...]) -> tuple[ReadingNote, ...]:
+    """The readings the next plan steers by: sub-questions informed and leads to query."""
+    notes: list[ReadingNote] = []
+    for doc in answer_order(documents):
+        reading = doc.verdict
+        queries = tuple(lead.value for lead in reading.follow if lead.kind == "query")
+        if not (reading.informs or reading.contribution or queries or reading.names):
+            continue
+        notes.append(
+            ReadingNote(
+                url=doc.url,
+                language=reading.language,
+                relevance=reading.grade,
+                informs=reading.informs,
+                contribution=reading.contribution,
+                queries=queries,
+                names=tuple(f"{name.kind}: {name.text}" for name in reading.names),
+            )
+        )
+        if len(notes) == MAX_PLANNING_READINGS:
+            break
+    return tuple(notes)
+
+
+def round_readings(
+    documents: tuple[Document, ...],
+    questions: tuple["Question", ...],
+    followed: tuple[str, ...],
+) -> tuple[dict[str, int], dict[str, int], tuple[str, ...]]:
+    """A round's kept pages by grade, sub-question coverage by readings, leads queued."""
+    grades: dict[str, int] = {}
+    informed: dict[str, int] = {}
+    known = {question.id for question in questions}
+    for doc in documents:
+        grade = doc.verdict.grade
+        grades[grade] = grades.get(grade, 0) + 1
+        for question_id in dict.fromkeys(doc.verdict.informs):
+            if question_id in known:
+                informed[question_id] = informed.get(question_id, 0) + 1
+    return grades, informed, followed
+
+
 class PlanningRequest(ResearchRecord):
     intent: Text
     questions: tuple[Question, ...]
@@ -278,6 +342,8 @@ class PlanningRequest(ResearchRecord):
         default=(), exclude_if=lambda value: not value
     )
     languages: tuple[LanguageCode, ...] = Field(default=(), exclude_if=lambda v: not v)
+    # Guidance from the judge's readings of kept pages (see ReadingNote).
+    readings: tuple[ReadingNote, ...] = Field(default=(), exclude_if=lambda v: not v)
 
     @model_validator(mode="after")
     def source_notices(self) -> "PlanningRequest":
@@ -322,6 +388,15 @@ class ResearchRound(ResearchRecord):
     pages_by_language: dict[str, Annotated[int, Field(strict=True, ge=0)]] = Field(
         default_factory=dict, exclude_if=lambda v: not v
     )
+    # Every new page is kept; these say how the judge's readings graded them, how
+    # many readings informed each sub-question, and which link leads were queued.
+    pages_by_grade: dict[str, Annotated[int, Field(strict=True, ge=0)]] = Field(
+        default_factory=dict, exclude_if=lambda v: not v
+    )
+    informed_questions: dict[str, Annotated[int, Field(strict=True, ge=0)]] = Field(
+        default_factory=dict, exclude_if=lambda v: not v
+    )
+    followed_leads: tuple[str, ...] = Field(default=(), exclude_if=lambda v: not v)
 
 
 def language_queries(

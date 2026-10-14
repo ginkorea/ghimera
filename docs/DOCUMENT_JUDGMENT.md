@@ -1,5 +1,9 @@
 # Source-bound scored document judgment
 
+Since 0.4.13 the judge returns a reading that guides the collection and never
+discards a page: see [relevance judgment](RELEVANCE_JUDGMENT.md) for the grades,
+the similarity floor and what the grade feeds.
+
 `document_judgment` is optional, versioned and explicitly selected. Its absence
 preserves the legacy configured-model prompt, serialization and verdict behavior.
 The legacy judge starts at the first matching goal term, not necessarily the

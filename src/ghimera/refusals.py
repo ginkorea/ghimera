@@ -135,6 +135,8 @@ class GhimeraRefused(Exception):
         self.detail = refusal_detail(detail) if detail else _raise_site()
         # Set by model/encoder clients for a service refusal worth retrying.
         self.transient = False
+        # Set when the served document judge itself failed: the page is kept unjudged.
+        self.served_judge_failed = False
         super().__init__(f"{code.value}: {REFUSALS[code]}")
 
     def __str__(self) -> str:

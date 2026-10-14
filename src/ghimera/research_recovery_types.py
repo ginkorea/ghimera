@@ -24,6 +24,7 @@ from ghimera.research_types import (
     ResearchResult,
     ReviewRequest,
     SearchRequest,
+    answer_order,
 )
 from ghimera.session_state import SessionState
 
@@ -119,7 +120,13 @@ class ResearchControlSnapshot(Record):
             or type(self.model_request) is not expected_type
             or self.model_request.intent != self.request.intent
             or self.model_request.questions != progress.questions
-            or self.model_request.documents != progress.evidence_documents
+            or self.model_request.documents
+            != (
+                progress.evidence_documents
+                if self.phase == "plan"
+                # Assessment, answer and review use pages in grade order (no unrelated).
+                else answer_order(progress.evidence_documents)
+            )
         ):
             raise ValueError("recovery requires exact unsealed research phase control and input")
         if self.phase == "assessment" and (

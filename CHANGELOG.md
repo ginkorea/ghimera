@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.13 — 2026-10-14
+
+The judge guides and never discards.
+
+- The document judge guides the collection and never discards a page. Its
+  output is a **reading** (`DocumentReading`; `Verdict` is the same record and
+  old ledgers load unchanged): a `relevance` grade (`direct`, `supporting`,
+  `background`, `unrelated`; `unjudged` when no reading was possible), the
+  `subject` it graded against, the plan sub-questions it `informs`, a one-line
+  `contribution`, up to 8 `follow` leads (a query, or a link that is on the
+  page) and up to 16 `names` for the graph. Every fetched and extracted page is
+  kept in the corpus and graph input whatever its grade.
+- **Changed:** `decision` now carries only `accept` (read and graded) or
+  `hold` (needs the wider second look) for new readings; the served schema
+  offers no `reject`. A `reject` still loads from old ledgers and from legacy
+  judges, and the page is kept with grade `unrelated`. A hold after the second
+  look is kept as `background`. A served judge that fails or is unavailable
+  leaves the page kept as `unjudged` (replacing 0.4.12's synthetic
+  `kind="unjudged"` verdict, which now also carries the grade), and the round
+  continues.
+- Similarity floor `document_judgment.keep_at_or_above` (default 0.80): a
+  model `unrelated` grade on a page whose intent cosine is at or above it is
+  recorded as `background` ("kept by similarity floor … (model said: …)"). The
+  model's reply stays verbatim in the ledger's verdict row and ACK; the
+  client's grade, cosine and floor are on the judgment evidence.
+- Research uses the grade, it does not filter by it: assessment and answers
+  read `direct`, then `supporting`, `background`, `unjudged`, and leave out
+  `unrelated`. Plans receive the readings (`PlanningRequest.readings`); a
+  reading's link leads are queued on the frontier. Rounds report
+  `pages_by_grade`, `informed_questions` and `followed_leads`. See
+  [relevance judgment](docs/RELEVANCE_JUDGMENT.md).
+
 ## 0.4.12 — 2026-10-14
 
 - **Run ceilings are removed.** `page_budget`, `byte_budget`, `judge_budget`,

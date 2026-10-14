@@ -11,6 +11,9 @@ first_look_max_chars = 1500
 expanded_look_max_chars = 4000
 padding_chars = 450
 incomplete_rejection = "hold"
+# A model "unrelated" grade at or above this intent cosine is kept as "background".
+# Every page is kept whatever its grade; omit for the default 0.80.
+keep_at_or_above = 0.80
 
 # /2 retains nested JSON: use ghimera.document-judgment/2 and OMIT input_layout.
 # /1 additionally omits prompt_profile. Explicit null is not a legacy default.

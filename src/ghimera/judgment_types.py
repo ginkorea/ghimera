@@ -11,6 +11,60 @@ Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Count = Annotated[int, Field(strict=True, ge=0)]
 Positive = Annotated[int, Field(strict=True, gt=0)]
 Decision = Literal["accept", "reject", "hold"]
+# A reading's relevance grade is metadata on a KEPT page, never a reason to drop it.
+Relevance = Literal["direct", "supporting", "background", "unrelated", "unjudged"]
+GRADE_ORDER: tuple[Relevance, ...] = ("direct", "supporting", "background", "unjudged", "unrelated")
+# Conservative: the one recorded on-topic scoring observation in the test
+# fixtures (retained_organization_judgment.json) reads 0.88, and e5/bge-family
+# encoders put plainly unrelated text in the 0.70s; 0.80 relabels only a page
+# that the encoder already reads as close to the intent.
+DEFAULT_KEEP_AT_OR_ABOVE = 0.80
+ReadingReason = Literal[
+    "native_model_decision",
+    "incomplete_rejection_hold",
+    "incomplete_unrelated_hold",
+    "similarity_floor",
+    "unrelated_kept",
+    "undecided_after_second_look",
+]
+
+
+def model_grade(decision: Decision, relevance: Relevance | None) -> Relevance | None:
+    """The grade a model reply states; a legacy ``reject`` reads as ``unrelated``."""
+    if relevance is not None:
+        return relevance
+    return "unrelated" if decision == "reject" else None
+
+
+def reading_disposition(
+    decision: Decision,
+    relevance: Relevance | None,
+    *,
+    omitted_chars: int,
+    second_look: bool,
+    document_cosine: float | None,
+    keep_at_or_above: float | None,
+) -> tuple[Literal["accept", "hold"], Relevance | None, ReadingReason]:
+    """Client disposition of one reading: every page is kept, only its grade varies.
+
+    ``hold`` asks for the second, wider look; after the second look nothing is held.
+    """
+    grade = model_grade(decision, relevance)
+    if decision == "hold":
+        if second_look:
+            return "accept", "background", "undecided_after_second_look"
+        return "hold", None, "native_model_decision"
+    if grade == "unrelated":
+        if (
+            keep_at_or_above is not None
+            and document_cosine is not None
+            and document_cosine >= keep_at_or_above
+        ):
+            return "accept", "background", "similarity_floor"
+        if omitted_chars > 0 and not second_look:
+            return "hold", None, "incomplete_unrelated_hold"
+        return "accept", "unrelated", "unrelated_kept"
+    return "accept", grade, "native_model_decision"
 
 
 class JudgmentRecord(BaseModel):
@@ -32,6 +86,11 @@ class DocumentJudgmentConfig(JudgmentRecord):
     expanded_look_max_chars: Positive
     padding_chars: Count
     incomplete_rejection: Literal["hold"]
+    # A model "unrelated" grade on a page whose intent cosine is at or above this
+    # floor is relabelled "background". Unset means DEFAULT_KEEP_AT_OR_ABOVE.
+    keep_at_or_above: Annotated[float, Field(ge=-1, le=1, allow_inf_nan=False)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     prompt_profile: Literal["contribution_relevance"] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -54,6 +113,10 @@ class DocumentJudgmentConfig(JudgmentRecord):
         elif "input_layout" in self.model_fields_set:
             raise ValueError("scored judgment /1 and /2 do not select an input layout")
         return self
+
+    @property
+    def effective_keep_at_or_above(self) -> float:
+        return DEFAULT_KEEP_AT_OR_ABOVE if self.keep_at_or_above is None else self.keep_at_or_above
 
     @property
     def effective_prompt_revision(self) -> str:
@@ -177,16 +240,41 @@ class DocumentJudgmentEvidence(JudgmentRecord):
     ack_sequence: Count
     output_sha256: Digest
     original_model_decision: Decision
+    original_relevance: Relevance | None = Field(default=None, exclude_if=lambda v: v is None)
     client_disposition: Decision
-    reason: Literal["native_model_decision", "incomplete_rejection_hold"]
+    client_relevance: Relevance | None = Field(default=None, exclude_if=lambda v: v is None)
+    document_cosine: Annotated[float, Field(ge=-1, le=1, allow_inf_nan=False)] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    keep_at_or_above: Annotated[float, Field(ge=-1, le=1, allow_inf_nan=False)] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    reason: ReadingReason
 
     @model_validator(mode="after")
     def separate_disposition(self) -> "DocumentJudgmentEvidence":
+        if self.ack_sequence <= self.intent_sequence:
+            raise ValueError("client hold must remain distinct from its original model decision")
+        expected = reading_disposition(
+            self.original_model_decision,
+            self.original_relevance,
+            omitted_chars=self.context.omitted_chars,
+            second_look=self.second_look,
+            document_cosine=self.document_cosine,
+            keep_at_or_above=self.keep_at_or_above,
+        )
+        if (self.client_disposition, self.client_relevance, self.reason) == expected:
+            return self
+        # Ledgers written before graded readings: reject could drop, hold could persist.
         held = self.original_model_decision == "reject" and self.context.omitted_chars > 0
-        if (
-            self.ack_sequence <= self.intent_sequence
-            or (self.client_disposition != ("hold" if held else self.original_model_decision))
-            or self.reason != ("incomplete_rejection_hold" if held else "native_model_decision")
-        ):
+        legacy = (
+            self.original_relevance is None
+            and self.client_relevance is None
+            and self.document_cosine is None
+            and self.keep_at_or_above is None
+            and self.client_disposition == ("hold" if held else self.original_model_decision)
+            and self.reason == ("incomplete_rejection_hold" if held else "native_model_decision")
+        )
+        if not legacy:
             raise ValueError("client hold must remain distinct from its original model decision")
         return self

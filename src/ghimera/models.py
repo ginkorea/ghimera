@@ -38,8 +38,10 @@ from ghimera.identity_automation_types import (
     IdentityReview,
 )
 from ghimera.judgment_types import (
+    GRADE_ORDER,
     DocumentJudgmentEvidence,
     JudgmentContextReservation,
+    Relevance,
     ScoringNativeReading,
     ScoringSourceBinding,
 )
@@ -405,7 +407,33 @@ class PdfTranscriptionEvidence(Record):
 Extracted.model_rebuild()
 
 
-class Verdict(Record):
+MAX_READING_FOLLOW = 8
+MAX_READING_NAMES = 16
+
+
+class ReadingLead(Record):
+    """Something the page suggests looking at next: a query to run or a link to fetch."""
+
+    kind: Literal["query", "link"]
+    value: NonEmpty
+    why: str | None = Field(default=None, exclude_if=lambda v: v is None)
+
+
+class ReadingName(Record):
+    """A person, organisation, account or claim the page names, for the graph."""
+
+    kind: NonEmpty
+    text: NonEmpty
+
+
+class DocumentReading(Record):
+    """The judge's READING of a page: it guides the collection and never discards a page.
+
+    ``decision`` survives for compatibility: new readings carry ``accept`` (read) or
+    ``hold`` (needs the wider second look). ``reject`` only loads from ledgers written
+    before graded readings, and even then the page is kept with grade ``unrelated``.
+    """
+
     model_call: ModelCallEvidence | None = None
     decision: Literal["accept", "reject", "hold"]
     kind: NonEmpty
@@ -413,6 +441,12 @@ class Verdict(Record):
     language: NonEmpty
     reason: NonEmpty
     date: str | None = None
+    relevance: Relevance | None = Field(default=None, exclude_if=lambda v: v is None)
+    subject: str | None = Field(default=None, exclude_if=lambda v: not v)
+    informs: tuple[NonEmpty, ...] = Field(default=(), exclude_if=lambda v: not v)
+    contribution: str | None = Field(default=None, exclude_if=lambda v: not v)
+    follow: tuple[ReadingLead, ...] = Field(default=(), exclude_if=lambda v: not v)
+    names: tuple[ReadingName, ...] = Field(default=(), exclude_if=lambda v: not v)
 
     @field_validator("reason", "kind", "publisher", "language")
     @classmethod
@@ -420,6 +454,35 @@ class Verdict(Record):
         if not value.strip():
             raise ValueError("verdict fields must not be blank")
         return value
+
+    @field_validator("follow", mode="before")
+    @classmethod
+    def bounded_follow(cls, value: object) -> object:
+        return tuple(value)[:MAX_READING_FOLLOW] if isinstance(value, (list, tuple)) else value
+
+    @field_validator("names", mode="before")
+    @classmethod
+    def bounded_names(cls, value: object) -> object:
+        return tuple(value)[:MAX_READING_NAMES] if isinstance(value, (list, tuple)) else value
+
+    @property
+    def grade(self) -> Relevance:
+        """Grade of a kept page; a legacy accept without a grade reads as supporting."""
+        if self.relevance is not None:
+            return self.relevance
+        if self.decision == "reject":
+            return "unrelated"
+        return "supporting" if self.decision == "accept" else "background"
+
+    @property
+    def answer_rank(self) -> int | None:
+        """Order in which research answers use a page; ``None`` keeps it out of answers."""
+        grade = self.grade
+        return None if grade == "unrelated" else GRADE_ORDER.index(grade)
+
+
+# Old ledgers and callers name the record Verdict; it is the same record.
+Verdict = DocumentReading
 
 
 class Grade(Record):

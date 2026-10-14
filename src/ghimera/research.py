@@ -86,7 +86,10 @@ from ghimera.research_types import (
     SearchQuery,
     SearchRequest,
     SearchResponse,
+    answer_order,
     language_queries,
+    planning_readings,
+    round_readings,
 )
 from ghimera.search import GroundedSearch
 from ghimera.search_history import SearchHistory
@@ -964,6 +967,8 @@ class ResearchLoop:
                 downtime_seconds=downtime,
                 processing=processing,
             )
+            # The pending reading's logical request names the round's sub-questions.
+            session.reading_questions = original.progress.questions
             try:
                 stopped = await self._collector.process_processing(session, processing)
                 if stopped == "failed":
@@ -1117,6 +1122,17 @@ class ResearchLoop:
                 )
                 provider.admit_query(reservation, response)
 
+    @classmethod
+    def _answer_sources(
+        cls, session: CollectionSession, reuse: RetainedResearchSession | None
+    ) -> tuple[tuple[Document, ...], tuple[RetainedSourceNotice, ...]]:
+        """Pages the assessment and answer USE: direct first, then supporting, then
+        the rest; a page graded unrelated stays in the corpus and graph but not here."""
+        documents = answer_order(cls._documents(session, reuse))
+        kept = {BoundCorpusDocument(doc).identity for doc in documents}
+        notices = tuple(notice for notice in cls._notices(reuse) if notice.document_sha256 in kept)
+        return documents, notices
+
     @staticmethod
     def _documents(
         session: CollectionSession, reuse: RetainedResearchSession | None
@@ -1182,12 +1198,12 @@ class ResearchLoop:
         *,
         calls: ModelCalls | None = None,
     ) -> Assessment:
-        documents = self._documents(session, reuse)
+        documents, notices = self._answer_sources(session, reuse)
         evidence = EvidenceRequest(
             intent=request.intent,
             questions=questions,
             documents=documents,
-            retained_sources=self._notices(reuse),
+            retained_sources=notices,
         )
         result = await (calls or ModelCalls(session, self._policy)).invoke(
             "assessment",
@@ -1211,11 +1227,12 @@ class ResearchLoop:
         recovered_candidate: AnswerDraft | None = None,
     ) -> tuple[AnswerDraft, AnswerReview]:
         calls = calls or ModelCalls(session, self._policy)
+        documents, notices = self._answer_sources(session, reuse)
         answering = AnswerRequest(
             intent=request.intent,
             questions=questions,
-            documents=self._documents(session, reuse),
-            retained_sources=self._notices(reuse),
+            documents=documents,
+            retained_sources=notices,
             assessment=assessment,
         )
         candidate = recovered_candidate or await calls.invoke(
@@ -1225,12 +1242,12 @@ class ResearchLoop:
             self._analyst.answer,
             result_type=AnswerDraft,
         )
-        self._validate_answer(candidate, questions, self._documents(session, reuse))
+        self._validate_answer(candidate, questions, documents)
         reviewing = ReviewRequest(
             intent=request.intent,
             questions=questions,
-            documents=self._documents(session, reuse),
-            retained_sources=self._notices(reuse),
+            documents=documents,
+            retained_sources=notices,
             answer=candidate,
         )
         checked = await calls.invoke(
@@ -1370,6 +1387,8 @@ class ResearchLoop:
             restored=progress.search_observations if progress is not None else (),
         )
         questions = progress.questions if progress is not None else ()
+        # A resumed page is read against the same sub-questions it was first read with.
+        session.reading_questions = questions
         rounds = list(progress.rounds) if progress is not None else []
         history.set_rounds(tuple(rounds))
         initial_rounds = len(rounds)
@@ -1384,6 +1403,7 @@ class ResearchLoop:
         urls = saved.discovered_urls if saved else ()
         collection_stop = saved.collection_stop if saved else "frontier_empty"
         before_documents = set(saved.before_documents) if saved else set()
+        before_leads = 0
         before_answers = set(saved.before_answers) if saved else set()
         assessment_context: Literal["post_collection", "retained_first"] = (
             saved.assessment_context if saved else "post_collection"
@@ -1743,6 +1763,7 @@ class ResearchLoop:
                             questions=questions,
                             documents=self._documents(session, reuse),
                             retained_sources=self._notices(reuse),
+                            readings=planning_readings(self._documents(session, reuse)),
                             assessment=assessment,
                             max_questions=self._policy.max_questions,
                             max_queries=self._policy.max_queries_per_round,
@@ -1764,6 +1785,7 @@ class ResearchLoop:
                     compiler.include_reference_hosts(session.reference_hosts)
                     history.set_rounds(tuple(rounds))
                     before_documents = {doc.sha256 for doc in session.evidence_documents}
+                    before_leads = len(session.followed_leads)
                     prior_assessment = rounds[-1].assessment if rounds else assessment
                     before_answers = (
                         {
@@ -1953,6 +1975,7 @@ class ResearchLoop:
                     if query_stage != "cited_by" and (
                         not resuming_source or collection_stop == "frontier_empty"
                     ):
+                        session.reading_questions = questions
                         collection_stop = await self._collector.collect(
                             session,
                             scope,
@@ -2019,6 +2042,15 @@ class ResearchLoop:
                     break
                 assessment_context = "post_collection"
                 assessment = await self._assess(session, reuse, request, questions, calls=calls)
+                graded, informed, followed = round_readings(
+                    tuple(
+                        doc
+                        for doc in session.evidence_documents
+                        if doc.sha256 not in before_documents
+                    ),
+                    questions,
+                    tuple(session.followed_leads[before_leads:]),
+                )
                 rounds.append(
                     ResearchRound(
                         number=number,
@@ -2033,6 +2065,9 @@ class ResearchLoop:
                         )
                         if request.languages
                         else {},
+                        pages_by_grade=graded,
+                        informed_questions=informed,
+                        followed_leads=followed,
                         discovered_urls=urls,
                         assessment=assessment,
                         collection_stop=collection_stop,
